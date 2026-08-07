@@ -1,0 +1,18 @@
+# 构建产物
+target/
+dependency-reduced-pom.xml
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# ACode 配置（可能含 API key，绝不上传）
+.acode/
+
+# 日志
+*.log
+
+# 系统
+.DS_Store
+Thumbs.db

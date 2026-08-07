@@ -1,0 +1,7 @@
+# ACode 项目级配置示例
+# 放到项目根目录的 .acode/config.yaml，只写要覆盖的字段，其余沿用全局配置
+
+# 示例：该项目改用 OpenAI
+protocol: openai
+model: gpt-4o
+base_url: https://api.openai.com/v1

@@ -34,6 +34,20 @@ public final class ProviderHttpClient {
     }
 
     public static Result send(String url, String json, Map<String, String> headers) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return doSend(url, json, headers);
+            } catch (ProviderException e) {
+                if (attempt > RetryPolicy.MAX_RETRIES || !RetryPolicy.isRetryable(e)) {
+                    throw e;
+                }
+                sleep(RetryPolicy.backoffMs(attempt));
+            }
+        }
+    }
+
+    /** 单次请求：200 返回响应体输入流，非 200 按状态码分类抛异常 */
+    private static Result doSend(String url, String json, Map<String, String> headers) {
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
                 .timeout(REQUEST_TIMEOUT)
                 .header("content-type", "application/json")
@@ -52,6 +66,15 @@ public final class ProviderHttpClient {
                 Thread.currentThread().interrupt();
             }
             throw new NetworkException("网络请求失败：" + e.getMessage(), e);
+        }
+    }
+
+    private static void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new NetworkException("重试等待被中断", e);
         }
     }
 

@@ -39,11 +39,11 @@
 
 ## T6 重试与错误处理
 
-- [ ] mock 返回 429 → 自动重试恰好 3 次，重试间隔 ≈1s、2s、4s（±0.5s），第 3 次仍 429 时最终抛 RateLimitException
-- [ ] mock 返回 500 → 重试 3 次后抛 ServerException
-- [ ] mock 返回 200 → 请求只发 1 次，无重试
-- [ ] mock 返回 401 → 不重试，直接抛 AuthException
-- [ ] 连接超时（mock 地址不可达）→ 抛 NetworkException，总耗时 ≤ 读超时 + 重试开销
+- [x] mock 返回 429 → 自动重试恰好 3 次，重试间隔 ≈1s、2s、4s（±0.5s），第 3 次仍 429 时最终抛 RateLimitException
+- [x] mock 返回 500 → 重试 3 次后抛 ServerException
+- [x] mock 返回 200 → 请求只发 1 次，无重试
+- [x] mock 返回 401 → 不重试，直接抛 AuthException
+- [x] 连接超时（mock 地址不可达）→ 抛 NetworkException，总耗时 ≤ 读超时 + 重试开销
 
 ## T7 对话编排
 

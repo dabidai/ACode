@@ -72,9 +72,9 @@ public class AcodeTerminal implements AutoCloseable {
         terminal.writer().flush();
     }
 
-    /** 清屏并把光标移到左上角。 */
+    /** 清屏并清空 scrollback，把光标移到左上角。缩放窗口后 scrollback 偏移会破坏绝对行号，需一并清掉。 */
     public void clearScreen() {
-        write("\033[H\033[J");
+        write("\033[H\033[2J\033[3J");
     }
 
     /** 移动光标到指定行列（均从 1 起）。 */

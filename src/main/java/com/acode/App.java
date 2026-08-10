@@ -81,8 +81,8 @@ public class App {
                         // 空白输入，仅重绘
                     }
                     case CHAT -> {
-                        output.append("你：" + line + "\n");
-                        output.appendLine("（回复将在 T12 接入 Provider 后显示）");
+                        output.appendLine("● " + line);
+                        output.appendLine("● （回复将在 T12 接入 Provider 后显示）");
                     }
                 }
             }

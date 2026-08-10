@@ -25,6 +25,12 @@
             <artifactId>jline</artifactId>
             <version>3.27.1</version>
         </dependency>
+        <!-- JLine Windows 控制台：JDK21 下 JNA 是唯一可用的 raw 模式 provider（ffm 需 JDK22） -->
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna-platform</artifactId>
+            <version>5.14.0</version>
+        </dependency>
 
         <!-- T2 配置：YAML 解析 -->
         <dependency>

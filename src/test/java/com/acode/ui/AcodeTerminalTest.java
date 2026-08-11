@@ -3,8 +3,9 @@ package com.acode.ui;
 import org.jline.utils.WCWidth;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AcodeTerminalTest {
@@ -35,44 +36,53 @@ class AcodeTerminalTest {
     }
 
     @Test
-    void truncateKeepsDisplayWidthWithinLimit() {
-        String line = "Redis 是互联网后端极其重要的基础设施，它不仅是一个缓存";
-        String t = AcodeTerminal.truncateToWidth(line, 20);
-        assertTrue(displayWidth(t) <= 20);
-        assertTrue(t.startsWith("Redis "));
+    void wrapKeepsEverySegmentWithinWidth() {
+        String line = "Redis 是互联网后端极其重要的基础设施，简单易用、功能强大，它不仅仅是一个缓存";
+        for (String seg : AcodeTerminal.wrap(line, 20)) {
+            assertTrue(displayWidth(seg) <= 20);
+        }
     }
 
     @Test
-    void truncateDoesNotCutWholeWidthCharacter() {
-        // 宽度 1 的余量放不下 2 列的中文字符 → 该字符整体截掉，不返回半个
-        String t = AcodeTerminal.truncateToWidth("a中文", 2);
-        assertEquals("a\033[0m", t);
+    void wrapPreservesAllContent() {
+        String line = "Redis 是互联网后端极其重要的基础设施，简单易用、功能强大，它不仅仅是一个缓存";
+        List<String> segs = AcodeTerminal.wrap(line, 20);
+        String joined = String.join("", segs);
+        assertEquals(line, joined);
+        assertTrue(segs.size() > 1);
     }
 
     @Test
-    void truncateReturnsLineUnchangedWhenFits() {
-        String line = "abc";
-        assertEquals(line, AcodeTerminal.truncateToWidth(line, 10));
-        assertEquals(line, AcodeTerminal.truncateToWidth(line, 3));
+    void wrapDoesNotCutWideCharacter() {
+        List<String> segs = AcodeTerminal.wrap("一二三四五六", 6);
+        assertEquals("一二三", segs.get(0));
+        assertEquals("四五六", segs.get(1));
     }
 
     @Test
-    void truncateIgnoresAnsiEscapeWidth() {
-        String t = AcodeTerminal.truncateToWidth("x[31m中文", 1);
-        assertEquals("x[0m", t);
+    void wrapKeepsAnsiSequenceIntact() {
+        List<String> segs = AcodeTerminal.wrap("\033[31m" + "很长很长很长很长" + "\033[0m", 6);
+        assertTrue(segs.get(0).startsWith("\033[31m"));
+        assertTrue(segs.get(segs.size() - 1).endsWith("\033[0m"));
+        // 拼接还原原文（含 ANSI）
+        assertEquals("\033[31m" + "很长很长很长很长" + "\033[0m", String.join("", segs));
     }
 
     @Test
-    void truncateAppendsResetWhenCutMidColor() {
-        String t = AcodeTerminal.truncateToWidth("[31m很长的一行内容", 5);
-        assertTrue(t.endsWith("[0m"));
+    void wrapOfShortLineReturnsSingleSegment() {
+        List<String> segs = AcodeTerminal.wrap("abc", 10);
+        assertEquals(List.of("abc"), segs);
     }
 
     @Test
-    void truncateTracksCjkAsTwoColumns() {
-        // 4 个中文 = 8 列，宽度 6 时只保留 3 个
-        String t = AcodeTerminal.truncateToWidth("一二三四", 6);
-        assertEquals("一二三\033[0m", t);
-        assertFalse(t.contains("四"));
+    void wrapOfEmptyLineReturnsOneEmptySegment() {
+        List<String> segs = AcodeTerminal.wrap("", 10);
+        assertEquals(List.of(""), segs);
+    }
+
+    @Test
+    void wrapOfAsciiLongLineBreaksExactlyAtWidth() {
+        List<String> segs = AcodeTerminal.wrap("abcdefghij", 4);
+        assertEquals(List.of("abcd", "efgh", "ij"), segs);
     }
 }

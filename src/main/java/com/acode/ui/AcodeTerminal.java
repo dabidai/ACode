@@ -7,6 +7,7 @@ import org.jline.utils.WCWidth;
 
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -128,10 +129,16 @@ public class AcodeTerminal implements AutoCloseable {
         int w = width();
         boolean hasSeparator = h >= 3;
         int outputArea = Math.max(1, hasSeparator ? h - 2 : h - 1);
-        List<String> visible = output.visibleLines(outputArea);
+        // 原始行按终端宽度折行后取最后 outputArea 段，保证长行内容完整显示而非截断
+        List<String> wrapped = new ArrayList<>();
+        for (String line : output.visibleLines(outputArea)) {
+            wrapped.addAll(wrap(line, w));
+        }
         String[] rows = new String[outputArea];
+        int from = Math.max(0, wrapped.size() - outputArea);
         for (int i = 0; i < outputArea; i++) {
-            rows[i] = i < visible.size() ? truncateToWidth(visible.get(i), w) : "";
+            int idx = from + i;
+            rows[i] = idx < wrapped.size() ? wrapped.get(idx) : "";
         }
         for (int i = 0; i < outputArea; i++) {
             String cur = rows[i];
@@ -158,16 +165,27 @@ public class AcodeTerminal implements AutoCloseable {
     }
 
     /**
-     * 按终端显示宽度截断，忽略 ANSI 转义序列的宽度，避免超长行折行破坏行计数、
-     * 也不切断代理对。宽度按 wcwidth 计算（CJK 等宽字符占 2 列），剩余空间放不下
-     * 整个宽字符时截断。截断点必然落在完整字符/完整转义序列之后，若中途切掉颜色则补 RESET。
+     * 按终端显示宽度折行：把长行拆成多段，每段显示宽度 ≤ width（避免超宽行折行破坏行计数、
+     * 也避免行尾被截断丢内容）。宽度按 wcwidth 计算（CJK 等宽字符占 2 列），折点不切断
+     * 宽字符与 ANSI 转义序列；SGR 颜色状态跨段延续（段间不补 RESET）。每段可直接写入屏幕。
      */
-    static String truncateToWidth(String line, int width) {
+    static List<String> wrap(String line, int width) {
+        List<String> out = new ArrayList<>();
+        if (width <= 0) {
+            out.add(line);
+            return out;
+        }
+        if (line.isEmpty()) {
+            out.add("");
+            return out;
+        }
+        StringBuilder cur = new StringBuilder();
         int disp = 0;
         int i = 0;
         int n = line.length();
-        while (i < n && disp < width) {
-            if (line.charAt(i) == '\033') {
+        while (i < n) {
+            char c = line.charAt(i);
+            if (c == '\033') {
                 int j = i + 1;
                 if (j < n && line.charAt(j) == '[') {
                     j++;
@@ -178,21 +196,28 @@ public class AcodeTerminal implements AutoCloseable {
                 } else {
                     j++;
                 }
+                cur.append(line, i, j);
                 i = j;
             } else {
                 int cp = line.codePointAt(i);
                 int w = WCWidth.wcwidth(cp);
+                int cnt = Character.charCount(cp);
                 if (w > 0 && disp + w > width) {
-                    break;
+                    out.add(cur.toString());
+                    cur.setLength(0);
+                    disp = 0;
+                    if (w > width) {
+                        i += cnt; // 单个字符超宽（罕见），跳过避免死循环
+                        continue;
+                    }
                 }
-                i += Character.charCount(cp);
+                cur.append(line, i, i + cnt);
                 disp += Math.max(0, w);
+                i += cnt;
             }
         }
-        if (i >= n) {
-            return line;
-        }
-        return line.substring(0, i) + "\033[0m";
+        out.add(cur.toString());
+        return out;
     }
 
     private static boolean isAnsiFinalByte(char c) {

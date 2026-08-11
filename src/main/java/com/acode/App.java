@@ -1,5 +1,6 @@
 package com.acode;
 
+import com.acode.conversation.Conversation;
 import com.acode.ui.AcodeTerminal;
 import com.acode.ui.CommandRouter;
 import com.acode.ui.InputPane;
@@ -57,6 +58,8 @@ public class App {
     private static void runTui() {
         try (AcodeTerminal tui = AcodeTerminal.open()) {
             OutputPane output = new OutputPane();
+            // T11 临时默认值：T12 改为从配置加载后构造
+            Conversation conversation = new Conversation("claude-sonnet-4-6", true, 8192, 200000);
             output.append(BANNER);
             output.appendLine("输入 /help 查看命令，/quit 退出");
             InputPane input = new InputPane(tui.terminal(), "> ");
@@ -74,6 +77,7 @@ public class App {
                     }
                     case CLEAR -> {
                         output.clear();
+                        conversation.clear();
                         output.appendLine("（已清空）");
                     }
                     case HELP -> output.append(CommandRouter.HELP_TEXT);

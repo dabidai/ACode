@@ -35,6 +35,11 @@ public class Conversation {
         return messages.size();
     }
 
+    /** 清空全部消息历史（/clear 用）。 */
+    public void clear() {
+        messages.clear();
+    }
+
     public List<ChatMessage> history() {
         return Collections.unmodifiableList(messages);
     }

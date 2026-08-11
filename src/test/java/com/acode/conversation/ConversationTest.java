@@ -73,4 +73,33 @@ class ConversationTest {
         assertEquals(1, request.messages().size(), "历史全部丢弃，只保留当前问题");
         assertEquals("big".repeat(3000), request.messages().get(0).content());
     }
+
+    @Test
+    void clearEmptiesHistory() {
+        Conversation c = conversation();
+        c.addMessage(user("hi"));
+        c.addMessage(user("yo"));
+        c.clear();
+        assertEquals(0, c.messageCount());
+        assertTrue(c.history().isEmpty());
+    }
+
+    @Test
+    void clearThenAddWorksNormally() {
+        Conversation c = conversation();
+        c.addMessage(user("old"));
+        c.clear();
+        c.addMessage(user("new"));
+        assertEquals(1, c.messageCount());
+        ChatRequest request = c.buildRequest();
+        assertEquals(1, request.messages().size());
+        assertEquals("new", request.messages().get(0).content());
+    }
+
+    @Test
+    void clearOnEmptyConversationIsSafe() {
+        Conversation c = conversation();
+        c.clear();
+        assertEquals(0, c.messageCount());
+    }
 }

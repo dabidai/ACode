@@ -95,12 +95,40 @@ public class AcodeTerminal implements AutoCloseable {
         flush();
     }
 
-    /** 按码点截断到终端宽度，避免超长行折行破坏行计数，也不切断代理对。 */
+    /**
+     * 按终端显示宽度截断，忽略 ANSI 转义序列的宽度，避免超长行折行破坏行计数、
+     * 也不切断代理对。截断点必然落在完整字符/完整转义序列之后，若中途切掉颜色则补 RESET。
+     */
     private static String truncateToWidth(String line, int width) {
-        if (line.codePointCount(0, line.length()) <= width) {
+        int disp = 0;
+        int i = 0;
+        int n = line.length();
+        while (i < n && disp < width) {
+            if (line.charAt(i) == '\033') {
+                int j = i + 1;
+                if (j < n && line.charAt(j) == '[') {
+                    j++;
+                    while (j < n && !isAnsiFinalByte(line.charAt(j))) {
+                        j++;
+                    }
+                    j++;
+                } else {
+                    j++;
+                }
+                i = j;
+            } else {
+                i += Character.charCount(line.codePointAt(i));
+                disp++;
+            }
+        }
+        if (i >= n) {
             return line;
         }
-        return line.substring(0, line.offsetByCodePoints(0, width));
+        return line.substring(0, i) + "\033[0m";
+    }
+
+    private static boolean isAnsiFinalByte(char c) {
+        return c >= 0x40 && c <= 0x7e;
     }
 
     @Override

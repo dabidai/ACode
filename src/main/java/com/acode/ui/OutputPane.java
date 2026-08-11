@@ -51,6 +51,17 @@ public class OutputPane {
         lines.clear();
     }
 
+    /** 从末尾移除 count 行（超出已有行数则全部移除）；count ≤ 0 无操作。 */
+    public void removeLast(int count) {
+        if (count <= 0) {
+            return;
+        }
+        int n = Math.min(count, lines.size());
+        for (int i = 0; i < n; i++) {
+            lines.remove(lines.size() - 1);
+        }
+    }
+
     public int lineCount() {
         return lines.size();
     }

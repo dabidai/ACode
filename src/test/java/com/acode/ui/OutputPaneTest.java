@@ -102,4 +102,29 @@ class OutputPaneTest {
         assertEquals(5, pane.lineCount());
         assertEquals(List.of("line4", "line5", "line6", "line7", "line8"), pane.lines());
     }
+
+    @Test
+    void removeLastRemovesFromEnd() {
+        OutputPane pane = new OutputPane();
+        pane.append("a\nb\nc");
+        pane.removeLast(2);
+        assertEquals(List.of("a"), pane.lines());
+    }
+
+    @Test
+    void removeLastMoreThanPresentClearsAll() {
+        OutputPane pane = new OutputPane();
+        pane.append("a\nb");
+        pane.removeLast(5);
+        assertEquals(0, pane.lineCount());
+    }
+
+    @Test
+    void removeLastNonPositiveDoesNothing() {
+        OutputPane pane = new OutputPane();
+        pane.append("a\nb");
+        pane.removeLast(0);
+        pane.removeLast(-1);
+        assertEquals(List.of("a", "b"), pane.lines());
+    }
 }

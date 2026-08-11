@@ -88,10 +88,30 @@ public class AcodeTerminal implements AutoCloseable {
     private int lastH = -1;
 
     /**
-     * 增量重绘：与 shadow 对比，只重写发生变化的行（流式回复时通常只有尾部几行），
-     * 不清屏 → 消除流式输出时的频繁闪动。窗口尺寸变化时先清屏重锚定（含清 scrollback）。
+     * 增量重绘：输出区逐行 diff，只重写变化行（流式时通常只有尾部几行），不清屏 → 无闪动。
+     * 分隔线每次重绘都强制重画（不靠 diff 跳过），确保长内容/缩放后始终可见。
+     * 布局：输出区 1..h-2 行，h-1 行分隔线，h 行输入框；每次重绘清空输入行避免残留。
      */
     public void repaint(OutputPane output) {
+        checkResize();
+        drawOutputArea(output);
+        moveTo(height(), 1);
+        write("\033[K"); // 清空输入行，避免历史残留文字与输入框混淆
+        flush();
+    }
+
+    /**
+     * 仅重绘输出区与分隔线，不触碰底部输入行（JLine 正在使用，移动光标会干扰其 buffer 编辑）。
+     * 滚动回看时使用；下一次 JLine 自绘会纠正光标位置。
+     */
+    public void repaintOutputArea(OutputPane output) {
+        checkResize();
+        drawOutputArea(output);
+        flush();
+    }
+
+    /** 窗口尺寸变化时清屏并清 scrollback 重锚定，重置 shadow 强制全量重绘，避免缩放错位。 */
+    private void checkResize() {
         int h = height();
         int w = width();
         if (h != lastH || w != lastW) {
@@ -100,13 +120,19 @@ public class AcodeTerminal implements AutoCloseable {
             lastH = h;
             lastW = w;
         }
-        int area = h - 1;
-        List<String> visible = output.visibleLines(area);
-        String[] rows = new String[area];
-        for (int i = 0; i < area; i++) {
+    }
+
+    private void drawOutputArea(OutputPane output) {
+        int h = height();
+        int w = width();
+        boolean hasSeparator = h >= 3;
+        int outputArea = Math.max(1, hasSeparator ? h - 2 : h - 1);
+        List<String> visible = output.visibleLines(outputArea);
+        String[] rows = new String[outputArea];
+        for (int i = 0; i < outputArea; i++) {
             rows[i] = i < visible.size() ? truncateToWidth(visible.get(i), w) : "";
         }
-        for (int i = 0; i < area; i++) {
+        for (int i = 0; i < outputArea; i++) {
             String cur = rows[i];
             String old = i < shadow.length ? shadow[i] : null;
             if (!cur.equals(old)) {
@@ -118,8 +144,16 @@ public class AcodeTerminal implements AutoCloseable {
             }
         }
         shadow = rows;
-        moveTo(h, 1);
-        flush();
+        if (hasSeparator) {
+            moveTo(h - 1, 1);
+            write(separatorLine(w));
+            write("\033[K");
+        }
+    }
+
+    /** 分隔线：一行灰色横线，把输出区与底部输入框分开（类似 Claude Code）。 */
+    private static String separatorLine(int w) {
+        return "\033[90m" + "─".repeat(Math.max(1, w)) + "\033[0m";
     }
 
     /**

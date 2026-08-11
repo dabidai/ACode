@@ -14,6 +14,8 @@ public class OutputPane {
 
     private final int maxLines;
     private final List<String> lines = new ArrayList<>();
+    /** 滚动回看偏移：0 = 跟随底部；>0 = 向上回看的历史行数（会被视口高度 clamp）。 */
+    private int scrollOffset = 0;
 
     public OutputPane() {
         this(DEFAULT_MAX_LINES);
@@ -71,12 +73,33 @@ public class OutputPane {
         return Collections.unmodifiableList(lines);
     }
 
-    /** 可见窗口：返回最后 height 行（滚动跟随底部）；height ≤ 0 时返回空。 */
+    /** 可见窗口：按滚动偏移取窗口（0 = 底部跟随，>0 = 向上回看）；高度超过内容时偏移被 clamp 到顶部。 */
     public synchronized List<String> visibleLines(int height) {
         if (height <= 0 || lines.isEmpty()) {
             return List.of();
         }
-        int from = Math.max(0, lines.size() - height);
-        return List.copyOf(lines.subList(from, lines.size()));
+        int maxOffset = Math.max(0, lines.size() - height);
+        scrollOffset = Math.min(scrollOffset, maxOffset);
+        int from = Math.max(0, lines.size() - height - scrollOffset);
+        return List.copyOf(lines.subList(from, Math.min(lines.size(), from + height)));
+    }
+
+    /** 向上滚动 n 行（回看更早历史）；偏移会被下次 visibleLines 按视口高度 clamp 到顶部。 */
+    public synchronized void scrollUp(int n) {
+        if (n > 0) {
+            scrollOffset += n;
+        }
+    }
+
+    /** 向下滚动 n 行（回到更晚内容）；最小到 0（跟随底部）。 */
+    public synchronized void scrollDown(int n) {
+        if (n > 0) {
+            scrollOffset = Math.max(0, scrollOffset - n);
+        }
+    }
+
+    /** 回到底部跟随模式；提交新消息/加载会话/清屏后调用，确保视口回到最新内容。 */
+    public synchronized void resetScroll() {
+        scrollOffset = 0;
     }
 }

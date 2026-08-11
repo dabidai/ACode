@@ -15,6 +15,7 @@ public final class CommandRouter {
             /clear  清空界面与对话上下文
             /resume 加载历史会话（↑/↓ 选择）
             /help   显示本帮助
+            PageUp/PageDown 滚动查看完整聊天
             """;
 
     private CommandRouter() {

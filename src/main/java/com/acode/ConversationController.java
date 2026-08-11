@@ -120,7 +120,19 @@ public class ConversationController {
     }
 
     private void mainLoop() {
-        InputPane input = new InputPane(tui.terminal(), "> ");
+        InputPane input = new InputPane(tui.terminal(), "> ", new InputPane.ScrollHandler() {
+            @Override
+            public void scrollUp() {
+                output.scrollUp(Math.max(1, tui.height() - 2));
+                tui.repaintOutputArea(output);
+            }
+
+            @Override
+            public void scrollDown() {
+                output.scrollDown(Math.max(1, tui.height() - 2));
+                tui.repaintOutputArea(output);
+            }
+        });
         while (true) {
             tui.repaint(output);
             String line;
@@ -137,6 +149,7 @@ public class ConversationController {
                 }
                 case CLEAR -> {
                     output.clear();
+                    output.resetScroll();
                     conversation.clear();
                     output.appendLine("（已清空）");
                 }
@@ -166,6 +179,7 @@ public class ConversationController {
             output.appendLine("（没有可恢复的会话）");
             return;
         }
+        drainPendingInput();
         int selected = sessions.size() - 1;
         int menuStart = output.lineCount();
         while (true) {
@@ -211,7 +225,10 @@ public class ConversationController {
         return "（无用户消息）";
     }
 
-    /** 直接读终端键：方向键/回车/Esc 分别归类；Ctrl+C 视为取消。 */
+    /**
+     * 直接读终端键：方向键/回车/Esc 分别归类；Ctrl+C 视为取消。
+     * 方向键存在两种序列：CSI 模式 `\033[A` 与 SS3 模式 `\033OA`（JLine 进入应用光标模式后常见），都要识别。
+     */
     private int readMenuKey() {
         try {
             NonBlockingReader reader = tui.terminal().reader();
@@ -223,9 +240,10 @@ public class ConversationController {
                 return KEY_CANCEL;
             }
             if (c == 0x1b) {
-                if (reader.peek(50) == '[') {
-                    reader.read(0);
-                    int ch = reader.read(0);
+                int next = reader.peek(50);
+                if (next == '[' || next == 'O') {
+                    reader.read(0); // 消费 '[' 或 'O'
+                    int ch = reader.read(50);
                     if (ch == 'A') {
                         return KEY_UP;
                     }
@@ -234,11 +252,37 @@ public class ConversationController {
                     }
                     return KEY_NONE;
                 }
+                log.info("菜单取消：裸 ESC（跟随字节 0x{}）", Integer.toHexString(next));
                 return KEY_CANCEL; // 裸 Esc
             }
+            log.info("菜单忽略未知键：0x{}", Integer.toHexString(c));
             return KEY_NONE;
         } catch (IOException e) {
             return KEY_NONE;
+        }
+    }
+
+    /**
+     * 排空 readLine 返回后共享 reader 中残留的字节（如 Windows Enter 的 \r\n 里未消费的 \n），
+     * 避免被菜单误判为按键导致立即取消/加载。
+     */
+    private void drainPendingInput() {
+        try {
+            NonBlockingReader reader = tui.terminal().reader();
+            long deadline = System.currentTimeMillis() + 50;
+            int drained = 0;
+            while (System.currentTimeMillis() < deadline) {
+                if (reader.peek(5) == NonBlockingReader.READ_EXPIRED) {
+                    break;
+                }
+                reader.read(0);
+                drained++;
+            }
+            if (drained > 0) {
+                log.info("进菜单前排空残留输入 {} 字节", drained);
+            }
+        } catch (IOException e) {
+            // 读取失败视为无残留
         }
     }
 
@@ -249,6 +293,7 @@ public class ConversationController {
             conversation.addMessage(message);
         }
         output.clear();
+        output.resetScroll();
         output.append(BANNER);
         output.appendLine("输入 /help 查看命令，/quit 退出");
         output.appendLine("（已加载会话 " + session.getId() + "，共 " + session.getMessages().size() + " 条消息）");
@@ -262,6 +307,7 @@ public class ConversationController {
     }
 
     private void handleChat(String input) {
+        output.resetScroll();
         conversation.addMessage(ChatMessage.of(ChatMessage.Role.USER, input));
         output.append("● " + input + "\n");
         tui.repaint(output);

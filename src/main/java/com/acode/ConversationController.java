@@ -120,19 +120,11 @@ public class ConversationController {
     }
 
     private void mainLoop() {
-        InputPane input = new InputPane(tui.terminal(), "> ", new InputPane.ScrollHandler() {
-            @Override
-            public void scrollUp() {
-                output.scrollUp(Math.max(1, tui.height() - 2));
-                tui.repaintOutputArea(output);
-            }
-
-            @Override
-            public void scrollDown() {
-                output.scrollDown(Math.max(1, tui.height() - 2));
-                tui.repaintOutputArea(output);
-            }
-        });
+        InputPane input = new InputPane(tui.terminal(), "> ",
+                delta -> {
+                    output.scrollBy(delta);
+                    tui.repaintOutputArea(output);
+                });
         while (true) {
             tui.repaint(output);
             String line;

@@ -98,6 +98,15 @@ public class OutputPane {
         }
     }
 
+    /** 统一滚动：delta > 0 向上回看，delta < 0 向下回底部；0 无操作。滚轮传小步长，翻页传一屏。 */
+    public synchronized void scrollBy(int delta) {
+        if (delta > 0) {
+            scrollUp(delta);
+        } else if (delta < 0) {
+            scrollDown(-delta);
+        }
+    }
+
     /** 回到底部跟随模式；提交新消息/加载会话/清屏后调用，确保视口回到最新内容。 */
     public synchronized void resetScroll() {
         scrollOffset = 0;

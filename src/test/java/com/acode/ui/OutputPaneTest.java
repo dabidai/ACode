@@ -166,6 +166,22 @@ class OutputPaneTest {
     }
 
     @Test
+    void scrollByMovesBothDirections() {
+        OutputPane pane = new OutputPane();
+        for (int i = 1; i <= 10; i++) {
+            pane.appendLine("line" + i);
+        }
+        pane.scrollBy(4);
+        assertEquals(List.of("line3", "line4", "line5", "line6"), pane.visibleLines(4));
+        pane.scrollBy(-2);
+        assertEquals(List.of("line5", "line6", "line7", "line8"), pane.visibleLines(4));
+        pane.scrollBy(-100);
+        assertEquals(List.of("line7", "line8", "line9", "line10"), pane.visibleLines(4));
+        pane.scrollBy(0);
+        assertEquals(List.of("line7", "line8", "line9", "line10"), pane.visibleLines(4));
+    }
+
+    @Test
     void resetScrollReturnsToBottom() {
         OutputPane pane = new OutputPane();
         for (int i = 1; i <= 10; i++) {

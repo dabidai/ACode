@@ -21,11 +21,9 @@ public class InputPane {
     private static final String SCROLL_UP_WIDGET = "acode-scroll-up";
     private static final String SCROLL_DOWN_WIDGET = "acode-scroll-down";
 
-    /** 滚动回调：PageUp/PageDown 触发，由上层决定滚动步长并局部重绘输出区。 */
+    /** 滚动回调：delta > 0 向上回看、< 0 向下回底，由上层按步长滚动并局部重绘输出区。 */
     public interface ScrollHandler {
-        void scrollUp();
-
-        void scrollDown();
+        void scroll(int deltaLines);
     }
 
     private final LineReader reader;
@@ -51,11 +49,11 @@ public class InputPane {
         });
         if (scrollHandler != null) {
             reader.getWidgets().put(SCROLL_UP_WIDGET, () -> {
-                runScroll(scrollHandler::scrollUp);
+                runScroll(() -> scrollHandler.scroll(pageLines()));
                 return true;
             });
             reader.getWidgets().put(SCROLL_DOWN_WIDGET, () -> {
-                runScroll(scrollHandler::scrollDown);
+                runScroll(() -> scrollHandler.scroll(-pageLines()));
                 return true;
             });
         }
@@ -82,13 +80,21 @@ public class InputPane {
             MouseEvent event = reader.readMouseEvent();
             if (event != null) {
                 if (event.getButton() == MouseEvent.Button.WheelUp) {
-                    runScroll(scrollHandler::scrollUp);
+                    runScroll(() -> scrollHandler.scroll(WHEEL_STEP));
                 } else if (event.getButton() == MouseEvent.Button.WheelDown) {
-                    runScroll(scrollHandler::scrollDown);
+                    runScroll(() -> scrollHandler.scroll(-WHEEL_STEP));
                 }
             }
             return true;
         });
+    }
+
+    /** 滚轮单格行数（逐行滚动，替代换页更精细）。 */
+    private static final int WHEEL_STEP = 3;
+
+    /** 一屏可见输出区行数，PageUp/PageDown 翻一屏用。 */
+    private int pageLines() {
+        return Math.max(1, reader.getTerminal().getHeight() - 2);
     }
 
     /**

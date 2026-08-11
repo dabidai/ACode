@@ -5,11 +5,14 @@ import org.jline.reader.Binding;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
 import org.jline.reader.Reference;
+import org.jline.terminal.MouseEvent;
 import org.jline.terminal.Terminal;
 
 /**
  * 输入区：Enter 提交、Shift+Enter 换行（多行输入）、上下方向键翻输入历史、光标移动。
  * 基于 JLine3 LineReader；粘贴 20 行代码由括号粘贴模式保留原样。
+ * 鼠标滚轮：进入鼠标追踪后把滚轮事件转成输出区滚动（而非滚动终端 scrollback，
+ * 否则会破坏全屏绝对坐标导致增量渲染错乱）。
  */
 public class InputPane {
 
@@ -35,8 +38,10 @@ public class InputPane {
         this.reader = LineReaderBuilder.builder()
                 .terminal(terminal)
                 .appName("acode")
+                .option(LineReader.Option.MOUSE, true)
                 .build();
         bindKeys();
+        bindMouse();
     }
 
     private void bindKeys() {
@@ -46,11 +51,11 @@ public class InputPane {
         });
         if (scrollHandler != null) {
             reader.getWidgets().put(SCROLL_UP_WIDGET, () -> {
-                scrollHandler.scrollUp();
+                runScroll(scrollHandler::scrollUp);
                 return true;
             });
             reader.getWidgets().put(SCROLL_DOWN_WIDGET, () -> {
-                scrollHandler.scrollDown();
+                runScroll(scrollHandler::scrollDown);
                 return true;
             });
         }
@@ -63,6 +68,35 @@ public class InputPane {
             main.bind(new Reference(SCROLL_UP_WIDGET), "\033[5~");
             main.bind(new Reference(SCROLL_DOWN_WIDGET), "\033[6~");
         }
+    }
+
+    /** 覆盖 JLine 内置 mouse widget：滚轮事件转输出区滚动，其余鼠标事件消费掉，避免干扰输入。 */
+    private void bindMouse() {
+        if (scrollHandler == null) {
+            return;
+        }
+        reader.getWidgets().put(LineReader.MOUSE, () -> {
+            MouseEvent event = reader.readMouseEvent();
+            if (event != null) {
+                if (event.getButton() == MouseEvent.Button.WheelUp) {
+                    runScroll(scrollHandler::scrollUp);
+                } else if (event.getButton() == MouseEvent.Button.WheelDown) {
+                    runScroll(scrollHandler::scrollDown);
+                }
+            }
+            return true;
+        });
+    }
+
+    /**
+     * 保存/恢复光标包裹滚动重绘：JLine 用相对移动追踪光标位置，绕过它移动光标会破坏其状态，
+     * 导致下次 redisplay 输入行时错位。\033[s/\033[u 保证实际光标回到 JLine 认为的位置。
+     */
+    private void runScroll(Runnable action) {
+        reader.getTerminal().writer().write("\033[s");
+        action.run();
+        reader.getTerminal().writer().write("\033[u");
+        reader.getTerminal().writer().flush();
     }
 
     /**

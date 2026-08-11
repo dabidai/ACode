@@ -7,13 +7,14 @@ package com.acode.ui;
 public final class CommandRouter {
 
     /** 命令动作。 */
-    public enum Action { QUIT, CLEAR, HELP, CHAT, SKIP }
+    public enum Action { QUIT, CLEAR, HELP, RESUME, CHAT, SKIP }
 
     /** /help 展示的命令说明；T11 补齐 /clear 文案时同步更新。 */
     public static final String HELP_TEXT = """
-            /quit  退出程序
-            /clear 清空界面与对话上下文
-            /help  显示本帮助
+            /quit   退出程序
+            /clear  清空界面与对话上下文
+            /resume 加载历史会话（↑/↓ 选择）
+            /help   显示本帮助
             """;
 
     private CommandRouter() {
@@ -34,6 +35,7 @@ public final class CommandRouter {
             case "/quit" -> Action.QUIT;
             case "/clear" -> Action.CLEAR;
             case "/help" -> Action.HELP;
+            case "/resume" -> Action.RESUME;
             default -> Action.CHAT;
         };
     }

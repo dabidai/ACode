@@ -20,10 +20,12 @@ import com.acode.ui.OutputPane;
 import com.acode.ui.StreamPrinter;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.UserInterruptException;
+import org.jline.utils.NonBlockingReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -139,10 +141,122 @@ public class ConversationController {
                     output.appendLine("（已清空）");
                 }
                 case HELP -> output.append(CommandRouter.HELP_TEXT);
+                case RESUME -> selectSession();
                 case SKIP -> {
                     // 空白输入，仅重绘
                 }
                 case CHAT -> handleChat(line);
+            }
+        }
+    }
+
+    private static final int KEY_NONE = 0;
+    private static final int KEY_UP = 1;
+    private static final int KEY_DOWN = 2;
+    private static final int KEY_ENTER = 3;
+    private static final int KEY_CANCEL = 4;
+
+    /**
+     * /resume：列出历史会话，↑/↓ 选择、回车加载、Esc 取消。
+     * 菜单以输出区尾部块呈现，每次按键移除旧块重画，不污染历史消息。
+     */
+    private void selectSession() {
+        List<Session> sessions = sessionStore.list();
+        if (sessions.isEmpty()) {
+            output.appendLine("（没有可恢复的会话）");
+            return;
+        }
+        int selected = sessions.size() - 1;
+        int menuStart = output.lineCount();
+        while (true) {
+            output.removeLast(output.lineCount() - menuStart);
+            output.appendLine("（↑/↓ 选择会话，回车加载，Esc 取消）");
+            for (int i = 0; i < sessions.size(); i++) {
+                output.appendLine(menuLine(sessions.get(i), i == selected));
+            }
+            tui.repaint(output);
+            switch (readMenuKey()) {
+                case KEY_UP -> selected = (selected - 1 + sessions.size()) % sessions.size();
+                case KEY_DOWN -> selected = (selected + 1) % sessions.size();
+                case KEY_ENTER -> {
+                    output.removeLast(output.lineCount() - menuStart);
+                    loadSession(sessions.get(selected));
+                    return;
+                }
+                case KEY_CANCEL -> {
+                    output.removeLast(output.lineCount() - menuStart);
+                    output.appendLine("（已取消）");
+                    return;
+                }
+                default -> {
+                    // 忽略无关按键，保持菜单
+                }
+            }
+        }
+    }
+
+    /** 单条会话菜单行：时间戳 + 消息数 + 首条用户消息预览；选中行反显。 */
+    private static String menuLine(Session session, boolean selected) {
+        String body = session.getId() + "  " + session.getMessages().size() + " 条 · " + preview(session);
+        return selected ? "\033[7m▸ " + body + "\033[0m" : "  " + body;
+    }
+
+    private static String preview(Session session) {
+        for (ChatMessage m : session.getMessages()) {
+            if (m.role() == ChatMessage.Role.USER) {
+                String text = m.content().replace('\n', ' ').trim();
+                return text.length() > 30 ? text.substring(0, 30) + "…" : text;
+            }
+        }
+        return "（无用户消息）";
+    }
+
+    /** 直接读终端键：方向键/回车/Esc 分别归类；Ctrl+C 视为取消。 */
+    private int readMenuKey() {
+        try {
+            NonBlockingReader reader = tui.terminal().reader();
+            int c = reader.read();
+            if (c == '\r' || c == '\n') {
+                return KEY_ENTER;
+            }
+            if (c == 0x03) {
+                return KEY_CANCEL;
+            }
+            if (c == 0x1b) {
+                if (reader.peek(50) == '[') {
+                    reader.read(0);
+                    int ch = reader.read(0);
+                    if (ch == 'A') {
+                        return KEY_UP;
+                    }
+                    if (ch == 'B') {
+                        return KEY_DOWN;
+                    }
+                    return KEY_NONE;
+                }
+                return KEY_CANCEL; // 裸 Esc
+            }
+            return KEY_NONE;
+        } catch (IOException e) {
+            return KEY_NONE;
+        }
+    }
+
+    /** 用某个会话的历史替换当前对话：清空上下文与界面，回显该会话全部消息。 */
+    private void loadSession(Session session) {
+        conversation.clear();
+        for (ChatMessage message : session.getMessages()) {
+            conversation.addMessage(message);
+        }
+        output.clear();
+        output.append(BANNER);
+        output.appendLine("输入 /help 查看命令，/quit 退出");
+        output.appendLine("（已加载会话 " + session.getId() + "，共 " + session.getMessages().size() + " 条消息）");
+        for (ChatMessage message : session.getMessages()) {
+            if (message.role() == ChatMessage.Role.USER) {
+                output.appendLine("● " + message.content());
+            } else {
+                output.append(message.content());
             }
         }
     }

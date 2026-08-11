@@ -82,15 +82,42 @@ public class AcodeTerminal implements AutoCloseable {
         write("\033[" + row + ";" + col + "H");
     }
 
-    /** 全量重绘：重画输出区可见窗口，然后把光标定位到最底输入行。 */
+    /** 上次绘制到屏幕的输出区内容（shadow buffer），用于逐行 diff 增量刷新。 */
+    private String[] shadow = new String[0];
+    private int lastW = -1;
+    private int lastH = -1;
+
+    /**
+     * 增量重绘：与 shadow 对比，只重写发生变化的行（流式回复时通常只有尾部几行），
+     * 不清屏 → 消除流式输出时的频繁闪动。窗口尺寸变化时先清屏重锚定（含清 scrollback）。
+     */
     public void repaint(OutputPane output) {
-        clearScreen();
         int h = height();
         int w = width();
-        for (String line : output.visibleLines(h - 1)) {
-            write(truncateToWidth(line, w));
-            write("\r\n");
+        if (h != lastH || w != lastW) {
+            clearScreen();
+            shadow = new String[0];
+            lastH = h;
+            lastW = w;
         }
+        int area = h - 1;
+        List<String> visible = output.visibleLines(area);
+        String[] rows = new String[area];
+        for (int i = 0; i < area; i++) {
+            rows[i] = i < visible.size() ? truncateToWidth(visible.get(i), w) : "";
+        }
+        for (int i = 0; i < area; i++) {
+            String cur = rows[i];
+            String old = i < shadow.length ? shadow[i] : null;
+            if (!cur.equals(old)) {
+                moveTo(i + 1, 1);
+                if (!cur.isEmpty()) {
+                    write(cur);
+                }
+                write("\033[K");
+            }
+        }
+        shadow = rows;
         moveTo(h, 1);
         flush();
     }

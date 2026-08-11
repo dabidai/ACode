@@ -6,6 +6,7 @@ import static com.acode.ui.CommandRouter.Action.CHAT;
 import static com.acode.ui.CommandRouter.Action.CLEAR;
 import static com.acode.ui.CommandRouter.Action.HELP;
 import static com.acode.ui.CommandRouter.Action.QUIT;
+import static com.acode.ui.CommandRouter.Action.RESUME;
 import static com.acode.ui.CommandRouter.Action.SKIP;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -25,6 +26,11 @@ class CommandRouterTest {
     @Test
     void helpCommandRoutesToHelp() {
         assertEquals(HELP, CommandRouter.route("/help"));
+    }
+
+    @Test
+    void resumeCommandRoutesToResume() {
+        assertEquals(RESUME, CommandRouter.route("/resume"));
     }
 
     @Test
@@ -72,6 +78,7 @@ class CommandRouterTest {
     void helpTextListsAllCommands() {
         assertTrue(CommandRouter.HELP_TEXT.contains("/quit"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/clear"));
+        assertTrue(CommandRouter.HELP_TEXT.contains("/resume"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/help"));
     }
 }

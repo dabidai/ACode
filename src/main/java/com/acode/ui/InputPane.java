@@ -75,6 +75,9 @@ public class InputPane {
         if (scrollHandler == null) {
             return;
         }
+        // Windows 终端不提供 key_mouse capability，JLine 默认会把 mouse 绑定跳过，
+        // 鼠标序列（\033[M X10 / \033[< SGR）会泄漏进输入框。手动绑定到 mouse widget。
+        reader.getKeyMaps().get(LineReader.MAIN).bind(new Reference(LineReader.MOUSE), "\033[M", "\033[<");
         reader.getWidgets().put(LineReader.MOUSE, () -> {
             MouseEvent event = reader.readMouseEvent();
             if (event != null) {

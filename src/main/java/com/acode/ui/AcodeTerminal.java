@@ -3,6 +3,7 @@ package com.acode.ui;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
 import org.jline.utils.InfoCmp;
+import org.jline.utils.WCWidth;
 
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -158,9 +159,10 @@ public class AcodeTerminal implements AutoCloseable {
 
     /**
      * 按终端显示宽度截断，忽略 ANSI 转义序列的宽度，避免超长行折行破坏行计数、
-     * 也不切断代理对。截断点必然落在完整字符/完整转义序列之后，若中途切掉颜色则补 RESET。
+     * 也不切断代理对。宽度按 wcwidth 计算（CJK 等宽字符占 2 列），剩余空间放不下
+     * 整个宽字符时截断。截断点必然落在完整字符/完整转义序列之后，若中途切掉颜色则补 RESET。
      */
-    private static String truncateToWidth(String line, int width) {
+    static String truncateToWidth(String line, int width) {
         int disp = 0;
         int i = 0;
         int n = line.length();
@@ -178,8 +180,13 @@ public class AcodeTerminal implements AutoCloseable {
                 }
                 i = j;
             } else {
-                i += Character.charCount(line.codePointAt(i));
-                disp++;
+                int cp = line.codePointAt(i);
+                int w = WCWidth.wcwidth(cp);
+                if (w > 0 && disp + w > width) {
+                    break;
+                }
+                i += Character.charCount(cp);
+                disp += Math.max(0, w);
             }
         }
         if (i >= n) {

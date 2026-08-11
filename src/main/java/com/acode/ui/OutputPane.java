@@ -27,7 +27,7 @@ public class OutputPane {
      * 追加文本并按 \n 拆行；结尾换行不产生多余空行；中间的空白行保留；
      * \r（CRLF）被剥离。
      */
-    public void append(String text) {
+    public synchronized void append(String text) {
         if (text == null || text.isEmpty()) {
             return;
         }
@@ -37,7 +37,7 @@ public class OutputPane {
         }
     }
 
-    public void appendLine(String line) {
+    public synchronized void appendLine(String line) {
         if (line == null) {
             return;
         }
@@ -47,12 +47,12 @@ public class OutputPane {
         }
     }
 
-    public void clear() {
+    public synchronized void clear() {
         lines.clear();
     }
 
     /** 从末尾移除 count 行（超出已有行数则全部移除）；count ≤ 0 无操作。 */
-    public void removeLast(int count) {
+    public synchronized void removeLast(int count) {
         if (count <= 0) {
             return;
         }
@@ -62,17 +62,17 @@ public class OutputPane {
         }
     }
 
-    public int lineCount() {
+    public synchronized int lineCount() {
         return lines.size();
     }
 
     /** 全部行（不可修改）。 */
-    public List<String> lines() {
+    public synchronized List<String> lines() {
         return Collections.unmodifiableList(lines);
     }
 
     /** 可见窗口：返回最后 height 行（滚动跟随底部）；height ≤ 0 时返回空。 */
-    public List<String> visibleLines(int height) {
+    public synchronized List<String> visibleLines(int height) {
         if (height <= 0 || lines.isEmpty()) {
             return List.of();
         }

@@ -65,6 +65,17 @@ class OutputPaneTest {
     }
 
     @Test
+    void linesReturnsSnapshotNotLiveView() {
+        // 流式输出时读取方与 append 并发，lines() 必须是稳定快照，否则按 size 预分配数组的遍历会越界
+        OutputPane pane = new OutputPane();
+        pane.append("a");
+        List<String> snapshot = pane.lines();
+        pane.appendLine("b");
+        assertEquals(List.of("a"), snapshot);
+        assertEquals(List.of("a", "b"), pane.lines());
+    }
+
+    @Test
     void visibleLinesReturnsTailWhenMoreLinesThanHeight() {
         OutputPane pane = new OutputPane();
         for (int i = 1; i <= 10; i++) {

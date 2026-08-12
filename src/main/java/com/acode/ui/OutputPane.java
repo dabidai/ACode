@@ -1,7 +1,6 @@
 package com.acode.ui;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -68,9 +67,13 @@ public class OutputPane {
         return lines.size();
     }
 
-    /** 全部行（不可修改）。 */
+    /**
+     * 全部行的快照副本（不可修改）。流式输出时工作线程会并发 append，若返回的是底层列表的
+     * 视图，读取方在同一时刻看到的 size 可能不断增长（如 computeWrapCounts 按 size 预分配数组
+     * 后遍历会越界）；快照保证读取方看到稳定的行集。
+     */
     public synchronized List<String> lines() {
-        return Collections.unmodifiableList(lines);
+        return List.copyOf(lines);
     }
 
     /** 可见窗口：按滚动偏移取窗口（0 = 底部跟随，>0 = 向上回看）；高度超过内容时偏移被 clamp 到顶部。 */

@@ -128,31 +128,45 @@ public class AcodeTerminal implements AutoCloseable {
         }
     }
 
+    /**
+     * 清除 shadow 使下次 repaint 全量重绘。JLine 回车等会让终端物理滚动整屏，增量 diff 只按文本
+     * 比对、可能跳过实际上已滚动的行（残留旧分隔线），需要整屏重画把残影擦干净。
+     */
+    public void invalidateShadow() {
+        shadow = new String[0];
+    }
+
     private void drawOutputArea(OutputPane output) {
         int h = height();
         int w = width();
         boolean hasSeparator = h >= 3;
         int outputArea = Math.max(1, hasSeparator ? h - 2 : h - 1);
-        int n = output.lineCount();
+        List<String> lines = output.lines();
+        int n = lines.size();
         // 内容总折行高度 > 视口时才需要滚动条（并为此让出最右一列）；否则整宽使用
         boolean sbVisible = false;
         int contentW = w;
         if (w >= 2) {
-            int totalAtW = prefixSums(computeWrapCounts(output, w))[n];
+            int totalAtW = 0;
+            for (String line : lines) {
+                totalAtW += wrap(line, w).size();
+            }
             sbVisible = totalAtW > outputArea;
             contentW = sbVisible ? w - 1 : w;
         }
-        // 全量折行前缀和：滚动条按「整段内容里的全局显示起点」定位；用窗口内偏移会让短行滑块钉死顶部
-        int[] prefix = prefixSums(computeWrapCounts(output, contentW));
-        int fullTotal = prefix[n];
-        // 原始行按 contentW 折行后取最后 outputArea 段，保证长行内容完整显示而非截断
-        List<String> wrapped = new ArrayList<>();
-        for (String line : output.visibleLines(outputArea)) {
-            wrapped.addAll(wrap(line, contentW));
+        // 按 contentW 全量折行一次：前缀和（滚动条定位）+ 全部段（按全局起点切片显示）
+        int[] counts = new int[n];
+        List<String> wrappedAll = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            List<String> segs = wrap(lines.get(i), contentW);
+            counts[i] = segs.size();
+            wrappedAll.addAll(segs);
         }
-        // 全局显示起点（滚动条用）；用窗口内偏移会让短行滑块钉死顶部
+        int[] prefix = prefixSums(counts);
+        int fullTotal = prefix[n];
+        // 全局显示起点（滚动条与显示都用）；用窗口内偏移会让短行滑块钉死顶部
         int from = displayFrom(n, outputArea, prefix, output.scrollOffset());
-        String[] rows = displayRows(wrapped, outputArea);
+        String[] rows = displayRows(wrappedAll, outputArea, from);
         for (int i = 0; i < outputArea; i++) {
             String cur = rows[i];
             String old = i < shadow.length ? shadow[i] : null;
@@ -264,22 +278,25 @@ public class AcodeTerminal implements AutoCloseable {
 
     /**
      * 滚动偏移 s（0 = 底部）时，整段折行内容里第一显示行的下标（0 = 顶部）。
-     * 视口显示连续 outputArea 个逻辑行（窗口上界 = n - s）折行后的尾部，起点 = prefix[上界] - outputArea。
+     * 视口显示连续 outputArea 个逻辑行（窗口上界 = n - s）折行后的尾部，起点 = prefix[上界] - outputArea；
+     * 滚到顶（窗口下界 lo == 0）时直接返回 0，否则顶部几行长行折行段数超过视口时会把开头裁掉。
      */
     static int displayFrom(int n, int outputArea, int[] prefix, int scrollOffset) {
         int lo = Math.max(0, n - outputArea - scrollOffset);
+        if (lo == 0) {
+            return 0;
+        }
         return Math.max(0, prefix[Math.min(n, lo + outputArea)] - outputArea);
     }
 
     /**
-     * 显示行：取折行内容最后 outputArea 段；内容不满一屏时顶部对齐、底部留空
-     * （windowFrom 必须 clamp 到 0，否则负偏移会把内容挤到屏幕底部）。
+     * 显示行：从全量折行内容里取从全局起点 from 起连续 outputArea 段；
+     * 内容不满一屏时顶部对齐、底部留空（idx 越界补空行，不会挤出屏幕）。
      */
-    static String[] displayRows(List<String> wrapped, int outputArea) {
+    static String[] displayRows(List<String> wrapped, int outputArea, int from) {
         String[] rows = new String[outputArea];
-        int windowFrom = Math.max(0, wrapped.size() - outputArea);
         for (int i = 0; i < outputArea; i++) {
-            int idx = windowFrom + i;
+            int idx = from + i;
             rows[i] = idx < wrapped.size() ? wrapped.get(idx) : "";
         }
         return rows;

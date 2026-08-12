@@ -150,7 +150,7 @@ class AcodeTerminalTest {
         // 行折行数 [1,2,1,1,2,1,1,1,2,1] → 前缀和 13
         int[] prefix = {0, 1, 3, 4, 5, 7, 8, 9, 10, 12, 13};
         assertEquals(9, AcodeTerminal.displayFrom(10, 4, prefix, 0)); // 底部第一显示行 = 13-4
-        assertEquals(1, AcodeTerminal.displayFrom(10, 4, prefix, 6)); // 顶部（前 4 行折 5 行，头行被挤掉）
+        assertEquals(0, AcodeTerminal.displayFrom(10, 4, prefix, 6)); // 顶部 clamp 到 0，不裁掉开头
     }
 
     @Test
@@ -165,7 +165,7 @@ class AcodeTerminalTest {
 
     @Test
     void displayRowsTopAlignsWhenContentFits() {
-        String[] rows = AcodeTerminal.displayRows(List.of("a", "b"), 5);
+        String[] rows = AcodeTerminal.displayRows(List.of("a", "b"), 5, 0);
         assertEquals("a", rows[0]);
         assertEquals("b", rows[1]);
         assertEquals("", rows[2]);
@@ -174,8 +174,15 @@ class AcodeTerminalTest {
 
     @Test
     void displayRowsShowsTailWhenContentOverflows() {
-        String[] rows = AcodeTerminal.displayRows(List.of("a", "b", "c", "d", "e"), 3);
+        String[] rows = AcodeTerminal.displayRows(List.of("a", "b", "c", "d", "e"), 3, 2);
         assertArrayEquals(new String[]{"c", "d", "e"}, rows);
+    }
+
+    @Test
+    void displayRowsFromTopShowsHeadNotClipped() {
+        // 全局起点 0：顶部对齐，长行开头完整显示，不会因「只看尾部」被裁
+        String[] rows = AcodeTerminal.displayRows(List.of("长行第一段", "长行第二段", "b", "c"), 3, 0);
+        assertArrayEquals(new String[]{"长行第一段", "长行第二段", "b"}, rows);
     }
 
     @Test

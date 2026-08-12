@@ -142,6 +142,8 @@ public class ConversationController {
                 saveSession();
                 return;
             }
+            // JLine 回车会物理滚动终端（旧分隔线残影残留），清 shadow 让下次 repaint 全量重绘擦掉
+            tui.invalidateShadow();
             switch (CommandRouter.route(line)) {
                 case QUIT -> {
                     saveSession();

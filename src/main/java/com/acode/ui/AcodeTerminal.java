@@ -146,14 +146,9 @@ public class AcodeTerminal implements AutoCloseable {
         for (String line : output.visibleLines(outputArea)) {
             wrapped.addAll(wrap(line, contentW));
         }
-        int windowFrom = wrapped.size() - outputArea;
         // 全局显示起点（滚动条用）；用窗口内偏移会让短行滑块钉死顶部
         int from = displayFrom(n, outputArea, prefix, output.scrollOffset());
-        String[] rows = new String[outputArea];
-        for (int i = 0; i < outputArea; i++) {
-            int idx = windowFrom + i;
-            rows[i] = idx >= 0 && idx < wrapped.size() ? wrapped.get(idx) : "";
-        }
+        String[] rows = displayRows(wrapped, outputArea);
         for (int i = 0; i < outputArea; i++) {
             String cur = rows[i];
             String old = i < shadow.length ? shadow[i] : null;
@@ -250,6 +245,20 @@ public class AcodeTerminal implements AutoCloseable {
     static int displayFrom(int n, int outputArea, int[] prefix, int scrollOffset) {
         int lo = Math.max(0, n - outputArea - scrollOffset);
         return Math.max(0, prefix[Math.min(n, lo + outputArea)] - outputArea);
+    }
+
+    /**
+     * 显示行：取折行内容最后 outputArea 段；内容不满一屏时顶部对齐、底部留空
+     * （windowFrom 必须 clamp 到 0，否则负偏移会把内容挤到屏幕底部）。
+     */
+    static String[] displayRows(List<String> wrapped, int outputArea) {
+        String[] rows = new String[outputArea];
+        int windowFrom = Math.max(0, wrapped.size() - outputArea);
+        for (int i = 0; i < outputArea; i++) {
+            int idx = windowFrom + i;
+            rows[i] = idx < wrapped.size() ? wrapped.get(idx) : "";
+        }
+        return rows;
     }
 
     /** 滑块顶行（0-based，相对输出区顶部）：当前显示起点 from 占可滚动区间的比例映射到轨道。 */

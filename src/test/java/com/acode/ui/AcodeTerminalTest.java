@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -141,6 +142,21 @@ class AcodeTerminalTest {
             int from = AcodeTerminal.displayFrom(10, 4, prefix, s);
             assertEquals(s, AcodeTerminal.targetScrollOffset(10, 4, prefix, from));
         }
+    }
+
+    @Test
+    void displayRowsTopAlignsWhenContentFits() {
+        String[] rows = AcodeTerminal.displayRows(List.of("a", "b"), 5);
+        assertEquals("a", rows[0]);
+        assertEquals("b", rows[1]);
+        assertEquals("", rows[2]);
+        assertEquals("", rows[4]);
+    }
+
+    @Test
+    void displayRowsShowsTailWhenContentOverflows() {
+        String[] rows = AcodeTerminal.displayRows(List.of("a", "b", "c", "d", "e"), 3);
+        assertArrayEquals(new String[]{"c", "d", "e"}, rows);
     }
 
     @Test

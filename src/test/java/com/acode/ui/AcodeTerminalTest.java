@@ -85,4 +85,39 @@ class AcodeTerminalTest {
         List<String> segs = AcodeTerminal.wrap("abcdefghij", 4);
         assertEquals(List.of("abcd", "efgh", "ij"), segs);
     }
+
+    @Test
+    void thumbHeightScalesWithContent() {
+        assertEquals(4, AcodeTerminal.thumbHeight(40, 400));
+        assertEquals(20, AcodeTerminal.thumbHeight(40, 80));
+        assertEquals(1, AcodeTerminal.thumbHeight(40, 100000));
+    }
+
+    @Test
+    void thumbTopMapsFromFraction() {
+        assertEquals(0, AcodeTerminal.thumbTop(40, 400, 0));
+        assertEquals(36, AcodeTerminal.thumbTop(40, 400, 360));
+        assertEquals(18, AcodeTerminal.thumbTop(40, 400, 180));
+    }
+
+    @Test
+    void targetScrollOffsetMapsBottomAndTop() {
+        // 10 行各折 1 段
+        int[] prefix = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+        assertEquals(0, AcodeTerminal.targetScrollOffset(10, 4, prefix, 6)); // 底部
+        assertEquals(6, AcodeTerminal.targetScrollOffset(10, 4, prefix, 0)); // 顶部
+    }
+
+    @Test
+    void targetScrollOffsetAccountsForWrap() {
+        // 行折行数 [1,2,1,1,2,1,1,1,2,1] → 前缀和 13
+        int[] prefix = {0, 1, 3, 4, 5, 7, 8, 9, 10, 12, 13};
+        assertEquals(0, AcodeTerminal.targetScrollOffset(10, 4, prefix, 9)); // 底部（总折行 13-4=9）
+        assertEquals(6, AcodeTerminal.targetScrollOffset(10, 4, prefix, 0)); // 顶部 clamp 到 maxS
+    }
+
+    @Test
+    void targetScrollOffsetContentFitsReturnsZero() {
+        assertEquals(0, AcodeTerminal.targetScrollOffset(3, 10, new int[]{0, 1, 2, 3}, 0));
+    }
 }

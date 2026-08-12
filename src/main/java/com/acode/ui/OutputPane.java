@@ -111,4 +111,9 @@ public class OutputPane {
     public synchronized void resetScroll() {
         scrollOffset = 0;
     }
+
+    /** 直接设置滚动偏移（0 = 底部跟随；>0 = 向上回看）。上界由 visibleLines 按视口高度 clamp。 */
+    public synchronized void setScrollOffset(int offset) {
+        scrollOffset = Math.max(0, offset);
+    }
 }

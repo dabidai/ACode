@@ -193,6 +193,24 @@ class OutputPaneTest {
     }
 
     @Test
+    void setScrollOffsetMovesWindowUp() {
+        OutputPane pane = new OutputPane();
+        for (int i = 1; i <= 10; i++) {
+            pane.appendLine("line" + i);
+        }
+        pane.setScrollOffset(3);
+        assertEquals(List.of("line4", "line5", "line6", "line7"), pane.visibleLines(4));
+    }
+
+    @Test
+    void setScrollOffsetClampsAtZero() {
+        OutputPane pane = new OutputPane();
+        pane.append("a\nb\nc");
+        pane.setScrollOffset(-5);
+        assertEquals(List.of("a", "b", "c"), pane.visibleLines(10));
+    }
+
+    @Test
     void scrollUpDoesNothingWhenContentFits() {
         OutputPane pane = new OutputPane();
         pane.append("a\nb\nc");

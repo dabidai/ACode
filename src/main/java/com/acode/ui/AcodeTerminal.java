@@ -129,13 +129,23 @@ public class AcodeTerminal implements AutoCloseable {
         int w = width();
         boolean hasSeparator = h >= 3;
         int outputArea = Math.max(1, hasSeparator ? h - 2 : h - 1);
-        // 原始行按终端宽度折行后取最后 outputArea 段，保证长行内容完整显示而非截断
+        int n = output.lineCount();
+        // 内容总折行高度 > 视口时才需要滚动条（并为此让出最右一列）；否则整宽使用
+        boolean sbVisible = false;
+        int contentW = w;
+        if (w >= 2) {
+            int totalAtW = prefixSums(computeWrapCounts(output, w))[n];
+            sbVisible = totalAtW > outputArea;
+            contentW = sbVisible ? w - 1 : w;
+        }
+        int fullTotal = sbVisible ? prefixSums(computeWrapCounts(output, contentW))[n] : 0;
+        // 原始行按 contentW 折行后取最后 outputArea 段，保证长行内容完整显示而非截断
         List<String> wrapped = new ArrayList<>();
         for (String line : output.visibleLines(outputArea)) {
-            wrapped.addAll(wrap(line, w));
+            wrapped.addAll(wrap(line, contentW));
         }
-        String[] rows = new String[outputArea];
         int from = Math.max(0, wrapped.size() - outputArea);
+        String[] rows = new String[outputArea];
         for (int i = 0; i < outputArea; i++) {
             int idx = from + i;
             rows[i] = idx < wrapped.size() ? wrapped.get(idx) : "";
@@ -152,6 +162,7 @@ public class AcodeTerminal implements AutoCloseable {
             }
         }
         shadow = rows;
+        drawScrollbar(outputArea, contentW, from, fullTotal);
         if (hasSeparator) {
             moveTo(h - 1, 1);
             write(separatorLine(w));
@@ -159,10 +170,124 @@ public class AcodeTerminal implements AutoCloseable {
         }
     }
 
+    /** 输出区可用行数：分隔线上方（h-2），极小窗口无分隔线时用 h-1。 */
+    private int outputArea() {
+        int h = height();
+        return Math.max(1, h >= 3 ? h - 2 : h - 1);
+    }
+
+    /**
+     * 输出区最右列画滚动条：轨道深灰、滑块浅灰。滑块位置/大小由内容折行总高与当前显示起点决定。
+     * 每帧全量重画（内容行写的 \033[K 会清掉本列，不能靠 diff 跳过）。
+     */
+    private void drawScrollbar(int outputArea, int contentW, int from, int fullTotal) {
+        if (fullTotal <= outputArea) {
+            return;
+        }
+        int thumbH = thumbHeight(outputArea, fullTotal);
+        int top = thumbTop(outputArea, fullTotal, from);
+        for (int i = 0; i < outputArea; i++) {
+            moveTo(i + 1, contentW + 1);
+            write(i >= top && i < top + thumbH ? SCROLLBAR_THUMB : SCROLLBAR_TRACK);
+        }
+    }
+
+    /**
+     * 滚动条点击/拖动：把鼠标在输出区内的行号 y（1-based）换算成目标滚动位置。
+     * 滑块中心对准鼠标行；内容不满一屏时回到底部跟随（无滚动条）。
+     */
+    public void scrollToMouseY(OutputPane output, int y) {
+        int outputArea = outputArea();
+        int n = output.lineCount();
+        if (n <= 0 || outputArea <= 0) {
+            return;
+        }
+        int[] prefix = prefixSums(computeWrapCounts(output, Math.max(1, width() - 1)));
+        int fullTotal = prefix[n];
+        if (fullTotal <= outputArea) {
+            output.resetScroll();
+            return;
+        }
+        int thumbH = thumbHeight(outputArea, fullTotal);
+        int range = Math.max(1, outputArea - thumbH);
+        float thumbTop = (y - 1) - (thumbH - 1) / 2.0f; // 滑块中心对准鼠标
+        float frac = Math.max(0f, Math.min(1f, thumbTop / range));
+        int targetFrom = Math.round(frac * (fullTotal - outputArea));
+        output.setScrollOffset(targetScrollOffset(n, outputArea, prefix, targetFrom));
+    }
+
+    /** 全部逻辑行按给定宽度折行后的段数（用于算内容总折行高）。 */
+    private int[] computeWrapCounts(OutputPane output, int width) {
+        List<String> lines = output.lines();
+        int[] counts = new int[lines.size()];
+        for (int i = 0; i < lines.size(); i++) {
+            counts[i] = wrap(lines.get(i), width).size();
+        }
+        return counts;
+    }
+
+    private static int[] prefixSums(int[] counts) {
+        int[] prefix = new int[counts.length + 1];
+        for (int i = 0; i < counts.length; i++) {
+            prefix[i + 1] = prefix[i] + counts[i];
+        }
+        return prefix;
+    }
+
+    /** 滑块高度（近似）：视口行数平方 / 内容折行总行数，最小 1。 */
+    static int thumbHeight(int outputArea, int fullTotal) {
+        return Math.max(1, Math.round((float) outputArea * outputArea / Math.max(1, fullTotal)));
+    }
+
+    /** 滑块顶行（0-based，相对输出区顶部）：当前显示起点 from 占可滚动区间的比例映射到轨道。 */
+    static int thumbTop(int outputArea, int fullTotal, int from) {
+        int thumbH = thumbHeight(outputArea, fullTotal);
+        int range = Math.max(1, outputArea - thumbH);
+        float frac = (float) Math.max(0, from) / Math.max(1, fullTotal - outputArea);
+        return Math.round(Math.min(1f, frac) * range);
+    }
+
+    /**
+     * 给定全量折行前缀和期望的显示起点 targetFrom（0 = 顶），反解出应设置的逻辑行 scrollOffset。
+     * 视口显示的是连续 outputArea 个逻辑行折行后的尾部，其起点 = prefix[hi] - outputArea，
+     * 因此找 prefix[hi] 最接近 targetFrom + outputArea 的 hi，scrollOffset = n - hi。
+     */
+    static int targetScrollOffset(int n, int outputArea, int[] prefix, int targetFrom) {
+        int fullTotal = prefix[n];
+        if (fullTotal <= outputArea) {
+            return 0;
+        }
+        targetFrom = Math.max(0, Math.min(fullTotal - outputArea, targetFrom));
+        int targetPrefix = targetFrom + outputArea;
+        int lo = Math.max(0, Math.min(outputArea, n));
+        int hi = n;
+        int best = lo;
+        int bestErr = Integer.MAX_VALUE;
+        while (lo <= hi) {
+            int mid = (lo + hi) >>> 1;
+            int err = Math.abs(prefix[mid] - targetPrefix);
+            if (err < bestErr) {
+                bestErr = err;
+                best = mid;
+            }
+            if (prefix[mid] < targetPrefix) {
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        int maxS = Math.max(0, n - outputArea);
+        return Math.max(0, Math.min(maxS, n - best));
+    }
+
     /** 分隔线：一行灰色横线，把输出区与底部输入框分开（类似 Claude Code）。 */
     private static String separatorLine(int w) {
         return "\033[90m" + "─".repeat(Math.max(1, w)) + "\033[0m";
     }
+
+    /** 滚动条轨道：深灰背景空格；滑块：浅灰背景空格（内容不满一屏时不画）。 */
+    private static final String SCROLLBAR_TRACK = "\033[48;5;236m \033[0m";
+    private static final String SCROLLBAR_THUMB = "\033[48;5;242m \033[0m";
 
     /**
      * 按终端显示宽度折行：把长行拆成多段，每段显示宽度 ≤ width（避免超宽行折行破坏行计数、

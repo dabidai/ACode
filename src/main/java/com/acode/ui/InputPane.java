@@ -11,8 +11,8 @@ import org.jline.terminal.Terminal;
 /**
  * 输入区：Enter 提交、Shift+Enter 换行（多行输入）、上下方向键翻输入历史、光标移动。
  * 基于 JLine3 LineReader；粘贴 20 行代码由括号粘贴模式保留原样。
- * 鼠标滚轮：进入鼠标追踪后把滚轮事件转成输出区滚动（而非滚动终端 scrollback，
- * 否则会破坏全屏绝对坐标导致增量渲染错乱）。
+ * 鼠标：进入按钮追踪（含按键拖动）后把滚轮转成输出区逐行滚动、滚动条点击/拖动转成跳转，
+ * 而不是滚动终端 scrollback（否则会破坏全屏绝对坐标导致增量渲染错乱）。
  */
 public class InputPane {
 
@@ -21,9 +21,12 @@ public class InputPane {
     private static final String SCROLL_UP_WIDGET = "acode-scroll-up";
     private static final String SCROLL_DOWN_WIDGET = "acode-scroll-down";
 
-    /** 滚动回调：delta > 0 向上回看、< 0 向下回底，由上层按步长滚动并局部重绘输出区。 */
+    /** 滚动回调：滚轮/翻页传步长，滚动条点击拖动传鼠标在输出区内的行号。 */
     public interface ScrollHandler {
         void scroll(int deltaLines);
+
+        /** 鼠标在输出区内 1-based 行号（最右列滚动条），由上层换算成目标滚动位置。 */
+        void scrollToY(int y);
     }
 
     private final LineReader reader;
@@ -40,6 +43,8 @@ public class InputPane {
                 .build();
         bindKeys();
         bindMouse();
+        // JLine 的 Option.MOUSE 只开 Normal（按键+滚轮）；滚动条拖动需要按键移动跟踪
+        terminal.trackMouse(Terminal.MouseTracking.Button);
     }
 
     private void bindKeys() {
@@ -68,7 +73,7 @@ public class InputPane {
         }
     }
 
-    /** 覆盖 JLine 内置 mouse widget：滚轮事件转输出区滚动，其余鼠标事件消费掉，避免干扰输入。 */
+    /** 覆盖 JLine 内置 mouse widget：滚轮转滚动、滚动条列点击/拖动转跳转，其余消费掉避免干扰输入。 */
     private void bindMouse() {
         if (scrollHandler == null) {
             return;
@@ -78,15 +83,41 @@ public class InputPane {
         reader.getKeyMaps().get(LineReader.MAIN).bind(new Reference(LineReader.MOUSE), "\033[M", "\033[<");
         reader.getWidgets().put(LineReader.MOUSE, () -> {
             MouseEvent event = reader.readMouseEvent();
-            if (event != null) {
-                if (event.getButton() == MouseEvent.Button.WheelUp) {
-                    runScroll(() -> scrollHandler.scroll(WHEEL_STEP));
-                } else if (event.getButton() == MouseEvent.Button.WheelDown) {
-                    runScroll(() -> scrollHandler.scroll(-WHEEL_STEP));
-                }
+            if (event == null) {
+                return true;
+            }
+            switch (event.getType()) {
+                case Wheel:
+                    if (event.getButton() == MouseEvent.Button.WheelUp) {
+                        runScroll(() -> scrollHandler.scroll(WHEEL_STEP));
+                    } else if (event.getButton() == MouseEvent.Button.WheelDown) {
+                        runScroll(() -> scrollHandler.scroll(-WHEEL_STEP));
+                    }
+                    break;
+                case Pressed:
+                case Dragged:
+                    onScrollbarPress(event);
+                    break;
+                default:
+                    // Released / Moved：拖动松手或无关移动，忽略
+                    break;
             }
             return true;
         });
+    }
+
+    /** 滚动条列（最右列）上的按下/拖动：转发行号，由上层换算滚动位置；点在内容区忽略。 */
+    private void onScrollbarPress(MouseEvent event) {
+        int w = reader.getTerminal().getWidth();
+        if (event.getX() != w) {
+            return;
+        }
+        int outputArea = outputAreaLines();
+        int y = event.getY();
+        if (y < 1 || y > outputArea) {
+            return;
+        }
+        runScroll(() -> scrollHandler.scrollToY(y));
     }
 
     /** 滚轮单格行数（逐行滚动，替代换页更精细）。 */
@@ -95,6 +126,12 @@ public class InputPane {
     /** 一屏可见输出区行数，PageUp/PageDown 翻一屏用。 */
     private int pageLines() {
         return Math.max(1, reader.getTerminal().getHeight() - 2);
+    }
+
+    /** 输出区可用行数（与 AcodeTerminal.outputArea 一致）。 */
+    private int outputAreaLines() {
+        int h = reader.getTerminal().getHeight();
+        return Math.max(1, h >= 3 ? h - 2 : h - 1);
     }
 
     /**

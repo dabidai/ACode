@@ -95,6 +95,25 @@ class AcodeTerminalTest {
     }
 
     @Test
+    void scrollbarCellIsTrackOutsideThumb() {
+        assertEquals("\033[48;5;236m \033[0m", AcodeTerminal.scrollbarCell(0, 2, 3));
+        assertEquals("\033[48;5;236m \033[0m", AcodeTerminal.scrollbarCell(5, 2, 3));
+    }
+
+    @Test
+    void scrollbarCellShapesCapsule() {
+        // 滑块占行 [2,5)：顶行 ▄、中间 █、底行 ▀
+        assertEquals("\033[38;5;242;48;5;236m▄\033[0m", AcodeTerminal.scrollbarCell(2, 2, 3));
+        assertEquals("\033[38;5;242;48;5;236m█\033[0m", AcodeTerminal.scrollbarCell(3, 2, 3));
+        assertEquals("\033[38;5;242;48;5;236m▀\033[0m", AcodeTerminal.scrollbarCell(4, 2, 3));
+    }
+
+    @Test
+    void scrollbarCellSingleRowThumbIsFullBlock() {
+        assertEquals("\033[38;5;242;48;5;236m█\033[0m", AcodeTerminal.scrollbarCell(1, 1, 1));
+    }
+
+    @Test
     void thumbTopMapsFromFraction() {
         assertEquals(0, AcodeTerminal.thumbTop(40, 400, 0));
         assertEquals(36, AcodeTerminal.thumbTop(40, 400, 360));

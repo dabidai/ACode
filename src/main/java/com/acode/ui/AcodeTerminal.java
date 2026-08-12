@@ -43,6 +43,10 @@ public class AcodeTerminal implements AutoCloseable {
             throw new IllegalStateException("未检测到支持全屏绘制的终端，请在真实终端中运行 ACode");
         }
         terminal.enterRawMode();
+        // 进入备用屏幕缓冲区：无 scrollback → 终端外层滚动条隐藏、原生滚轮/拖动失效，
+        // ACode 自绘滚动条与鼠标追踪不受影响；退出时恢复主屏历史。
+        terminal.writer().write("\033[?1049h");
+        terminal.writer().flush();
         return new AcodeTerminal(terminal);
     }
 
@@ -187,8 +191,28 @@ public class AcodeTerminal implements AutoCloseable {
         int top = thumbTop(outputArea, fullTotal, from);
         for (int i = 0; i < outputArea; i++) {
             moveTo(i + 1, contentW + 1);
-            write(i >= top && i < top + thumbH ? SCROLLBAR_THUMB : SCROLLBAR_TRACK);
+            write(scrollbarCell(i, top, thumbH));
         }
+    }
+
+    /**
+     * 滚动条单格字符：滑块外画轨道；滑块内按位置画胶囊——顶行 `▄`（上角收圆）、
+     * 底行 `▀`（下角收圆）、中间 `█`；单行滑块用 `█`。
+     */
+    static String scrollbarCell(int row, int thumbTop, int thumbH) {
+        if (row < thumbTop || row >= thumbTop + thumbH) {
+            return SCROLLBAR_TRACK;
+        }
+        if (thumbH == 1) {
+            return SCROLLBAR_BODY;
+        }
+        if (row == thumbTop) {
+            return SCROLLBAR_TOP;
+        }
+        if (row == thumbTop + thumbH - 1) {
+            return SCROLLBAR_BOTTOM;
+        }
+        return SCROLLBAR_BODY;
     }
 
     /**
@@ -307,9 +331,14 @@ public class AcodeTerminal implements AutoCloseable {
         return "\033[90m" + "─".repeat(Math.max(1, w)) + "\033[0m";
     }
 
-    /** 滚动条轨道：深灰背景空格；滑块：浅灰背景空格（内容不满一屏时不画）。 */
+    /** 滚动条轨道：深灰背景空格（内容不满一屏时不画）。 */
     private static final String SCROLLBAR_TRACK = "\033[48;5;236m \033[0m";
-    private static final String SCROLLBAR_THUMB = "\033[48;5;242m \033[0m";
+    /** 胶囊滑块上端：下半块字符，上角收圆（fg=滑块灰，bg=轨道灰）。 */
+    private static final String SCROLLBAR_TOP = "\033[38;5;242;48;5;236m▄\033[0m";
+    /** 胶囊滑块主体：全块字符。 */
+    private static final String SCROLLBAR_BODY = "\033[38;5;242;48;5;236m█\033[0m";
+    /** 胶囊滑块下端：上半块字符，下角收圆。 */
+    private static final String SCROLLBAR_BOTTOM = "\033[38;5;242;48;5;236m▀\033[0m";
 
     /**
      * 按终端显示宽度折行：把长行拆成多段，每段显示宽度 ≤ width（避免超宽行折行破坏行计数、
@@ -373,6 +402,9 @@ public class AcodeTerminal implements AutoCloseable {
 
     @Override
     public void close() {
+        // 先退出备用屏幕恢复主屏与 scrollback，再关终端
+        write("\033[?1049l");
+        flush();
         try {
             terminal.close();
         } catch (IOException e) {

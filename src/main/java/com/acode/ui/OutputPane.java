@@ -116,4 +116,9 @@ public class OutputPane {
     public synchronized void setScrollOffset(int offset) {
         scrollOffset = Math.max(0, offset);
     }
+
+    /** 当前滚动偏移（0 = 底部跟随；>0 = 向上回看的历史行数）。 */
+    public synchronized int scrollOffset() {
+        return scrollOffset;
+    }
 }

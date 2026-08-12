@@ -117,6 +117,33 @@ class AcodeTerminalTest {
     }
 
     @Test
+    void displayFromFollowsScrollOffset() {
+        // 10 行各折 1 段：滑块应从底（6）随回看升到顶（0）
+        int[] prefix = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+        assertEquals(6, AcodeTerminal.displayFrom(10, 4, prefix, 0));
+        assertEquals(3, AcodeTerminal.displayFrom(10, 4, prefix, 3));
+        assertEquals(0, AcodeTerminal.displayFrom(10, 4, prefix, 6));
+    }
+
+    @Test
+    void displayFromAccountsForWrap() {
+        // 行折行数 [1,2,1,1,2,1,1,1,2,1] → 前缀和 13
+        int[] prefix = {0, 1, 3, 4, 5, 7, 8, 9, 10, 12, 13};
+        assertEquals(9, AcodeTerminal.displayFrom(10, 4, prefix, 0)); // 底部第一显示行 = 13-4
+        assertEquals(1, AcodeTerminal.displayFrom(10, 4, prefix, 6)); // 顶部（前 4 行折 5 行，头行被挤掉）
+    }
+
+    @Test
+    void displayFromRoundTripsWithTargetScrollOffset() {
+        // 短行：正反映射应回到同一滚动位置
+        int[] prefix = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+        for (int s = 0; s <= 6; s++) {
+            int from = AcodeTerminal.displayFrom(10, 4, prefix, s);
+            assertEquals(s, AcodeTerminal.targetScrollOffset(10, 4, prefix, from));
+        }
+    }
+
+    @Test
     void targetScrollOffsetContentFitsReturnsZero() {
         assertEquals(0, AcodeTerminal.targetScrollOffset(3, 10, new int[]{0, 1, 2, 3}, 0));
     }

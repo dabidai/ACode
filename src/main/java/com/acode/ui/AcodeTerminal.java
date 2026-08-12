@@ -138,17 +138,21 @@ public class AcodeTerminal implements AutoCloseable {
             sbVisible = totalAtW > outputArea;
             contentW = sbVisible ? w - 1 : w;
         }
-        int fullTotal = sbVisible ? prefixSums(computeWrapCounts(output, contentW))[n] : 0;
+        // 全量折行前缀和：滚动条按「整段内容里的全局显示起点」定位；用窗口内偏移会让短行滑块钉死顶部
+        int[] prefix = prefixSums(computeWrapCounts(output, contentW));
+        int fullTotal = prefix[n];
         // 原始行按 contentW 折行后取最后 outputArea 段，保证长行内容完整显示而非截断
         List<String> wrapped = new ArrayList<>();
         for (String line : output.visibleLines(outputArea)) {
             wrapped.addAll(wrap(line, contentW));
         }
-        int from = Math.max(0, wrapped.size() - outputArea);
+        int windowFrom = wrapped.size() - outputArea;
+        // 全局显示起点（滚动条用）；用窗口内偏移会让短行滑块钉死顶部
+        int from = displayFrom(n, outputArea, prefix, output.scrollOffset());
         String[] rows = new String[outputArea];
         for (int i = 0; i < outputArea; i++) {
-            int idx = from + i;
-            rows[i] = idx < wrapped.size() ? wrapped.get(idx) : "";
+            int idx = windowFrom + i;
+            rows[i] = idx >= 0 && idx < wrapped.size() ? wrapped.get(idx) : "";
         }
         for (int i = 0; i < outputArea; i++) {
             String cur = rows[i];
@@ -237,6 +241,15 @@ public class AcodeTerminal implements AutoCloseable {
     /** 滑块高度（近似）：视口行数平方 / 内容折行总行数，最小 1。 */
     static int thumbHeight(int outputArea, int fullTotal) {
         return Math.max(1, Math.round((float) outputArea * outputArea / Math.max(1, fullTotal)));
+    }
+
+    /**
+     * 滚动偏移 s（0 = 底部）时，整段折行内容里第一显示行的下标（0 = 顶部）。
+     * 视口显示连续 outputArea 个逻辑行（窗口上界 = n - s）折行后的尾部，起点 = prefix[上界] - outputArea。
+     */
+    static int displayFrom(int n, int outputArea, int[] prefix, int scrollOffset) {
+        int lo = Math.max(0, n - outputArea - scrollOffset);
+        return Math.max(0, prefix[Math.min(n, lo + outputArea)] - outputArea);
     }
 
     /** 滑块顶行（0-based，相对输出区顶部）：当前显示起点 from 占可滚动区间的比例映射到轨道。 */

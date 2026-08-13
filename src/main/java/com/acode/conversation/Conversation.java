@@ -2,6 +2,10 @@ package com.acode.conversation;
 
 import com.acode.provider.ChatMessage;
 import com.acode.provider.ChatRequest;
+import com.acode.provider.ContentBlock;
+import com.acode.provider.TextBlock;
+import com.acode.provider.ToolResultBlock;
+import com.acode.provider.ToolUseBlock;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -49,6 +53,19 @@ public class Conversation {
         return text.length() / 4;
     }
 
+    /** 估算一条消息的 token：遍历所有内容块（文本、工具参数、工具结果都计入） */
+    public static int estimateTokens(ChatMessage message) {
+        int sum = 0;
+        for (ContentBlock block : message.blocks()) {
+            sum += switch (block) {
+                case TextBlock t -> estimateTokens(t.text());
+                case ToolUseBlock tu -> estimateTokens(tu.name()) + estimateTokens(String.valueOf(tu.input()));
+                case ToolResultBlock tr -> estimateTokens(tr.content());
+            };
+        }
+        return sum;
+    }
+
     /** 组装请求：携带完整历史，超出窗口时从最早开始丢弃，直到总量放得下 */
     public ChatRequest buildRequest() {
         return ChatRequest.builder()
@@ -71,6 +88,6 @@ public class Conversation {
     }
 
     private static int estimateTotal(List<ChatMessage> list) {
-        return list.stream().mapToInt(m -> estimateTokens(m.content())).sum();
+        return list.stream().mapToInt(Conversation::estimateTokens).sum();
     }
 }

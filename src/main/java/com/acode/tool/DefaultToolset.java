@@ -1,5 +1,6 @@
 package com.acode.tool;
 
+import com.acode.tool.impl.BashTool;
 import com.acode.tool.impl.EditFileTool;
 import com.acode.tool.impl.GlobTool;
 import com.acode.tool.impl.GrepTool;
@@ -21,6 +22,6 @@ public final class DefaultToolset {
         registry.register(new EditFileTool());
         registry.register(new GlobTool());
         registry.register(new GrepTool());
-        // T7 命令执行
+        registry.register(new BashTool());
     }
 }

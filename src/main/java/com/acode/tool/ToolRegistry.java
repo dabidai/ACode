@@ -57,6 +57,13 @@ public class ToolRegistry {
         return List.copyOf(tools.values());
     }
 
+    /** 全部可用工具（已注册且未禁用），按注册顺序 */
+    public List<Tool> availableList() {
+        return tools.values().stream()
+                .filter(t -> !disabled.contains(t.name()))
+                .toList();
+    }
+
     /** 全部工具名（含已禁用） */
     public List<String> names() {
         return new ArrayList<>(tools.keySet());

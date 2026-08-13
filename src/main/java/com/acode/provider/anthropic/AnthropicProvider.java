@@ -9,6 +9,7 @@ import com.acode.provider.NetworkException;
 import com.acode.provider.ProviderException;
 import com.acode.provider.ProviderHttpClient;
 import com.acode.sse.SseParser;
+import com.acode.tool.ToolSchemaConverter;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -44,7 +45,8 @@ public class AnthropicProvider implements ChatProvider {
                     baseUrl + ENDPOINT, body,
                     Map.of("x-api-key", apiKey, "anthropic-version", ANTHROPIC_VERSION));
             try (InputStream in = result.body()) {
-                SseParser.parse(in, (eventType, data) -> AnthropicSseParser.handle(data, listener));
+                AnthropicSseParser parser = new AnthropicSseParser();
+                SseParser.parse(in, (eventType, data) -> parser.handle(data, listener));
             }
         } catch (ProviderException e) {
             listener.onError(e);
@@ -79,13 +81,20 @@ public class AnthropicProvider implements ChatProvider {
                         }
                         system.append(message.content());
                     }
-                    case USER, ASSISTANT -> messages.addObject()
-                            .put("role", message.role().name().toLowerCase())
-                            .put("content", message.content());
+                    case USER, ASSISTANT -> {
+                        ObjectNode msg = messages.addObject();
+                        msg.put("role", message.role().name().toLowerCase());
+                        // 直接序列化 List<ContentBlock> 会丢失 @JsonTypeInfo 的 type 判别字段，
+                        // 须经 ChatMessage 整体序列化后取 content 节点，才能带上 type
+                        msg.set("content", JSON.readTree(JSON.writeValueAsString(message)).path("content"));
+                    }
                 }
             }
             if (!system.isEmpty()) {
                 root.put("system", system.toString());
+            }
+            if (!request.tools().isEmpty()) {
+                root.set("tools", ToolSchemaConverter.toAnthropicTools(request.tools()));
             }
             return JSON.writeValueAsString(root);
         } catch (JsonProcessingException e) {

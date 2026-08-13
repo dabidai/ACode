@@ -6,30 +6,38 @@ import com.acode.provider.InvalidRequestException;
 import com.acode.provider.ProviderException;
 import com.acode.provider.RateLimitException;
 import com.acode.provider.ServerException;
+import com.acode.provider.ToolUseBlock;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.util.HashMap;
+import java.util.Map;
+
 /**
- * 把 Anthropic SSE 事件（data 行 JSON）分发为 ChatListener 回调。
- * 只输出 text_delta 内容；thinking 相关事件忽略；error/message_stop 结束流。
+ * 单个流的事件解析器：把 Anthropic SSE data 行分发为 ChatListener 回调。
+ * 处理 text_delta 输出与 tool_use 块：content_block_start 起累积器，
+ * input_json_delta 逐段拼接参数 JSON 碎片，content_block_stop 时解析并回调。
+ * thinking 事件忽略；error/message_stop 结束流。
  */
 public final class AnthropicSseParser {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    private AnthropicSseParser() {
-    }
+    /** 正在累积的 tool_use 块，按 block index 索引，避免与 thinking/text 混排串块 */
+    private final Map<Integer, ToolUseAccumulator> toolUses = new HashMap<>();
 
-    public static void handle(String data, ChatListener listener) {
+    public void handle(String data, ChatListener listener) {
         try {
             JsonNode node = JSON.readTree(data);
             switch (node.path("type").asText()) {
+                case "content_block_start" -> handleBlockStart(node);
                 case "content_block_delta" -> handleDelta(node, listener);
+                case "content_block_stop" -> handleBlockStop(node, listener);
                 case "error" -> throw classify(node.path("error"));
                 case "message_stop" -> listener.onComplete();
                 default -> {
-                    // message_start / content_block_start / content_block_stop / message_delta 忽略
+                    // message_start / message_delta 忽略
                 }
             }
         } catch (JsonProcessingException e) {
@@ -39,12 +47,45 @@ public final class AnthropicSseParser {
         }
     }
 
-    private static void handleDelta(JsonNode node, ChatListener listener) {
-        JsonNode delta = node.path("delta");
-        if ("text_delta".equals(delta.path("type").asText())) {
-            listener.onDelta(delta.path("text").asText());
+    private void handleBlockStart(JsonNode node) {
+        JsonNode block = node.path("content_block");
+        if ("tool_use".equals(block.path("type").asText())) {
+            int index = node.path("index").asInt(-1);
+            toolUses.put(index, new ToolUseAccumulator(
+                    block.path("id").asText(), block.path("name").asText(), new StringBuilder()));
         }
-        // thinking_delta 等不输出
+    }
+
+    private void handleDelta(JsonNode node, ChatListener listener) {
+        JsonNode delta = node.path("delta");
+        switch (delta.path("type").asText()) {
+            case "text_delta" -> listener.onDelta(delta.path("text").asText());
+            case "input_json_delta" -> {
+                ToolUseAccumulator acc = toolUses.get(node.path("index").asInt(-1));
+                if (acc != null) {
+                    acc.fragments.append(delta.path("partial_json").asText());
+                }
+            }
+            default -> {
+                // thinking_delta 等不输出
+            }
+        }
+    }
+
+    private void handleBlockStop(JsonNode node, ChatListener listener) {
+        ToolUseAccumulator acc = toolUses.remove(node.path("index").asInt(-1));
+        if (acc != null) {
+            try {
+                JsonNode input = JSON.readTree(acc.fragments.toString());
+                listener.onToolUse(new ToolUseBlock(acc.id, acc.name, input));
+            } catch (JsonProcessingException e) {
+                listener.onError(new InvalidRequestException(
+                        "tool_use 参数解析失败：" + e.getMessage(), e));
+            }
+        }
+    }
+
+    private record ToolUseAccumulator(String id, String name, StringBuilder fragments) {
     }
 
     private static ProviderException classify(JsonNode error) {

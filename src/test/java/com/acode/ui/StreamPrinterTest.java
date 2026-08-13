@@ -1,14 +1,20 @@
 package com.acode.ui;
 
 import com.acode.provider.ProviderException;
+import com.acode.provider.ToolUseBlock;
+import com.acode.tool.ToolResult;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class StreamPrinterTest {
+
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     @Test
     void deltaRendersIntoOutputPane() {
@@ -91,5 +97,66 @@ class StreamPrinterTest {
         StreamPrinter printer = new StreamPrinter(pane, () -> { });
         printer.onDelta("`code`");
         assertTrue(pane.lines().get(0).contains(MarkdownRenderer.STYLE_INLINE_CODE));
+    }
+
+    @Test
+    void toolUseCommitsPriorTextAndAppendsRunningCard() {
+        OutputPane pane = new OutputPane();
+        StreamPrinter printer = new StreamPrinter(pane, () -> { });
+        printer.onDelta("先看下文件");
+        printer.onToolUse(new ToolUseBlock("id-1", "ReadFile",
+                JSON.createObjectNode().put("file_path", "a.txt")));
+        assertEquals(2, pane.lineCount());
+        assertTrue(pane.lines().get(0).contains("先看下文件"), "文本应保留在卡片上方");
+        String card = pane.lines().get(1);
+        assertTrue(card.contains("ReadFile"));
+        assertTrue(card.contains("运行中"));
+    }
+
+    @Test
+    void toolUseWithNoPriorTextStartsWithCard() {
+        OutputPane pane = new OutputPane();
+        StreamPrinter printer = new StreamPrinter(pane, () -> { });
+        printer.onToolUse(new ToolUseBlock("id-1", "Bash",
+                JSON.createObjectNode().put("command", "echo hi")));
+        assertEquals(1, pane.lineCount());
+        assertTrue(pane.lines().get(0).contains("Bash"));
+    }
+
+    @Test
+    void updateToolCallsReplacesRunningCardsWithDoneState() {
+        OutputPane pane = new OutputPane();
+        StreamPrinter printer = new StreamPrinter(pane, () -> { });
+        printer.onToolUse(new ToolUseBlock("id-1", "ReadFile",
+                JSON.createObjectNode().put("file_path", "a.txt")));
+        printer.onToolUse(new ToolUseBlock("id-2", "Bash",
+                JSON.createObjectNode().put("command", "echo hi")));
+        assertEquals(2, pane.lineCount());
+        printer.updateToolCalls(List.of(ToolResult.success("文件内容"), ToolResult.failure("命令失败")));
+        assertEquals(2, pane.lineCount(), "卡片行数应保持不变");
+        assertTrue(pane.lines().get(0).contains("成功"));
+        assertTrue(pane.lines().get(0).contains("文件内容"));
+        assertTrue(pane.lines().get(1).contains("失败"));
+        assertTrue(pane.lines().get(1).contains("命令失败"));
+    }
+
+    @Test
+    void deltaAfterToolUseIsIgnoredToProtectCard() {
+        OutputPane pane = new OutputPane();
+        StreamPrinter printer = new StreamPrinter(pane, () -> { });
+        printer.onToolUse(new ToolUseBlock("id-1", "ReadFile",
+                JSON.createObjectNode().put("file_path", "a.txt")));
+        printer.onDelta("不应出现的文本");
+        assertEquals(1, pane.lineCount(), "tool_use 后的文本增量应被忽略，不覆盖卡片");
+    }
+
+    @Test
+    void completeKeepsToolCardsInHistory() {
+        OutputPane pane = new OutputPane();
+        StreamPrinter printer = new StreamPrinter(pane, () -> { });
+        printer.onToolUse(new ToolUseBlock("id-1", "Bash",
+                JSON.createObjectNode().put("command", "echo hi")));
+        printer.onComplete();
+        assertEquals(1, pane.lineCount(), "卡片应作为历史保留");
     }
 }

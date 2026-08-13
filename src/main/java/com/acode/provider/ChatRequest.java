@@ -1,7 +1,8 @@
 package com.acode.provider;
 
+import com.acode.tool.Tool;
+
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -11,6 +12,7 @@ import java.util.List;
  * @param model    模型名称
  * @param thinking 是否开启 extended thinking（仅 Claude 端生效）
  * @param maxTokens 生成 token 上限
+ * @param tools    可选：模型可调用的工具列表，为空则请求不含 tools 参数
  */
 public class ChatRequest {
 
@@ -20,12 +22,14 @@ public class ChatRequest {
     private final String model;
     private final boolean thinking;
     private final int maxTokens;
+    private final List<Tool> tools;
 
     private ChatRequest(Builder builder) {
         this.messages = List.copyOf(builder.messages);
         this.model = builder.model;
         this.thinking = builder.thinking;
         this.maxTokens = builder.maxTokens;
+        this.tools = List.copyOf(builder.tools);
     }
 
     public List<ChatMessage> messages() {
@@ -44,6 +48,11 @@ public class ChatRequest {
         return maxTokens;
     }
 
+    /** 模型可调用的工具列表；未设置时为空 */
+    public List<Tool> tools() {
+        return tools;
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -51,6 +60,7 @@ public class ChatRequest {
     public static class Builder {
 
         private final List<ChatMessage> messages = new ArrayList<>();
+        private final List<Tool> tools = new ArrayList<>();
         private String model;
         private boolean thinking;
         private int maxTokens = DEFAULT_MAX_TOKENS;
@@ -77,6 +87,11 @@ public class ChatRequest {
 
         public Builder maxTokens(int maxTokens) {
             this.maxTokens = maxTokens;
+            return this;
+        }
+
+        public Builder tools(List<Tool> tools) {
+            this.tools.addAll(tools);
             return this;
         }
 

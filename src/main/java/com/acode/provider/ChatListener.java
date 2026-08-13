@@ -9,6 +9,11 @@ public interface ChatListener {
     /** 收到一段增量文本（可能含未完成的多字节字符边界，上层按需处理） */
     void onDelta(String delta);
 
+    /** 收到一个完整的工具调用（input_json_delta 碎片拼接解析后触发） */
+    default void onToolUse(ToolUseBlock toolUse) {
+        // 默认忽略，兼容阶段一无工具场景
+    }
+
     /** 正常结束 */
     void onComplete();
 

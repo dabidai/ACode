@@ -1,6 +1,10 @@
 package com.acode.session;
 
 import com.acode.provider.ChatMessage;
+import com.acode.provider.ContentBlock;
+import com.acode.provider.ToolResultBlock;
+import com.acode.provider.ToolUseBlock;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -14,6 +18,7 @@ import static com.acode.provider.ChatMessage.Role.ASSISTANT;
 import static com.acode.provider.ChatMessage.Role.USER;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -109,6 +114,31 @@ class SessionStoreTest {
         assertThrows(IllegalStateException.class,
                 () -> store.save(session("dup", List.of(user("第二次")))));
         assertEquals(1, countJsonFiles(), "同名文件不应被覆盖，仍只有 1 个");
+    }
+
+    @Test
+    void saveLoadRoundTripPreservesToolBlocks() {
+        ObjectMapper json = new ObjectMapper();
+        ChatMessage assistant = new ChatMessage(ASSISTANT, List.of(
+                new ToolUseBlock("id-1", "ReadFile",
+                        json.createObjectNode().put("file_path", "a.txt"))));
+        ChatMessage toolResult = new ChatMessage(USER, List.of(
+                new ToolResultBlock("id-1", "文件内容", false)));
+
+        store().save(session("tool", List.of(assistant, toolResult)));
+        Session loaded = store().load("tool").orElseThrow();
+        assertEquals(2, loaded.getMessages().size(), "含工具块的会话应完整往返");
+
+        ChatMessage m0 = loaded.getMessages().get(0);
+        ToolUseBlock use = assertInstanceOf(ToolUseBlock.class, m0.blocks().get(0));
+        assertEquals("ReadFile", use.name());
+        assertEquals("a.txt", use.input().path("file_path").asText());
+
+        ChatMessage m1 = loaded.getMessages().get(1);
+        ToolResultBlock result = assertInstanceOf(ToolResultBlock.class, m1.blocks().get(0));
+        assertEquals("id-1", result.toolUseId());
+        assertEquals("文件内容", result.content());
+        assertFalse(result.isError());
     }
 
     private int countJsonFiles() {

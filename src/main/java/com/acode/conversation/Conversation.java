@@ -6,6 +6,7 @@ import com.acode.provider.ContentBlock;
 import com.acode.provider.TextBlock;
 import com.acode.provider.ToolResultBlock;
 import com.acode.provider.ToolUseBlock;
+import com.acode.tool.Tool;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -18,6 +19,7 @@ import java.util.List;
 public class Conversation {
 
     private final List<ChatMessage> messages = new ArrayList<>();
+    private final List<Tool> tools = new ArrayList<>();
     private final String model;
     private final boolean thinking;
     private final int maxTokens;
@@ -33,6 +35,17 @@ public class Conversation {
     /** 追加一条消息到完整历史；截断只发生在组装请求时，不改变已存历史 */
     public void addMessage(ChatMessage message) {
         messages.add(message);
+    }
+
+    /** 把一批工具执行结果作为一条 user 消息追加进历史（Anthropic 要求同批 tool_result 放一条消息） */
+    public void addToolResults(List<ToolResultBlock> results) {
+        messages.add(new ChatMessage(ChatMessage.Role.USER, new ArrayList<>(results)));
+    }
+
+    /** 设置请求携带的工具列表（ch03：单步闭环全程带工具；OpenAI 端忽略） */
+    public void setTools(List<Tool> tools) {
+        this.tools.clear();
+        this.tools.addAll(tools);
     }
 
     public int messageCount() {
@@ -66,12 +79,13 @@ public class Conversation {
         return sum;
     }
 
-    /** 组装请求：携带完整历史，超出窗口时从最早开始丢弃，直到总量放得下 */
+    /** 组装请求：携带完整历史与工具列表，超出窗口时从最早开始丢弃，直到总量放得下 */
     public ChatRequest buildRequest() {
         return ChatRequest.builder()
                 .model(model)
                 .thinking(thinking)
                 .maxTokens(maxTokens)
+                .tools(tools)
                 .messages(trim())
                 .build();
     }

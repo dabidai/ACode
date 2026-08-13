@@ -1,6 +1,8 @@
 package com.acode.tool;
 
 import com.acode.tool.impl.EditFileTool;
+import com.acode.tool.impl.GlobTool;
+import com.acode.tool.impl.GrepTool;
 import com.acode.tool.impl.ReadFileTool;
 import com.acode.tool.impl.WriteFileTool;
 
@@ -17,7 +19,8 @@ public final class DefaultToolset {
         registry.register(new ReadFileTool());
         registry.register(new WriteFileTool());
         registry.register(new EditFileTool());
-        // T6 搜索：glob 匹配路径 / grep 搜内容
+        registry.register(new GlobTool());
+        registry.register(new GrepTool());
         // T7 命令执行
     }
 }

@@ -5,3 +5,6 @@
 protocol: openai
 model: gpt-4o
 base_url: https://api.openai.com/v1
+
+# 示例：覆盖 Agent 循环最大轮数
+# max_iterations: 5

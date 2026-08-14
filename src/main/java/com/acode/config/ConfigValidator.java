@@ -10,6 +10,7 @@ import java.util.Set;
 public class ConfigValidator {
 
     public static final int DEFAULT_MAX_CONTEXT_TOKENS = 128_000;
+    public static final int DEFAULT_MAX_ITERATIONS = 20;
     private static final Set<String> PROTOCOLS = Set.of("anthropic", "openai");
 
     public static void validate(AppConfig config, String source) {
@@ -41,6 +42,12 @@ public class ConfigValidator {
             config.setMaxContextTokens(DEFAULT_MAX_CONTEXT_TOKENS);
         } else if (config.getMaxContextTokens() <= 0) {
             throw err(source, "max_context_tokens 必须是正整数，当前值 " + config.getMaxContextTokens());
+        }
+
+        if (config.getMaxIterations() == null) {
+            config.setMaxIterations(DEFAULT_MAX_ITERATIONS);
+        } else if (config.getMaxIterations() <= 0) {
+            throw err(source, "max_iterations 必须是正整数，当前值 " + config.getMaxIterations());
         }
     }
 

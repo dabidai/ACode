@@ -2,7 +2,7 @@ package com.acode.config;
 
 /**
  * ACode 配置模型。YAML 字段 snake_case 对应 Java 字段：
- * protocol / model / base_url / api_key / max_context_tokens
+ * protocol / model / base_url / api_key / max_context_tokens / max_iterations
  */
 public class AppConfig {
 
@@ -11,6 +11,7 @@ public class AppConfig {
     private String baseUrl;
     private String apiKey;
     private Integer maxContextTokens;
+    private Integer maxIterations;
 
     public String getProtocol() {
         return protocol;
@@ -50,5 +51,13 @@ public class AppConfig {
 
     public void setMaxContextTokens(Integer maxContextTokens) {
         this.maxContextTokens = maxContextTokens;
+    }
+
+    public Integer getMaxIterations() {
+        return maxIterations;
+    }
+
+    public void setMaxIterations(Integer maxIterations) {
+        this.maxIterations = maxIterations;
     }
 }

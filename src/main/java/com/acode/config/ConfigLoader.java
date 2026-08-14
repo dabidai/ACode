@@ -21,7 +21,7 @@ public class ConfigLoader {
     private static final String GLOBAL_FILE = ".acode/config.yaml";
     private static final String PROJECT_FILE = ".acode/config.yaml";
     private static final List<String> KNOWN_KEYS =
-            List.of("protocol", "model", "base_url", "api_key", "max_context_tokens");
+            List.of("protocol", "model", "base_url", "api_key", "max_context_tokens", "max_iterations");
 
     /** 生产入口：全局配置在用户主目录，项目级配置在当前工作目录 */
     public static AppConfig loadDefault() {
@@ -100,6 +100,13 @@ public class ConfigLoader {
                 throw new ConfigException(file + ": max_context_tokens 必须是正整数，当前值 " + value);
             }
             config.setMaxContextTokens(number.intValue());
+        }
+        if (map.containsKey("max_iterations")) {
+            Object value = map.get("max_iterations");
+            if (!(value instanceof Number number)) {
+                throw new ConfigException(file + ": max_iterations 必须是正整数，当前值 " + value);
+            }
+            config.setMaxIterations(number.intValue());
         }
     }
 

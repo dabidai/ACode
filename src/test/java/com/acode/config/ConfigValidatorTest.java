@@ -86,4 +86,20 @@ class ConfigValidatorTest {
                 () -> ConfigValidator.validate(config, "test.yaml"));
         assertTrue(e.getMessage().contains("protocol 必填"));
     }
+
+    @Test
+    void defaultMaxIterationsApplied() {
+        AppConfig config = valid();
+        ConfigValidator.validate(config, "test.yaml");
+        assertEquals(ConfigValidator.DEFAULT_MAX_ITERATIONS, config.getMaxIterations());
+    }
+
+    @Test
+    void nonPositiveMaxIterationsRejected() {
+        AppConfig config = valid();
+        config.setMaxIterations(0);
+        ConfigException e = assertThrows(ConfigException.class,
+                () -> ConfigValidator.validate(config, "test.yaml"));
+        assertTrue(e.getMessage().contains("max_iterations"));
+    }
 }

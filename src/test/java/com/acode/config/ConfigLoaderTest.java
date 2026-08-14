@@ -135,4 +135,32 @@ class ConfigLoaderTest {
                 () -> ConfigLoader.load(globalFile(), projectDir()));
         assertTrue(e.getMessage().contains("protocol 必填"));
     }
+
+    @Test
+    void globalDefaultsMaxIterationsToTwenty() throws IOException {
+        AppConfig config = validGlobal();
+        assertEquals(20, config.getMaxIterations());
+    }
+
+    @Test
+    void projectLevelOverridesMaxIterations() throws IOException {
+        validGlobal();
+        write(projectConfig(), "max_iterations: 5\n");
+        AppConfig config = ConfigLoader.load(globalFile(), projectDir());
+        assertEquals(5, config.getMaxIterations());
+    }
+
+    @Test
+    void nonNumericMaxIterationsRejected() throws IOException {
+        write(globalFile(), """
+                protocol: openai
+                model: gpt-4o
+                base_url: https://api.openai.com
+                api_key: global-key
+                max_iterations: abc
+                """);
+        ConfigException e = assertThrows(ConfigException.class,
+                () -> ConfigLoader.load(globalFile(), projectDir()));
+        assertTrue(e.getMessage().contains("max_iterations"));
+    }
 }

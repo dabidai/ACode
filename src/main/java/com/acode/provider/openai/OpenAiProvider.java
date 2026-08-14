@@ -20,6 +20,10 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -53,12 +57,29 @@ public class OpenAiProvider implements ChatProvider {
                     Map.of("Authorization", "Bearer " + apiKey));
             try (InputStream in = result.body()) {
                 OpenAiSseParser parser = new OpenAiSseParser();
-                SseParser.parse(in, (eventType, data) -> parser.handle(data, listener));
+                SseParser.parse(in, (eventType, data) -> {
+                    sseDiag(data);
+                    parser.handle(data, listener);
+                });
             }
         } catch (ProviderException e) {
             listener.onError(e);
         } catch (IOException e) {
             listener.onError(new NetworkException("读取响应流失败：" + e.getMessage(), e));
+        }
+    }
+
+    /** 诊断：ACODE_TEE 开启时把每条原始 SSE data 行写入独立日志（定位 API 内容 vs 解析层）。 */
+    private static void sseDiag(String data) {
+        try {
+            if (System.getenv("ACODE_TEE") == null) {
+                return;
+            }
+            String line = "sse :: " + data.replace("\r", "\\r").replace("\n", "\\n") + "\n";
+            Files.write(Path.of("acode-sse.log"), line.getBytes(StandardCharsets.UTF_8),
+                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (IOException ignored) {
+            // 诊断日志失败不影响主流程
         }
     }
 

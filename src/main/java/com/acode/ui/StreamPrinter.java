@@ -152,7 +152,7 @@ public class StreamPrinter implements ChatListener {
                 return;
             }
             String line = tag + " :: " + content.replace("\r", "\\r").replace("\n", "\\n") + "\n";
-            Files.write(Path.of("C:\\Users\\liuch\\acode-streamprinter.log"), line.getBytes(StandardCharsets.UTF_8),
+            Files.write(Path.of("acode-streamprinter.log"), line.getBytes(StandardCharsets.UTF_8),
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         } catch (IOException ignored) {
             // 诊断日志失败不影响主流程

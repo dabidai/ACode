@@ -168,4 +168,50 @@ class OpenAiSseParserTest {
         assertEquals("Bash", toolUses.get(1).name());
         assertEquals("echo hi", toolUses.get(1).input().path("command").asText());
     }
+
+    @Test
+    void finishReasonStopTransmittedOnDone() {
+        AtomicReference<String> received = new AtomicReference<>();
+        ChatListener stopListener = stopReasonListener(received);
+        OpenAiSseParser parser = new OpenAiSseParser();
+        parser.handle("{\"id\":\"x\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}", stopListener);
+        parser.handle("[DONE]", stopListener);
+        assertEquals("stop", received.get());
+    }
+
+    @Test
+    void finishReasonLengthTransmittedOnDone() {
+        AtomicReference<String> received = new AtomicReference<>();
+        ChatListener stopListener = stopReasonListener(received);
+        OpenAiSseParser parser = new OpenAiSseParser();
+        parser.handle("{\"id\":\"x\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"截断\"},\"finish_reason\":\"length\"}]}", stopListener);
+        parser.handle("[DONE]", stopListener);
+        assertEquals("length", received.get());
+    }
+
+    @Test
+    void noFinishReasonTransmitsNull() {
+        AtomicReference<String> received = new AtomicReference<>();
+        ChatListener stopListener = stopReasonListener(received);
+        OpenAiSseParser parser = new OpenAiSseParser();
+        parser.handle("[DONE]", stopListener);
+        assertNull(received.get());
+    }
+
+    private static ChatListener stopReasonListener(AtomicReference<String> received) {
+        return new ChatListener() {
+            @Override
+            public void onDelta(String delta) {
+            }
+
+            @Override
+            public void onComplete(String stopReason) {
+                received.set(stopReason);
+            }
+
+            @Override
+            public void onError(ProviderException error) {
+            }
+        };
+    }
 }

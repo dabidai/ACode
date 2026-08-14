@@ -14,8 +14,21 @@ public interface ChatListener {
         // 默认忽略，兼容阶段一无工具场景
     }
 
-    /** 正常结束 */
-    void onComplete();
+    /** 正常结束（无流结束原因，兼容旧实现） */
+    default void onComplete() {
+        onComplete(null);
+    }
+
+    /**
+     * 正常结束并携带流结束原因（Anthropic stop_reason / OpenAI finish_reason）。
+     * 上层据原因区分自然收尾与输出截断；解析器改调带参版。
+     * <p>
+     * 两个 default 互相委托（无参→带参、带参→无参）：存量实现只覆写无参版仍能收到
+     * 完成信号（带参默认回落到无参覆写），只覆写带参版的新收集器也能收到原因。
+     */
+    default void onComplete(String stopReason) {
+        onComplete();
+    }
 
     /** 失败结束 */
     void onError(ProviderException error);

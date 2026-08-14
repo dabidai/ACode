@@ -24,10 +24,13 @@ public final class OpenAiSseParser {
     /** 正在累积的 tool_call 参数碎片，按 index 索引（一次可能并发多个 tool_call） */
     private final Map<Integer, ToolCallAccumulator> toolCalls = new HashMap<>();
 
+    /** 最近一次 choices[0].finish_reason（stop / length / tool_calls 等），[DONE] 时透传 */
+    private String lastFinishReason;
+
     public void handle(String data, ChatListener listener) {
         if ("[DONE]".equals(data)) {
             flushToolCalls(listener);
-            listener.onComplete();
+            listener.onComplete(lastFinishReason);
             return;
         }
         try {
@@ -48,8 +51,11 @@ public final class OpenAiSseParser {
             if (content != null && !content.isEmpty()) {
                 listener.onDelta(content);
             }
-            // 流结束信号：tool_calls（工具调用完成）或 stop（普通回复）
+            // 流结束信号：tool_calls（工具调用完成）、stop（普通回复）、length（截断）等
             String finish = choice.path("finish_reason").asText(null);
+            if (finish != null && !finish.isEmpty()) {
+                lastFinishReason = finish;
+            }
             if ("tool_calls".equals(finish) || "stop".equals(finish)) {
                 flushToolCalls(listener);
             }

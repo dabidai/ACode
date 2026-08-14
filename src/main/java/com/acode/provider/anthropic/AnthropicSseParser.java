@@ -27,6 +27,9 @@ public final class AnthropicSseParser {
     /** 正在累积的 tool_use 块，按 block index 索引，避免与 thinking/text 混排串块 */
     private final Map<Integer, ToolUseAccumulator> toolUses = new HashMap<>();
 
+    /** message_delta 下发的流结束原因（end_turn / max_tokens 等），message_stop 时透传 */
+    private String stopReason;
+
     public void handle(String data, ChatListener listener) {
         try {
             JsonNode node = JSON.readTree(data);
@@ -35,9 +38,15 @@ public final class AnthropicSseParser {
                 case "content_block_delta" -> handleDelta(node, listener);
                 case "content_block_stop" -> handleBlockStop(node, listener);
                 case "error" -> throw classify(node.path("error"));
-                case "message_stop" -> listener.onComplete();
+                case "message_delta" -> {
+                    String reason = node.path("delta").path("stop_reason").asText("");
+                    if (!reason.isEmpty()) {
+                        stopReason = reason;
+                    }
+                }
+                case "message_stop" -> listener.onComplete(stopReason);
                 default -> {
-                    // message_start / message_delta 忽略
+                    // message_start 忽略
                 }
             }
         } catch (JsonProcessingException e) {

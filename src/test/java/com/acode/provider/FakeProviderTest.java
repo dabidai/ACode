@@ -102,4 +102,48 @@ class FakeProviderTest {
         assertTrue(new NetworkException("n") instanceof ProviderException);
         assertTrue(new InvalidRequestException("i") instanceof ProviderException);
     }
+
+    @Test
+    void completeWithStopReasonCallsStringOverload() {
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.complete("end_turn"))));
+        AtomicReference<String> received = new AtomicReference<>();
+        provider.streamChat(request, new ChatListener() {
+            @Override
+            public void onDelta(String delta) {
+            }
+
+            @Override
+            public void onComplete(String stopReason) {
+                received.set(stopReason);
+            }
+
+            @Override
+            public void onError(ProviderException e) {
+            }
+        });
+        assertEquals("end_turn", received.get());
+    }
+
+    @Test
+    void plainCompleteCallsStringOverloadWithNull() {
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.complete())));
+        AtomicReference<String> received = new AtomicReference<>();
+        provider.streamChat(request, new ChatListener() {
+            @Override
+            public void onDelta(String delta) {
+            }
+
+            @Override
+            public void onComplete(String stopReason) {
+                received.set(stopReason);
+            }
+
+            @Override
+            public void onError(ProviderException e) {
+            }
+        });
+        assertNull(received.get());
+    }
 }

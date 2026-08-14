@@ -148,6 +148,35 @@ class AnthropicSseParserTest {
     }
 
     @Test
+    void stopReasonEndTurnTransmittedFromMessageDelta() {
+        AtomicReference<String> received = new AtomicReference<>();
+        ChatListener stopListener = stopReasonListener(received);
+        AnthropicSseParser parser = new AnthropicSseParser();
+        parser.handle("{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}", stopListener);
+        parser.handle("{\"type\":\"message_stop\"}", stopListener);
+        assertEquals("end_turn", received.get());
+    }
+
+    @Test
+    void stopReasonMaxTokensTransmittedFromMessageDelta() {
+        AtomicReference<String> received = new AtomicReference<>();
+        ChatListener stopListener = stopReasonListener(received);
+        AnthropicSseParser parser = new AnthropicSseParser();
+        parser.handle("{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}", stopListener);
+        parser.handle("{\"type\":\"message_stop\"}", stopListener);
+        assertEquals("max_tokens", received.get());
+    }
+
+    @Test
+    void noStopReasonTransmitsNull() {
+        AtomicReference<String> received = new AtomicReference<>();
+        ChatListener stopListener = stopReasonListener(received);
+        AnthropicSseParser parser = new AnthropicSseParser();
+        parser.handle("{\"type\":\"message_stop\"}", stopListener);
+        assertNull(received.get());
+    }
+
+    @Test
     void toolUse与thinking混排不串块() throws IOException {
         String sse = """
                 event: content_block_start
@@ -177,5 +206,22 @@ class AnthropicSseParserTest {
         assertTrue(deltas.isEmpty(), "thinking 与 tool_use 都不该产生文本增量");
         assertTrue(completed.get());
         assertNull(error.get());
+    }
+
+    private static ChatListener stopReasonListener(AtomicReference<String> received) {
+        return new ChatListener() {
+            @Override
+            public void onDelta(String delta) {
+            }
+
+            @Override
+            public void onComplete(String stopReason) {
+                received.set(stopReason);
+            }
+
+            @Override
+            public void onError(ProviderException error) {
+            }
+        };
     }
 }

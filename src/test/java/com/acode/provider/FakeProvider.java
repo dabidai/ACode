@@ -30,6 +30,11 @@ public class FakeProvider implements ChatProvider {
         return ChatListener::onComplete;
     }
 
+    /** 带流结束原因的正常结束（模拟 stop_reason / finish_reason 透传） */
+    public static Action complete(String stopReason) {
+        return listener -> listener.onComplete(stopReason);
+    }
+
     public static Action error(ProviderException e) {
         return listener -> listener.onError(e);
     }

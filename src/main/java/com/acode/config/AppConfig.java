@@ -12,6 +12,7 @@ public class AppConfig {
     private String apiKey;
     private Integer maxContextTokens;
     private Integer maxIterations;
+    private Boolean tee;
 
     public String getProtocol() {
         return protocol;
@@ -59,5 +60,18 @@ public class AppConfig {
 
     public void setMaxIterations(Integer maxIterations) {
         this.maxIterations = maxIterations;
+    }
+
+    /** 诊断 tee 开关：配置 tee: true 或环境变量 ACODE_TEE 存在（兜底，便于不改配置快速开）。 */
+    public boolean isTeeEnabled() {
+        return Boolean.TRUE.equals(tee) || System.getenv("ACODE_TEE") != null;
+    }
+
+    public Boolean getTee() {
+        return tee;
+    }
+
+    public void setTee(Boolean tee) {
+        this.tee = tee;
     }
 }

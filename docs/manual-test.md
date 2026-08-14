@@ -5,7 +5,7 @@
 
 ## 前置
 
-1. 配置密钥：把 `examples/config.yaml` 复制到 `~/.acode/config.yaml`，填入真实 `api_key` 与 `base_url`。
+1. 配置密钥：内置默认配置已随 jar 打包（`src/main/resources/config.yaml`），可直接启动；在 `~/.acode/config.yaml`（全局）或 `.acode/config.yaml`（项目级）写入真实 `api_key` 与 `base_url` 覆盖默认值。
 2. 打包：`mvn package`（产物为 `target/acode.jar`）；源码改动后必须重新打包再启动，否则跑的是旧 jar、界面仍是旧版。
 3. 启动：`java -jar target/acode.jar`；恢复上次会话：`java -jar target/acode.jar --resume`。
 
@@ -54,7 +54,7 @@
 
 ## 前置
 
-1. 配置密钥：把 `examples/config.yaml` 复制到 `~/.acode/config.yaml`，填入真实 `api_key` 与 `base_url`（protocol 分别设为 anthropic / openai 各跑一遍）。
+1. 配置密钥：内置默认配置已随 jar 打包（`src/main/resources/config.yaml`），可直接启动；在 `~/.acode/config.yaml`（全局）或 `.acode/config.yaml`（项目级）写入真实 `api_key` 与 `base_url` 覆盖默认值（protocol 分别设为 anthropic / openai 各跑一遍）。
 2. 打包：`mvn package`（产物为 `target/acode.jar`）；源码改动后必须重新打包再启动，否则跑的是旧 jar、界面仍是旧版。
 3. 启动：`java -jar target/acode.jar`；恢复上次会话：`java -jar target/acode.jar --resume`。
 
@@ -110,7 +110,7 @@
 
 ## 前置
 
-1. 配置密钥：把 `examples/config.yaml` 复制到 `~/.acode/config.yaml`，填入真实 `api_key` 与 `base_url`。
+1. 配置密钥：内置默认配置已随 jar 打包（`src/main/resources/config.yaml`），可直接启动；在 `~/.acode/config.yaml`（全局）或 `.acode/config.yaml`（项目级）写入真实 `api_key` 与 `base_url` 覆盖默认值。
 2. 打包：`mvn package`（产物为 `target/acode.jar`）；源码改动后必须重新打包再启动，否则跑的是旧 jar、界面仍是旧版。
 3. 启动：`java -jar target/acode.jar`；恢复上次会话：`java -jar target/acode.jar --resume`。
 

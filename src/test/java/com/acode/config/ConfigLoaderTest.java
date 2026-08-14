@@ -44,11 +44,14 @@ class ConfigLoaderTest {
     }
 
     @Test
-    void 全局配置缺失时报错并指向示例() {
-        ConfigException e = assertThrows(ConfigException.class,
-                () -> ConfigLoader.load(globalFile(), projectDir()));
-        assertTrue(e.getMessage().contains("未找到配置文件"));
-        assertTrue(e.getMessage().contains("examples/config.yaml"));
+    void 两级配置都缺失时使用内置默认() {
+        AppConfig config = ConfigLoader.load(globalFile(), projectDir());
+        assertEquals("openai", config.getProtocol());
+        assertEquals("deepseek-v4-flash", config.getModel());
+        assertEquals("https://api.deepseek.com/v1", config.getBaseUrl());
+        assertTrue(config.getApiKey().contains("请填入"), "api_key 应为占位符而非空白");
+        assertEquals(ConfigValidator.DEFAULT_MAX_CONTEXT_TOKENS, config.getMaxContextTokens());
+        assertEquals(ConfigValidator.DEFAULT_MAX_ITERATIONS, config.getMaxIterations());
     }
 
     @Test
@@ -129,11 +132,11 @@ class ConfigLoaderTest {
     }
 
     @Test
-    void 空文件视为空配置报必填错误() throws IOException {
+    void 空文件视为无覆盖内置默认生效() throws IOException {
         write(globalFile(), "");
-        ConfigException e = assertThrows(ConfigException.class,
-                () -> ConfigLoader.load(globalFile(), projectDir()));
-        assertTrue(e.getMessage().contains("protocol 必填"));
+        AppConfig config = ConfigLoader.load(globalFile(), projectDir());
+        assertEquals("openai", config.getProtocol());
+        assertEquals("deepseek-v4-flash", config.getModel());
     }
 
     @Test
@@ -162,5 +165,42 @@ class ConfigLoaderTest {
         ConfigException e = assertThrows(ConfigException.class,
                 () -> ConfigLoader.load(globalFile(), projectDir()));
         assertTrue(e.getMessage().contains("max_iterations"));
+    }
+
+    @Test
+    void 内置默认上项目级只覆盖model() throws IOException {
+        write(projectConfig(), "model: gpt-4o\n");
+        AppConfig config = ConfigLoader.load(globalFile(), projectDir());
+        assertEquals("gpt-4o", config.getModel());
+        assertEquals("openai", config.getProtocol());
+        assertEquals("https://api.deepseek.com/v1", config.getBaseUrl());
+        assertTrue(config.getApiKey().contains("请填入"));
+    }
+
+    @Test
+    void tee配置解析生效() throws IOException {
+        write(globalFile(), """
+                protocol: openai
+                model: deepseek-v4-flash
+                base_url: https://api.deepseek.com/v1
+                api_key: global-key
+                tee: true
+                """);
+        AppConfig config = ConfigLoader.load(globalFile(), projectDir());
+        assertTrue(config.isTeeEnabled());
+    }
+
+    @Test
+    void tee非布尔报错() throws IOException {
+        write(globalFile(), """
+                protocol: openai
+                model: deepseek-v4-flash
+                base_url: https://api.deepseek.com/v1
+                api_key: global-key
+                tee: abc
+                """);
+        ConfigException e = assertThrows(ConfigException.class,
+                () -> ConfigLoader.load(globalFile(), projectDir()));
+        assertTrue(e.getMessage().contains("tee 必须是 true/false"));
     }
 }

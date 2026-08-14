@@ -42,10 +42,12 @@ public class OpenAiProvider implements ChatProvider {
 
     private final String baseUrl;
     private final String apiKey;
+    private final boolean teeEnabled;
 
-    public OpenAiProvider(String baseUrl, String apiKey) {
+    public OpenAiProvider(String baseUrl, String apiKey, boolean teeEnabled) {
         this.baseUrl = baseUrl;
         this.apiKey = apiKey;
+        this.teeEnabled = teeEnabled;
     }
 
     @Override
@@ -69,10 +71,10 @@ public class OpenAiProvider implements ChatProvider {
         }
     }
 
-    /** 诊断：ACODE_TEE 开启时把每条原始 SSE data 行写入独立日志（定位 API 内容 vs 解析层）。 */
-    private static void sseDiag(String data) {
+    /** 诊断：tee 开启时把每条原始 SSE data 行写入独立日志（定位 API 内容 vs 解析层）。 */
+    private void sseDiag(String data) {
         try {
-            if (System.getenv("ACODE_TEE") == null) {
+            if (!teeEnabled) {
                 return;
             }
             String line = "sse :: " + data.replace("\r", "\\r").replace("\n", "\\n") + "\n";

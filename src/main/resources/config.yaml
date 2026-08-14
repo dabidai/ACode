@@ -1,0 +1,27 @@
+# ACode 内置默认配置（打包在 jar 中，作为三级加载链的最底层）
+# 外部配置优先覆盖：~/.acode/config.yaml（全局）→ .acode/config.yaml（项目级，只写要覆盖的字段）
+# 两级外部配置都不存在时使用本默认。api_key 为占位符（非空过校验），
+# 未配置真实密钥时启动可进入，真正调用 API 才会报 AuthException。
+
+# 供应商协议：anthropic | openai
+protocol: openai
+
+# 模型名称
+model: deepseek-v4-flash
+
+# API 请求地址
+base_url: https://api.deepseek.com/v1
+
+# API 密钥（占位符；请在外部配置 ~/.acode/config.yaml 或 .acode/config.yaml 覆盖真实密钥）
+api_key: sk-请填入你的API密钥
+
+# 上下文窗口上限（token），对话历史超过后自动丢弃最早消息
+max_context_tokens: 128000
+
+# Agent 循环最大轮数（默认 20），模型连续多轮工具调用触顶后停止执行
+max_iterations: 20
+
+# 诊断 tee 开关：设为 true 时把原始 SSE / 收到的 delta / 写进终端的字节分别记录到
+# acode-sse.log、acode-streamprinter.log、acode-terminal.log（相对启动目录）。
+# 默认 false（不产生诊断日志）；也可用环境变量 ACODE_TEE 兜底开启，不必改配置。
+tee: false

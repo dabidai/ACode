@@ -19,7 +19,7 @@ class StreamPrinterTest {
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private static StreamPrinter printer(OutputPane pane) {
-        return new StreamPrinter(pane, new LiveRegionRenderer(80, 24), new StringWriter());
+        return new StreamPrinter(pane, new LiveRegionRenderer(80, 24), new StringWriter(), false);
     }
 
     @Test
@@ -90,7 +90,7 @@ class StreamPrinterTest {
     void writeHappensOnlyOnCompletedLine() {
         OutputPane pane = new OutputPane();
         CountingRenderer live = new CountingRenderer();
-        StreamPrinter printer = new StreamPrinter(pane, live, new StringWriter());
+        StreamPrinter printer = new StreamPrinter(pane, live, new StringWriter(), false);
         printer.onDelta("a\n");   // 完整行 → 1 次写屏
         printer.onDelta("b");     // 未完成行不写屏
         printer.onError(new ProviderException("x")); // 错误行 → 共 2 次
@@ -109,7 +109,7 @@ class StreamPrinterTest {
     void blankLinesPreservedInScreenWrite() {
         OutputPane pane = new OutputPane();
         StringWriter sw = new StringWriter();
-        StreamPrinter printer = new StreamPrinter(pane, new LiveRegionRenderer(80, 24), sw);
+        StreamPrinter printer = new StreamPrinter(pane, new LiveRegionRenderer(80, 24), sw, false);
         printer.onDelta("a\n\nb\n");
         assertTrue(sw.toString().contains("a\r\n\r\nb\r\n"), "空行应保留在写屏输出：[" + sw + "]");
     }
@@ -118,7 +118,7 @@ class StreamPrinterTest {
     void toolUseKeepsPriorTextInModelAndRunningCardInLiveRegion() {
         OutputPane pane = new OutputPane();
         StringWriter sw = new StringWriter();
-        StreamPrinter printer = new StreamPrinter(pane, new LiveRegionRenderer(80, 24), sw);
+        StreamPrinter printer = new StreamPrinter(pane, new LiveRegionRenderer(80, 24), sw, false);
         printer.onDelta("先看下文件");
         printer.onToolUse(new ToolUseBlock("id-1", "ReadFile",
                 JSON.createObjectNode().put("file_path", "a.txt")));
@@ -132,7 +132,7 @@ class StreamPrinterTest {
     void toolUseWithNoPriorTextKeepsModelEmpty() {
         OutputPane pane = new OutputPane();
         StringWriter sw = new StringWriter();
-        StreamPrinter printer = new StreamPrinter(pane, new LiveRegionRenderer(80, 24), sw);
+        StreamPrinter printer = new StreamPrinter(pane, new LiveRegionRenderer(80, 24), sw, false);
         printer.onToolUse(new ToolUseBlock("id-1", "Bash",
                 JSON.createObjectNode().put("command", "echo hi")));
         assertEquals(0, pane.lineCount(), "无文本且运行中卡片不进模型");

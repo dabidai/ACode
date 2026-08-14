@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class OpenAiProviderTest {
 
     private final OpenAiProvider provider =
-            new OpenAiProvider("https://api.deepseek.com/v1", "test-key");
+            new OpenAiProvider("https://api.deepseek.com/v1", "test-key", false);
     private final ObjectMapper json = new ObjectMapper();
 
     private JsonNode body(ChatRequest request) throws Exception {

@@ -62,7 +62,7 @@ class LiveRegionTerminalSimTest {
         if (!committed.isEmpty()) {
             live.appendCommitted(actual.writer(), committed);
         }
-        StreamPrinter printer = new StreamPrinter(new OutputPane(), live, actual.writer());
+        StreamPrinter printer = new StreamPrinter(new OutputPane(), live, actual.writer(), false);
         streamCharByChar(printer);
         printer.finishTurn();
 
@@ -153,7 +153,7 @@ class LiveRegionTerminalSimTest {
         FakeTerminal term = new FakeTerminal(80, 24);
         LiveRegionRenderer live = new LiveRegionRenderer(80, 24);
         live.appendCommitted(term.writer(), "● 你好");
-        StreamPrinter printer = new StreamPrinter(new OutputPane(), live, term.writer());
+        StreamPrinter printer = new StreamPrinter(new OutputPane(), live, term.writer(), false);
         printer.onDelta("这是");
         printer.onDelta("一句话");
         printer.onDelta("。");
@@ -166,7 +166,7 @@ class LiveRegionTerminalSimTest {
     void errorKeepsScreenCoherent() {
         FakeTerminal term = new FakeTerminal(80, 24);
         LiveRegionRenderer live = new LiveRegionRenderer(80, 24);
-        StreamPrinter printer = new StreamPrinter(new OutputPane(), live, term.writer());
+        StreamPrinter printer = new StreamPrinter(new OutputPane(), live, term.writer(), false);
         printer.onDelta("部分内容");
         printer.onError(new ProviderException("网络失败"));
         assertEquals(1, countNonBlank(term), "错误后只应剩一行错误提示，实际：\n" + term.screenText());

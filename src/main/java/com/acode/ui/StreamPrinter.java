@@ -27,6 +27,7 @@ public class StreamPrinter implements ChatListener {
     private final OutputPane output;
     private final LiveRegionRenderer live;
     private final Writer writer;
+    private final boolean teeEnabled;
     private MarkdownRenderer renderer = new MarkdownRenderer();
     /** 当前回复块占用的模型行数（完成后保留在模型中作历史）。 */
     private int responseLines = 0;
@@ -36,10 +37,11 @@ public class StreamPrinter implements ChatListener {
     /** 当前文本块已提交进回滚的完整渲染行（去重：onDelta 全量 render，只追加新完成行）。 */
     private final List<String> committedLines = new ArrayList<>();
 
-    public StreamPrinter(OutputPane output, LiveRegionRenderer live, Writer writer) {
+    public StreamPrinter(OutputPane output, LiveRegionRenderer live, Writer writer, boolean teeEnabled) {
         this.output = output;
         this.live = live;
         this.writer = writer;
+        this.teeEnabled = teeEnabled;
     }
 
     @Override
@@ -145,10 +147,10 @@ public class StreamPrinter implements ChatListener {
         }
     }
 
-    /** 诊断：ACODE_TEE 开启时把每个 delta / 提交行追加到独立日志（字节级）。 */
-    private static void diag(String tag, String content) {
+    /** 诊断：tee 开启时把每个 delta / 提交行追加到独立日志（字节级）。 */
+    private void diag(String tag, String content) {
         try {
-            if (System.getenv("ACODE_TEE") == null) {
+            if (!teeEnabled) {
                 return;
             }
             String line = tag + " :: " + content.replace("\r", "\\r").replace("\n", "\\n") + "\n";

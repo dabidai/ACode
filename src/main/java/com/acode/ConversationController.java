@@ -122,7 +122,7 @@ public class ConversationController {
     private static ChatProvider buildProvider(AppConfig config) {
         return switch (config.getProtocol()) {
             case "anthropic" -> new AnthropicProvider(config.getBaseUrl(), config.getApiKey());
-            case "openai" -> new OpenAiProvider(config.getBaseUrl(), config.getApiKey());
+            case "openai" -> new OpenAiProvider(config.getBaseUrl(), config.getApiKey(), config.isTeeEnabled());
             default -> throw new ConfigException("不支持的 protocol：" + config.getProtocol());
         };
     }
@@ -449,11 +449,10 @@ public class ConversationController {
         }
         if (tui != null) {
             Writer w = tui.terminal().writer();
-            String tee = System.getenv("ACODE_TEE");
-            if (tee == null) {
+            if (!config.isTeeEnabled()) {
                 return w;
             }
-            TeeWriter tw = new TeeWriter(w, tee);
+            TeeWriter tw = new TeeWriter(w);
             try {
                 tw.logOnly("\n== ACODE TEE w=" + tui.width() + " h=" + tui.height() + " ==\n");
             } catch (IOException e) {
@@ -464,15 +463,15 @@ public class ConversationController {
         return new StringWriter();
     }
 
-    /** 诊断用：把写进终端的每个字节按原样追加到日志文件（含 ANSI 与 \r\n），环境变量 ACODE_TEE 指定路径。 */
+    /** 诊断用：把写进终端的每个字节按原样追加到日志文件（含 ANSI 与 \r\n），tee 开关控制。 */
     private static final class TeeWriter extends Writer {
         private final Writer target;
         private final BufferedWriter log;
 
-        TeeWriter(Writer target, String path) {
+        TeeWriter(Writer target) {
             this.target = target;
             try {
-                this.log = new BufferedWriter(new java.io.FileWriter(path, true));
+                this.log = new BufferedWriter(new java.io.FileWriter("acode-terminal.log", true));
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
@@ -527,7 +526,7 @@ public class ConversationController {
         agent.setPlanMode(planMode);
         BlockingQueue<AgentEvent> events = agent.run();
 
-        StreamPrinter printer = new StreamPrinter(output, live, writer);
+        StreamPrinter printer = new StreamPrinter(output, live, writer, config.isTeeEnabled());
         List<ToolResult> turnResults = new ArrayList<>();
         while (true) {
             if (ctrlC.getAsBoolean()) {
@@ -562,7 +561,7 @@ public class ConversationController {
                 printer.updateToolCalls(turnResults);
                 printer.finishTurn(); // 本轮文本与卡片转正进回滚，下一轮从下方开始
                 turnResults = new ArrayList<>();
-                printer = new StreamPrinter(output, live, writer);
+                printer = new StreamPrinter(output, live, writer, config.isTeeEnabled());
             } else if (event instanceof RetryEvent retry) {
                 output.appendLine("（重试中：" + retry.reason() + "）");
                 live.appendCommitted(writer, "（重试中：" + retry.reason() + "）");

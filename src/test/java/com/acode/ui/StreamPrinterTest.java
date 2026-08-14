@@ -167,7 +167,7 @@ class StreamPrinterTest {
         assertEquals(0, pane.lineCount(), "未 updateToolCalls 的运行中卡片不进入内容模型");
     }
 
-    /** 计数活跃区重绘次数的假渲染器。 */
+    /** 计数活跃区重绘次数的假渲染器（追加式路径）。 */
     static class CountingRenderer extends LiveRegionRenderer {
         final AtomicInteger redraws = new AtomicInteger();
 
@@ -176,9 +176,9 @@ class StreamPrinterTest {
         }
 
         @Override
-        public void redraw(Writer out, List<String> renderLines) {
+        public void redrawFooter(Writer out, List<String> newCommitted, List<String> footerLines) {
             redraws.incrementAndGet();
-            super.redraw(out, renderLines);
+            super.redrawFooter(out, newCommitted, footerLines);
         }
     }
 }

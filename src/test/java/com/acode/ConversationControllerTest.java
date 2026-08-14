@@ -300,7 +300,7 @@ class ConversationControllerTest {
         assertTrue(ConversationController.renderHistoryMessage(failure).contains("[工具结果 失败"));
     }
 
-    /** 计数活跃区重绘次数的假渲染器。 */
+    /** 计数活跃区重绘次数的假渲染器（追加式路径）。 */
     static class CountingLive extends LiveRegionRenderer {
         final AtomicInteger redraws = new AtomicInteger();
 
@@ -309,9 +309,9 @@ class ConversationControllerTest {
         }
 
         @Override
-        public void redraw(Writer out, List<String> renderLines) {
+        public void redrawFooter(Writer out, List<String> newCommitted, List<String> footerLines) {
             redraws.incrementAndGet();
-            super.redraw(out, renderLines);
+            super.redrawFooter(out, newCommitted, footerLines);
         }
     }
 }

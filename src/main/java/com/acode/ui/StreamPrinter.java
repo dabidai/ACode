@@ -10,10 +10,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 把流式 ChatListener 回调双写：内容模型（OutputPane，已提交内容快照）+ 活跃区渲染
- * （LiveRegionRenderer，屏幕底部原地重绘）。onDelta → 模型尾部替换 + 活跃区重绘；
- * onToolUse → 运行中卡片只进活跃区、不提交内容模型；updateToolCalls → 终态卡片写入
- * 内容模型 + 活跃区重绘；onError → 清除半截回复并在活跃区显示错误行。
+ * 把流式 ChatListener 回调双写：内容模型（OutputPane，已提交内容快照）+ 追加式写屏
+ * （LiveRegionRenderer footer 路径）。已完成的文本行（以换行结尾）只写一次进原生回滚
+ * （可划选、永不再改）；当前未完成行 + 工具卡片作为 footer，每行截断到终端宽度、
+ * 恰占一个物理行、可精确上移重绘——宽度失配不再累积错位。
+ * onDelta → 模型尾部替换 + footer 重绘；onToolUse → 文本定稿、运行中卡片进 footer；
+ * updateToolCalls → 终态卡片写入内容模型 + footer 重绘；onError → 清 footer、错误行作已提交行。
+ * finishTurn → 轮次收尾：剩余文本与终态卡片转正进回滚、状态归零。
  */
 public class StreamPrinter implements ChatListener {
 
@@ -26,6 +29,8 @@ public class StreamPrinter implements ChatListener {
     /** 本次回复已出现的工具调用卡片（Anthropic 文本块先于 tool_use 块，之后不再有文本）。 */
     private final List<ToolCallDisplay> toolCalls = new ArrayList<>();
     private boolean textFinalized = false;
+    /** 当前文本块已提交进回滚的完整行（footer 只负责未完成行与卡片）。 */
+    private final List<String> committedLines = new ArrayList<>();
 
     public StreamPrinter(OutputPane output, LiveRegionRenderer live, Writer writer) {
         this.output = output;
@@ -45,14 +50,14 @@ public class StreamPrinter implements ChatListener {
     @Override
     public void onToolUse(ToolUseBlock toolUse) {
         if (!textFinalized) {
-            replaceTail(renderer.render());
             textFinalized = true;
+            replaceTail(renderer.render());
         }
         ToolCallDisplay card = new ToolCallDisplay(toolUse.name(),
                 ToolCallDisplay.summarizeParams(toolUse.input()));
         card.appendRunning();
         toolCalls.add(card);
-        redrawLive();
+        renderFooter();
     }
 
     /** 工具执行完成后，按顺序把全部卡片更新为终态（成功/失败 + 结果摘要）并写入内容模型。 */
@@ -67,13 +72,17 @@ public class StreamPrinter implements ChatListener {
                 output.appendLine(line);
             }
         }
-        redrawLive();
+        renderFooter();
     }
 
     @Override
     public void onComplete() {
+        textFinalized = true;
+        renderFooter();
         renderer = new MarkdownRenderer();
         responseLines = 0;
+        committedLines.clear();
+        textFinalized = false;
     }
 
     @Override
@@ -81,11 +90,29 @@ public class StreamPrinter implements ChatListener {
         output.removeLast(responseLines);
         responseLines = 0;
         renderer = new MarkdownRenderer();
+        committedLines.clear();
         toolCalls.clear();
+        textFinalized = false;
         String msg = error.getMessage() != null ? error.getMessage() : error.getClass().getSimpleName();
         String errorLine = "（错误：" + msg + "）";
         output.appendLine(errorLine);
-        live.redraw(writer, List.of(errorLine));
+        live.commitFooter(writer, List.of(errorLine));
+    }
+
+    /** 轮次收尾：剩余文本与终态卡片转正进回滚、footer 清零，状态归零（供下一轮复用）。 */
+    public void finishTurn() {
+        textFinalized = true;
+        renderFooter();
+        List<String> commit = new ArrayList<>();
+        for (ToolCallDisplay card : toolCalls) {
+            commit.addAll(card.renderedLines());
+        }
+        live.commitFooter(writer, commit);
+        renderer = new MarkdownRenderer();
+        committedLines.clear();
+        toolCalls.clear();
+        responseLines = 0;
+        textFinalized = false;
     }
 
     private void replaceTail(String rendered) {
@@ -96,20 +123,34 @@ public class StreamPrinter implements ChatListener {
             output.append(rendered);
             responseLines = output.lineCount() - before;
         }
-        redrawLive();
+        renderFooter();
     }
 
-    /** 活跃区渲染行 = 当前回复文本行 + 各卡片当前渲染行；每帧触发一次活跃区重绘。 */
-    private void redrawLive() {
-        List<String> regionLines = new ArrayList<>();
+    /**
+     * footer 重绘：新完成的完整行提交进回滚（只写一次），未完成行 + 卡片作为 footer。
+     * 完整行数 = 文本已定稿或原文以换行结尾 ? 全部行 : 除最后一行外；依据 renderer 原文判定。
+     */
+    private void renderFooter() {
+        List<String> newly = new ArrayList<>();
+        List<String> footer = new ArrayList<>();
         String rendered = renderer.render();
         if (!rendered.isEmpty()) {
-            regionLines.addAll(splitLines(rendered));
+            List<String> colorized = splitLines(rendered);
+            int complete = (textFinalized || renderer.endsWithNewline()) ? colorized.size() : colorized.size() - 1;
+            if (complete > committedLines.size()) {
+                for (int i = committedLines.size(); i < complete && i < colorized.size(); i++) {
+                    newly.add(colorized.get(i));
+                }
+                committedLines.addAll(newly);
+            }
+            if (complete < colorized.size()) {
+                footer.add(colorized.get(complete));
+            }
         }
         for (ToolCallDisplay card : toolCalls) {
-            regionLines.addAll(card.renderedLines());
+            footer.addAll(card.renderedLines());
         }
-        live.redraw(writer, regionLines);
+        live.redrawFooter(writer, newly, footer);
     }
 
     private static List<String> splitLines(String text) {

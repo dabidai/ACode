@@ -467,7 +467,7 @@ public class ConversationController {
         output.append("● " + input + "\n");
         LiveRegionRenderer live = liveRenderer();
         Writer writer = screenWriter();
-        live.commitRegion(); // 上一轮活跃区已留在屏上作历史，本轮重绘状态归零
+        live.commitRegion(); // 上一轮活跃区已留在屏上作历史，本轮重绘状态（含 footer）归零
         live.appendCommitted(writer, "● " + input);
 
         Agent agent = new Agent(provider, conversation, toolRegistry,
@@ -480,6 +480,7 @@ public class ConversationController {
         while (true) {
             if (ctrlC.getAsBoolean()) {
                 agent.cancel();
+                printer.finishTurn(); // 半截 footer 先转正进回滚，中断提示再追加
                 output.appendLine("（已中断）");
                 live.appendCommitted(writer, "（已中断）");
                 awaitLoopEnd(agent); // 取消不吐 LoopComplete：等循环线程收尾（补「已取消」）再返回
@@ -494,6 +495,7 @@ public class ConversationController {
             }
             if (event instanceof LoopComplete) {
                 printer.updateToolCalls(turnResults);
+                printer.finishTurn();
                 completeLoop(agent, live, writer);
                 break;
             } else if (event instanceof StreamText streamText) {
@@ -506,8 +508,8 @@ public class ConversationController {
                         : ToolResult.success(toolResult.output()));
             } else if (event instanceof TurnComplete) {
                 printer.updateToolCalls(turnResults);
+                printer.finishTurn(); // 本轮文本与卡片转正进回滚，下一轮从下方开始
                 turnResults = new ArrayList<>();
-                live.commitRegion(); // 本轮卡片留在屏上作历史，下一轮区域从下方开始
                 printer = new StreamPrinter(output, live, writer);
             } else if (event instanceof RetryEvent retry) {
                 output.appendLine("（重试中：" + retry.reason() + "）");

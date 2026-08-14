@@ -6,7 +6,7 @@
 ## 前置
 
 1. 配置密钥：把 `examples/config.yaml` 复制到 `~/.acode/config.yaml`，填入真实 `api_key` 与 `base_url`。
-2. 打包：`mvn package`（产物为 `target/acode.jar`）。
+2. 打包：`mvn package`（产物为 `target/acode.jar`）；源码改动后必须重新打包再启动，否则跑的是旧 jar、界面仍是旧版。
 3. 启动：`java -jar target/acode.jar`；恢复上次会话：`java -jar target/acode.jar --resume`。
 
 ## M1 Ctrl+C 中断工具执行（T12）
@@ -55,7 +55,7 @@
 ## 前置
 
 1. 配置密钥：把 `examples/config.yaml` 复制到 `~/.acode/config.yaml`，填入真实 `api_key` 与 `base_url`（protocol 分别设为 anthropic / openai 各跑一遍）。
-2. 打包：`mvn package`（产物为 `target/acode.jar`）。
+2. 打包：`mvn package`（产物为 `target/acode.jar`）；源码改动后必须重新打包再启动，否则跑的是旧 jar、界面仍是旧版。
 3. 启动：`java -jar target/acode.jar`；恢复上次会话：`java -jar target/acode.jar --resume`。
 
 ## A1 多轮工具链自动闭环（双后端）
@@ -109,7 +109,7 @@
 ## 前置
 
 1. 配置密钥：把 `examples/config.yaml` 复制到 `~/.acode/config.yaml`，填入真实 `api_key` 与 `base_url`。
-2. 打包：`mvn package`（产物为 `target/acode.jar`）。
+2. 打包：`mvn package`（产物为 `target/acode.jar`）；源码改动后必须重新打包再启动，否则跑的是旧 jar、界面仍是旧版。
 3. 启动：`java -jar target/acode.jar`；恢复上次会话：`java -jar target/acode.jar --resume`。
 
 ## R1 划选复制历史输出

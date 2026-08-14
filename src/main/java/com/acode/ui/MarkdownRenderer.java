@@ -27,6 +27,11 @@ public class MarkdownRenderer {
         return colorize(text.toString());
     }
 
+    /** 累积原文是否以换行结尾（决定最后一行是否已完整；render() 会丢弃结尾换行信息）。 */
+    boolean endsWithNewline() {
+        return text.length() > 0 && text.charAt(text.length() - 1) == '\n';
+    }
+
     private static String colorize(String md) {
         if (md.isEmpty()) {
             return "";

@@ -4,7 +4,9 @@ import org.junit.jupiter.api.Test;
 
 import static com.acode.ui.CommandRouter.Action.CHAT;
 import static com.acode.ui.CommandRouter.Action.CLEAR;
+import static com.acode.ui.CommandRouter.Action.DO;
 import static com.acode.ui.CommandRouter.Action.HELP;
+import static com.acode.ui.CommandRouter.Action.PLAN;
 import static com.acode.ui.CommandRouter.Action.QUIT;
 import static com.acode.ui.CommandRouter.Action.RESUME;
 import static com.acode.ui.CommandRouter.Action.SKIP;
@@ -31,6 +33,16 @@ class CommandRouterTest {
     @Test
     void resumeCommandRoutesToResume() {
         assertEquals(RESUME, CommandRouter.route("/resume"));
+    }
+
+    @Test
+    void planCommandRoutesToPlan() {
+        assertEquals(PLAN, CommandRouter.route("/plan"));
+    }
+
+    @Test
+    void doCommandRoutesToDo() {
+        assertEquals(DO, CommandRouter.route("/do"));
     }
 
     @Test
@@ -79,6 +91,8 @@ class CommandRouterTest {
         assertTrue(CommandRouter.HELP_TEXT.contains("/quit"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/clear"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/resume"));
+        assertTrue(CommandRouter.HELP_TEXT.contains("/plan"));
+        assertTrue(CommandRouter.HELP_TEXT.contains("/do"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/help"));
     }
 }

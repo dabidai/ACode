@@ -15,6 +15,9 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -98,11 +101,11 @@ class ConversationControllerTest {
     }
 
     @Test
-    void secondRoundToolUseShowsTextAndHintOnly() throws Exception {
+    void multiRoundToolChainExecutesEveryRound() throws Exception {
         Path file = tempDir.resolve("a.txt");
         Files.writeString(file, "你好世界");
 
-        // 第一轮工具调用；第二轮又发起工具调用并带中间文本
+        // 三连工具链：ReadFile → Bash → 最终文本；第二轮 tool_use 应被真实执行而非提示放弃
         FakeProvider provider = FakeProvider.scripted(List.of(
                 List.of(FakeProvider.toolUse("id-1", "ReadFile",
                         JSON.createObjectNode().put("file_path", file.toString())),
@@ -110,20 +113,115 @@ class ConversationControllerTest {
                 List.of(FakeProvider.delta("已读取，继续处理"),
                         FakeProvider.toolUse("id-2", "Bash",
                                 JSON.createObjectNode().put("command", "echo x")),
-                        FakeProvider.complete())));
+                        FakeProvider.complete()),
+                List.of(FakeProvider.delta("处理完成"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
         controller.handleExchange("读文件并处理", () -> false, () -> { });
 
         String joined = String.join("\n", output.lines());
-        assertTrue(joined.contains("连环工具调用暂不支持"), "第二轮仍 tool_use 应提示");
+        assertFalse(joined.contains("连环工具调用暂不支持"), "多轮工具链不再提示放弃");
 
-        // 对话历史仅追加第二轮文本，不追加第二轮 tool_use / tool_result
+        // 三轮请求逐轮推进
+        List<ChatRequest> requests = provider.receivedRequests();
+        assertEquals(3, requests.size(), "应为三轮请求");
+        assertTrue(requests.get(1).messages().stream().anyMatch(m -> m.blocks().stream()
+                        .anyMatch(b -> b instanceof ToolResultBlock tr && tr.toolUseId().equals("id-1"))),
+                "第二轮请求历史应含第一轮 tool_result");
+
+        // 历史完整：第二轮 tool_use + tool_result 真实入史，最终文本收尾
         List<ChatMessage> history = controller.conversation().history();
         ChatMessage last = history.get(history.size() - 1);
         assertEquals(ChatMessage.Role.ASSISTANT, last.role());
-        assertEquals("已读取，继续处理", last.content());
+        assertEquals("处理完成", last.content());
+        assertTrue(history.stream().anyMatch(m -> m.blocks().stream()
+                        .anyMatch(b -> b instanceof ToolUseBlock tu && tu.id().equals("id-2"))),
+                "历史应含第二轮 tool_use");
+        assertTrue(history.stream().anyMatch(m -> m.blocks().stream()
+                        .anyMatch(b -> b instanceof ToolResultBlock tr && tr.toolUseId().equals("id-2"))),
+                "历史应含第二轮 tool_result");
+    }
+
+    @Test
+    void ctrlCDuringStreamInterruptsAgentAndKeepsHistoryConsistent() throws Exception {
+        Path file = tempDir.resolve("a.txt");
+        Files.writeString(file, "数据");
+        CountDownLatch streamReachedBlock = new CountDownLatch(1);
+        AtomicBoolean pressCtrlC = new AtomicBoolean(false);
+        // 首轮流式：先发 tool_use，随后阻塞直到取消；取消中断 sleep 结束本流
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.toolUse("id-1", "ReadFile",
+                                JSON.createObjectNode().put("file_path", file.toString())),
+                        listener -> {
+                            streamReachedBlock.countDown();
+                            try {
+                                Thread.sleep(100_000);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                            }
+                            listener.onComplete();
+                        }),
+                List.of(FakeProvider.delta("第二次回答"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+
+        Thread canceler = new Thread(() -> {
+            try {
+                streamReachedBlock.await(2, TimeUnit.SECONDS);
+                pressCtrlC.set(true);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, "test-canceler");
+        canceler.start();
+        controller.handleExchange("读文件", () -> pressCtrlC.get(), () -> { });
+        canceler.join();
+
+        // 首轮流式被中断：无第二轮请求，输出「已中断」
+        assertEquals(1, provider.receivedRequests().size(), "取消应中断首轮，不再发起第二轮");
+        String joined = String.join("\n", output.lines());
+        assertTrue(joined.contains("已中断"), "应输出「已中断」");
+        // 已收集的 tool_use 补「已取消」结果，历史无悬空
+        List<ChatMessage> history = controller.conversation().history();
+        assertTrue(history.stream().anyMatch(m -> m.blocks().stream()
+                        .anyMatch(b -> b instanceof ToolResultBlock tr
+                                && tr.toolUseId().equals("id-1") && tr.isError()
+                                && tr.content().contains("已取消"))),
+                "已收集 tool_use 应补「已取消」结果");
+
+        // 取消后可继续下一次 exchange
+        controller.handleExchange("再次询问", () -> false, () -> { });
+        assertEquals(2, provider.receivedRequests().size(), "取消后应可继续新对话");
+        assertTrue(String.join("\n", output.lines()).contains("第二次回答"), "第二次 exchange 应正常生成");
+    }
+
+    @Test
+    void maxIterationsCapsToolChainAtConfiguredLimit() throws Exception {
+        Path file = tempDir.resolve("a.txt");
+        Files.writeString(file, "数据");
+        AppConfig config = config();
+        config.setMaxIterations(2);
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.toolUse("id-1", "ReadFile",
+                                JSON.createObjectNode().put("file_path", file.toString())),
+                        FakeProvider.complete()),
+                List.of(FakeProvider.toolUse("id-2", "ReadFile",
+                                JSON.createObjectNode().put("file_path", file.toString())),
+                        FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config, false);
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        controller.handleExchange("多步任务", () -> false, () -> { });
+
+        assertEquals(2, provider.receivedRequests().size(), "maxIterations=2 应只发起两轮请求");
+        String joined = String.join("\n", output.lines());
+        assertTrue(joined.contains("达到最大轮数"), "应输出触顶提示");
+        // 已完成的第一轮工具结果保留在历史
+        assertTrue(controller.conversation().history().stream().anyMatch(m -> m.blocks().stream()
+                        .anyMatch(b -> b instanceof ToolResultBlock tr && tr.toolUseId().equals("id-1"))),
+                "第一轮工具结果应保留在历史");
     }
 
     @Test

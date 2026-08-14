@@ -1,15 +1,22 @@
 package com.acode;
 
+import com.acode.agent.Agent;
+import com.acode.agent.AgentEvent;
+import com.acode.agent.AgentEvent.ErrorEvent;
+import com.acode.agent.AgentEvent.LoopComplete;
+import com.acode.agent.AgentEvent.RetryEvent;
+import com.acode.agent.AgentEvent.StreamText;
+import com.acode.agent.AgentEvent.ToolResultEvent;
+import com.acode.agent.AgentEvent.ToolUseEvent;
+import com.acode.agent.AgentEvent.TurnComplete;
 import com.acode.config.AppConfig;
 import com.acode.config.ConfigException;
 import com.acode.config.ConfigLoader;
+import com.acode.config.ConfigValidator;
 import com.acode.conversation.Conversation;
-import com.acode.provider.ChatListener;
 import com.acode.provider.ChatMessage;
 import com.acode.provider.ChatProvider;
-import com.acode.provider.ChatRequest;
 import com.acode.provider.ContentBlock;
-import com.acode.provider.ProviderException;
 import com.acode.provider.TextBlock;
 import com.acode.provider.ToolResultBlock;
 import com.acode.provider.ToolUseBlock;
@@ -19,7 +26,6 @@ import com.acode.session.Session;
 import com.acode.session.SessionStore;
 import com.acode.tool.DefaultToolset;
 import com.acode.tool.ToolContext;
-import com.acode.tool.ToolExecutor;
 import com.acode.tool.ToolRegistry;
 import com.acode.tool.ToolResult;
 import com.acode.ui.AcodeTerminal;
@@ -35,12 +41,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -54,9 +61,6 @@ public class ConversationController {
 
     private static final int MAX_TOKENS = 8192;
 
-    /** 工具结果入历史前的截断上限（字符），避免超长输出撑爆上下文窗口 */
-    private static final int MAX_TOOL_RESULT_HISTORY_CHARS = 2000;
-
     private static final String BANNER = """
              ___   ____    ___   ___   ____
             / _ \\ / ___|  / _ \\ / _ \\ |  _ \\
@@ -67,10 +71,14 @@ public class ConversationController {
             """;
 
     private final ChatProvider provider;
+    private final AppConfig config;
     private final Conversation conversation;
     private final ToolRegistry toolRegistry;
     private final SessionStore sessionStore;
     private final boolean resume;
+
+    /** plan 模式开关：/plan 进入、/do 退出；作用于下一次 exchange 新建的 Agent */
+    private boolean planMode = false;
 
     private AcodeTerminal tui;
     private OutputPane output;
@@ -90,15 +98,15 @@ public class ConversationController {
         this(buildProvider(config), config, resume);
     }
 
-    /** 包可见：测试可注入假 Provider 驱动两轮闭环 */
+    /** 包可见：测试可注入假 Provider 驱动 Agent 循环 */
     ConversationController(ChatProvider provider, AppConfig config, boolean resume) {
         this.provider = provider;
+        this.config = config;
         boolean thinking = "anthropic".equals(config.getProtocol());
         this.conversation = new Conversation(config.getModel(), thinking, MAX_TOKENS,
                 config.getMaxContextTokens());
         this.toolRegistry = new ToolRegistry();
         DefaultToolset.registerAll(toolRegistry);
-        conversation.setTools(toolRegistry.availableList());
         this.sessionStore = new SessionStore(SessionStore.defaultDir());
         this.resume = resume;
     }
@@ -179,6 +187,14 @@ public class ConversationController {
                 }
                 case HELP -> output.append(CommandRouter.HELP_TEXT);
                 case RESUME -> selectSession();
+                case PLAN -> {
+                    planMode = true;
+                    output.appendLine("（已进入规划模式：只读探索，计划落盘到 .acode/plans/）");
+                }
+                case DO -> {
+                    planMode = false;
+                    output.appendLine("（已退出规划模式，开始执行）");
+                }
                 case SKIP -> {
                     // 空白输入，仅重绘
                 }
@@ -381,14 +397,6 @@ public class ConversationController {
         return oneLine.length() > max ? oneLine.substring(0, max) + "…" : oneLine;
     }
 
-    /** 超长工具结果入历史前截断，避免撑爆上下文窗口。 */
-    private static String truncateForHistory(String text) {
-        if (text == null || text.length() <= MAX_TOOL_RESULT_HISTORY_CHARS) {
-            return text;
-        }
-        return text.substring(0, MAX_TOOL_RESULT_HISTORY_CHARS) + "\n…（结果过长，已截断）";
-    }
-
     private void handleChat(String input) {
         handleExchange(input, this::ctrlCPressed, () -> tui.repaint(output));
     }
@@ -404,10 +412,9 @@ public class ConversationController {
     }
 
     /**
-     * 单次输入的两轮闭环（ch03）：第一轮带工具请求，模型发起 tool_use → 展示卡片、执行、
-     * 回传 tool_result 后第二轮请求出最终文本；第二轮仍 tool_use → 只显示文本并提示
-     * 「连环调用未支持」。ctrlC 注入中断源（真实终端为 Ctrl+C），repaint 注入重绘回调，
-     * 便于用 FakeProvider 单测两轮编排。
+     * 单次输入触发 Agent 循环：追加 user 消息 → new Agent(...).run() 在虚拟线程跑 ReAct 循环 →
+     * 主线程订阅事件队列逐条渲染（流式文本 / 工具卡片 / 轮次收尾 / 重试 / 错误 / 循环结束提示）。
+     * ctrlC 注入中断源（真实终端为 Ctrl+C），repaint 注入重绘回调，便于用 FakeProvider 单测编排。
      */
     void handleExchange(String input, BooleanSupplier ctrlC, Runnable repaint) {
         output.resetScroll();
@@ -415,201 +422,104 @@ public class ConversationController {
         output.append("● " + input + "\n");
         repaint.run();
 
-        // ---------- 第一轮：带工具流式请求 ----------
-        RoundResult round1 = streamRound(conversation.buildRequest(), ctrlC, repaint);
-        if (round1.interrupted() || round1.hasError()) {
-            return;
-        }
+        Agent agent = new Agent(provider, conversation, toolRegistry,
+                new ToolContext(Path.of(System.getProperty("user.dir"))), maxIterations());
+        agent.setPlanMode(planMode);
+        BlockingQueue<AgentEvent> events = agent.run();
 
-        if (round1.toolUses().isEmpty()) {
-            if (!round1.text().isEmpty()) {
-                conversation.addMessage(ChatMessage.of(ChatMessage.Role.ASSISTANT, round1.text()));
-            }
-            return;
-        }
-
-        // 第一轮产生了工具调用：assistant 消息 = 文本 + tool_use 块
-        List<ContentBlock> assistantBlocks = new ArrayList<>();
-        if (!round1.text().isEmpty()) {
-            assistantBlocks.add(new TextBlock(round1.text()));
-        }
-        assistantBlocks.addAll(round1.toolUses());
-        conversation.addMessage(new ChatMessage(ChatMessage.Role.ASSISTANT, assistantBlocks));
-
-        // 执行工具（可被 Ctrl+C 中断）
-        ToolRunOutcome outcome = executeTools(round1.toolUses(), ctrlC);
-        round1.printer().updateToolCalls(outcome.results());
-        repaint.run();
-        if (outcome.interrupted()) {
-            output.appendLine("（已中断工具执行，跳过后续回复）");
-            repaint.run();
-            return;
-        }
-
-        // 回传 tool_result（成功/失败结果都回传，超长结果入历史前截断）
-        List<ToolResultBlock> resultBlocks = new ArrayList<>();
-        for (int i = 0; i < round1.toolUses().size(); i++) {
-            ToolResult result = outcome.results().get(i);
-            resultBlocks.add(new ToolResultBlock(
-                    round1.toolUses().get(i).id(), truncateForHistory(result.content()), result.isError()));
-        }
-        conversation.addToolResults(resultBlocks);
-
-        // ---------- 第二轮：最终文本 ----------
-        RoundResult round2 = streamRound(conversation.buildRequest(), ctrlC, repaint);
-        if (round2.interrupted() || round2.hasError()) {
-            return;
-        }
-        if (!round2.toolUses().isEmpty()) {
-            output.appendLine("（连环工具调用暂不支持，仅显示以上文本）");
-            repaint.run();
-        }
-        if (!round2.text().isEmpty()) {
-            conversation.addMessage(ChatMessage.of(ChatMessage.Role.ASSISTANT, round2.text()));
-        }
-    }
-
-    /**
-     * 流式请求一轮：后台线程驱动 provider，主线程轮询重绘与 Ctrl+C。
-     * 收集文本增量与 tool_use 块；中断/出错时返回相应标记。
-     */
-    private RoundResult streamRound(ChatRequest request, BooleanSupplier ctrlC, Runnable repaint) {
-        AtomicBoolean repaintRequested = new AtomicBoolean(false);
-        AtomicBoolean interrupted = new AtomicBoolean(false);
-        AtomicBoolean completed = new AtomicBoolean(false);
-        AtomicReference<ProviderException> error = new AtomicReference<>();
-        StreamPrinter printer = new StreamPrinter(output, () -> repaintRequested.set(true));
-        StringBuilder reply = new StringBuilder();
-        List<ToolUseBlock> toolUses = new ArrayList<>();
-
-        ChatListener listener = new ChatListener() {
-            @Override
-            public void onDelta(String delta) {
-                if (interrupted.get()) {
-                    return;
-                }
-                reply.append(delta);
-                printer.onDelta(delta);
-            }
-
-            @Override
-            public void onToolUse(ToolUseBlock toolUse) {
-                if (interrupted.get()) {
-                    return;
-                }
-                toolUses.add(toolUse);
-                printer.onToolUse(toolUse);
-            }
-
-            @Override
-            public void onComplete() {
-                if (interrupted.get()) {
-                    return;
-                }
-                completed.set(true);
-                printer.onComplete();
-            }
-
-            @Override
-            public void onError(ProviderException e) {
-                if (interrupted.get()) {
-                    return;
-                }
-                error.set(e);
-                printer.onError(e);
-            }
-        };
-
-        Thread worker = new Thread(() -> {
-            try {
-                provider.streamChat(request, listener);
-            } catch (RuntimeException e) {
-                if (!interrupted.get()) {
-                    error.set(new ProviderException("生成过程异常：" + e.getMessage(), e));
-                    printer.onError(error.get());
-                }
-            }
-        }, "acode-provider");
-        worker.setDaemon(true);
-        worker.start();
-
-        while (worker.isAlive() && !interrupted.get()) {
-            if (repaintRequested.getAndSet(false)) {
-                repaint.run();
-            }
+        StreamPrinter printer = new StreamPrinter(output, repaint);
+        List<ToolResult> turnResults = new ArrayList<>();
+        while (true) {
             if (ctrlC.getAsBoolean()) {
-                interrupted.set(true);
-                worker.interrupt();
+                agent.cancel();
                 output.appendLine("（已中断）");
                 repaint.run();
+                awaitLoopEnd(agent); // 取消不吐 LoopComplete：等循环线程收尾（补「已取消」）再返回
                 break;
             }
-            try {
-                Thread.sleep(20);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-        if (!interrupted.get()) {
-            repaint.run();
-        }
-        return new RoundResult(reply.toString(), toolUses, printer,
-                interrupted.get(), error.get() != null || !completed.get());
-    }
-
-    /**
-     * 顺序执行一批工具调用：后台线程执行、主线程轮询 Ctrl+C 以便中断。
-     * 被中断时未执行的调用结果标记为「已取消」。
-     */
-    private ToolRunOutcome executeTools(List<ToolUseBlock> calls, BooleanSupplier ctrlC) {
-        ToolExecutor executor = new ToolExecutor(toolRegistry,
-                new ToolContext(Path.of(System.getProperty("user.dir"))));
-        List<ToolResult> results = new ArrayList<>();
-        for (int i = 0; i < calls.size(); i++) {
-            results.add(null);
-        }
-        AtomicBoolean interruptRequested = new AtomicBoolean(false);
-        Thread worker = new Thread(() -> {
-            for (int i = 0; i < calls.size(); i++) {
-                if (interruptRequested.get()) {
-                    break;
+            AgentEvent event = pollEvent(events);
+            if (event == null) {
+                if (!agent.isRunning() && events.isEmpty()) {
+                    break; // 取消等无 LoopComplete 收尾：循环线程结束且事件耗尽即结束
                 }
-                results.set(i, executor.execute(calls.get(i)));
+                continue;
             }
-        }, "acode-tools");
-        worker.setDaemon(true);
-        worker.start();
-
-        while (worker.isAlive()) {
-            if (ctrlC.getAsBoolean()) {
-                interruptRequested.set(true);
-                worker.interrupt();
+            if (event instanceof LoopComplete) {
+                printer.updateToolCalls(turnResults);
+                completeLoop(agent);
                 break;
+            } else if (event instanceof StreamText streamText) {
+                printer.onDelta(streamText.text());
+            } else if (event instanceof ToolUseEvent toolUse) {
+                printer.onToolUse(new ToolUseBlock(toolUse.toolId(), toolUse.toolName(), toolUse.args()));
+            } else if (event instanceof ToolResultEvent toolResult) {
+                turnResults.add(toolResult.isError()
+                        ? ToolResult.failure(toolResult.output())
+                        : ToolResult.success(toolResult.output()));
+            } else if (event instanceof TurnComplete) {
+                printer.updateToolCalls(turnResults);
+                turnResults = new ArrayList<>();
+                printer = new StreamPrinter(output, repaint); // R3：跨轮不复用，收尾后新建
+            } else if (event instanceof RetryEvent retry) {
+                output.appendLine("（重试中：" + retry.reason() + "）");
+                repaint.run();
+            } else if (event instanceof ErrorEvent error) {
+                output.appendLine("（错误：" + error.message() + "）");
+                repaint.run();
             }
+        }
+        repaint.run();
+    }
+
+    /** 循环轮数上限：配置缺失时用默认值（与 ConfigValidator 一致） */
+    private int maxIterations() {
+        Integer configured = config.getMaxIterations();
+        return configured != null && configured > 0 ? configured : ConfigValidator.DEFAULT_MAX_ITERATIONS;
+    }
+
+    /** 事件轮询：20ms 超时；中断恢复中断位并返回 null */
+    private static AgentEvent pollEvent(BlockingQueue<AgentEvent> events) {
+        try {
+            return events.poll(20, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+    }
+
+    /** 取消后等循环线程收尾（上限 5 秒），避免与下一次 exchange 并发写历史 */
+    private static void awaitLoopEnd(Agent agent) {
+        long deadline = System.currentTimeMillis() + 5000;
+        while (agent.isRunning() && System.currentTimeMillis() < deadline) {
             try {
                 Thread.sleep(20);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                break;
+                return;
             }
         }
-        boolean interrupted = interruptRequested.get();
-        for (int i = 0; i < results.size(); i++) {
-            if (results.get(i) == null) {
-                results.set(i, ToolResult.failure("已取消"));
+    }
+
+    /** 循环收尾：按终止原因补提示（MAX_ITERATIONS / PLAN_DELIVERED / CANCELED / ERROR） */
+    private void completeLoop(Agent agent) {
+        switch (agent.termination()) {
+            case MAX_ITERATIONS -> output.appendLine("（达到最大轮数，已停止执行）");
+            case PLAN_DELIVERED -> {
+                output.appendLine("（计划已交付）");
+                Path plan = agent.planPath();
+                if (plan != null) {
+                    try {
+                        output.append(Files.readString(plan));
+                    } catch (IOException e) {
+                        log.warn("读取计划文件失败：{}", e.getMessage());
+                    }
+                }
+                output.appendLine("输入 /do 退出 plan 模式开始执行");
             }
+            case CANCELED -> output.appendLine("（已中断）");
+            case ERROR -> { /* ErrorEvent 已输出错误行，无需重复 */ }
+            case NORMAL -> { /* 自然收尾，无提示 */ }
         }
-        return new ToolRunOutcome(results, interrupted);
-    }
-
-    /** 一轮流式请求的收集结果 */
-    private record RoundResult(String text, List<ToolUseBlock> toolUses, StreamPrinter printer,
-                               boolean interrupted, boolean hasError) {
-    }
-
-    /** 一批工具执行结果：结果列表 + 是否被用户中断 */
-    private record ToolRunOutcome(List<ToolResult> results, boolean interrupted) {
     }
 
     /** raw 模式下检测 Ctrl+C（0x03 字节）；命中则消费该字节。 */

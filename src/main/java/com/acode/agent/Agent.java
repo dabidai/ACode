@@ -64,6 +64,7 @@ public class Agent {
     private final BlockingQueue<AgentEvent> events =
             new ArrayBlockingQueue<>(AgentEvent.QUEUE_CAPACITY);
     private final AtomicBoolean cancelled = new AtomicBoolean(false);
+    private final AtomicBoolean running = new AtomicBoolean(false);
     private volatile Termination termination = Termination.NORMAL;
     private volatile int totalTurns = 0;
     private int recoveryCount = 0;
@@ -92,8 +93,20 @@ public class Agent {
 
     /** 虚拟线程跑循环，返回事件队列（调用方随即订阅） */
     public BlockingQueue<AgentEvent> run() {
-        loopThread = Thread.ofVirtual().name("acode-agent").start(this::loop);
+        running.set(true);
+        loopThread = Thread.ofVirtual().name("acode-agent").start(() -> {
+            try {
+                loop();
+            } finally {
+                running.set(false);
+            }
+        });
         return events;
+    }
+
+    /** 循环是否仍在运行；取消等不吐 LoopComplete 的收尾需轮询此状态判断循环已结束 */
+    public boolean isRunning() {
+        return running.get();
     }
 
     /** 用户取消：置位取消标志并中断循环线程 */
@@ -355,11 +368,11 @@ public class Agent {
         return conversation.buildRequest(normalTools(), null);
     }
 
-    /** plan 模式工具列表：读类工具 + ExitPlanMode */
+    /** plan 模式工具列表：读类工具 + ExitPlanMode，各恰好一次 */
     private List<Tool> planTools() {
         List<Tool> result = new ArrayList<>();
         for (Tool tool : registry.availableList()) {
-            if (tool.permission() == Permission.READ) {
+            if (tool.permission() == Permission.READ && !EXIT_PLAN_MODE.equals(tool.name())) {
                 result.add(tool);
             }
         }

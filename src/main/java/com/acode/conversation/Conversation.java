@@ -81,12 +81,25 @@ public class Conversation {
 
     /** 组装请求：携带完整历史与工具列表，超出窗口时从最早开始丢弃，直到总量放得下 */
     public ChatRequest buildRequest() {
+        return buildRequest(tools, null);
+    }
+
+    /**
+     * 组装请求：显式指定工具列表，并在 trim() 结果之前插入 system 提醒（不进历史）。
+     * systemReminder 为 null 时不插入；工具列表在 trim 之外独立传递，不随历史裁剪。
+     */
+    public ChatRequest buildRequest(List<Tool> requestTools, ChatMessage systemReminder) {
+        List<ChatMessage> requestMessages = trim();
+        if (systemReminder != null) {
+            requestMessages = new ArrayList<>(requestMessages);
+            requestMessages.add(0, systemReminder);
+        }
         return ChatRequest.builder()
                 .model(model)
                 .thinking(thinking)
                 .maxTokens(maxTokens)
-                .tools(tools)
-                .messages(trim())
+                .tools(requestTools)
+                .messages(requestMessages)
                 .build();
     }
 

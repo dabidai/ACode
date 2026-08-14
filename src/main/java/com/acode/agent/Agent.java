@@ -14,10 +14,14 @@ import com.acode.provider.TextBlock;
 import com.acode.provider.ToolResultBlock;
 import com.acode.provider.ToolUseBlock;
 import com.acode.provider.RetryPolicy;
+import com.acode.tool.Permission;
+import com.acode.tool.Tool;
 import com.acode.tool.ToolContext;
 import com.acode.tool.ToolRegistry;
 import com.acode.tool.ToolResult;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -45,10 +49,16 @@ public class Agent {
 
     static final String TRUNCATION_CONTINUE_HINT = "输出被截断，请从断点继续，不要重复已输出内容";
 
+    /** 计划交付工具名称（T8） */
+    static final String EXIT_PLAN_MODE = "ExitPlanMode";
+
     private final ChatProvider provider;
     private final Conversation conversation;
     private final ToolRegistry registry;
     private final ToolContext context;
+    private final ToolContext planContext;
+    private final PlanWriter planWriter = new PlanWriter();
+    private final ExitPlanModeTool exitPlanMode = new ExitPlanModeTool();
     private final int maxIterations;
 
     private final BlockingQueue<AgentEvent> events =
@@ -57,6 +67,9 @@ public class Agent {
     private volatile Termination termination = Termination.NORMAL;
     private volatile int totalTurns = 0;
     private int recoveryCount = 0;
+
+    private volatile boolean planMode = false;
+    private volatile Path planPath;
 
     private Thread loopThread;
 
@@ -69,7 +82,11 @@ public class Agent {
         this.conversation = conversation;
         this.registry = registry;
         this.context = context;
+        this.planContext = new ToolContext(context.workingDirectory(), true);
         this.maxIterations = maxIterations;
+        if (registry.available(EXIT_PLAN_MODE) == null) {
+            registry.register(exitPlanMode);
+        }
         conversation.setTools(registry.availableList());
     }
 
@@ -98,6 +115,16 @@ public class Agent {
         return conversation;
     }
 
+    /** 切换 plan 模式：请求只发读类 + ExitPlanMode 工具，每轮注入系统提醒 */
+    public void setPlanMode(boolean planMode) {
+        this.planMode = planMode;
+    }
+
+    /** 计划交付后的落盘路径；未交付时返回 null */
+    public Path planPath() {
+        return planPath;
+    }
+
     private void loop() {
         for (int turn = 1; turn <= maxIterations; turn++) {
             if (cancelled.get()) {
@@ -109,24 +136,30 @@ public class Agent {
                 case CONTINUE, TRUNCATED -> { /* 继续下一轮 */ }
                 case NORMAL_END -> {
                     totalTurns = turn;
-                    emit(new LoopComplete(turn));
                     termination = Termination.NORMAL;
+                    emit(new LoopComplete(turn));
                     return;
                 }
                 case MAX_HIT -> {
                     totalTurns = turn;
-                    emit(new LoopComplete(turn));
                     termination = Termination.MAX_ITERATIONS;
+                    emit(new LoopComplete(turn));
                     return;
                 }
                 case CANCELED -> {
                     termination = Termination.CANCELED;
                     return;
                 }
+                case PLAN_DELIVERED -> {
+                    totalTurns = turn;
+                    termination = Termination.PLAN_DELIVERED;
+                    emit(new LoopComplete(turn));
+                    return;
+                }
                 case ERROR -> {
                     totalTurns = turn;
-                    emit(new LoopComplete(turn));
                     termination = Termination.ERROR;
+                    emit(new LoopComplete(turn));
                     return;
                 }
             }
@@ -135,8 +168,8 @@ public class Agent {
         }
         // 循环自然耗尽（最后轮截断恢复后无后续轮）：按触顶终止
         totalTurns = maxIterations;
-        emit(new LoopComplete(maxIterations));
         termination = Termination.MAX_ITERATIONS;
+        emit(new LoopComplete(maxIterations));
     }
 
     private TurnOutcome runTurn(int turn) {
@@ -146,7 +179,7 @@ public class Agent {
                 return TurnOutcome.cancelled();
             }
             TurnCollector collector = new TurnCollector(events, cancelled);
-            boolean cancelledDuringStream = stream(conversation.buildRequest(), collector);
+            boolean cancelledDuringStream = stream(buildPlanAwareRequest(turn), collector);
 
             if (cancelledDuringStream || cancelled.get()) {
                 // 历史一致性（R5）：取消前已收集的 tool_use 必须配对结果，防悬空
@@ -192,6 +225,22 @@ public class Agent {
                 conversation.addMessage(ChatMessage.of(ChatMessage.Role.USER, TRUNCATION_CONTINUE_HINT));
                 recoveryCount++;
                 return TurnOutcome.truncated();
+            }
+
+            // plan 模式交付：本轮调用 ExitPlanMode → 执行 + 落盘计划 → 结束循环（PLAN_DELIVERED）
+            if (planMode && hasExitPlanMode(collector.toolUses())) {
+                addAssistantMessage(collector.text(), collector.toolUses());
+                executeTools(collector.toolUses());
+                if (cancelled.get()) {
+                    return TurnOutcome.cancelled();
+                }
+                try {
+                    planPath = planWriter.savePlan(context.workingDirectory(), collector.text());
+                } catch (IOException e) {
+                    emit(new ErrorEvent("计划保存失败：" + e.getMessage()));
+                    return TurnOutcome.error();
+                }
+                return TurnOutcome.planDelivered();
             }
 
             if (collector.toolUses().isEmpty()) {
@@ -277,7 +326,7 @@ public class Agent {
         if (toolUses.isEmpty()) {
             return;
         }
-        StreamingToolExecutor executor = new StreamingToolExecutor(registry, context);
+        StreamingToolExecutor executor = new StreamingToolExecutor(registry, planMode ? planContext : context);
         List<ToolResult> results = executor.execute(toolUses, events, cancelled);
         List<ToolResultBlock> blocks = new ArrayList<>(results.size());
         for (int i = 0; i < toolUses.size(); i++) {
@@ -297,6 +346,38 @@ public class Agent {
         conversation.addToolResults(blocks);
     }
 
+    /** 按 plan 模式组装请求：工具列表动态过滤 + 系统提醒注入（仅进请求不进历史） */
+    private ChatRequest buildPlanAwareRequest(int turn) {
+        if (planMode) {
+            return conversation.buildRequest(planTools(),
+                    ChatMessage.of(ChatMessage.Role.SYSTEM, PlanModePrompt.buildReminder(turn)));
+        }
+        return conversation.buildRequest(normalTools(), null);
+    }
+
+    /** plan 模式工具列表：读类工具 + ExitPlanMode */
+    private List<Tool> planTools() {
+        List<Tool> result = new ArrayList<>();
+        for (Tool tool : registry.availableList()) {
+            if (tool.permission() == Permission.READ) {
+                result.add(tool);
+            }
+        }
+        result.add(exitPlanMode);
+        return result;
+    }
+
+    /** 普通模式工具列表：全部可用工具去掉 ExitPlanMode */
+    private List<Tool> normalTools() {
+        return registry.availableList().stream()
+                .filter(tool -> !EXIT_PLAN_MODE.equals(tool.name()))
+                .toList();
+    }
+
+    private static boolean hasExitPlanMode(List<ToolUseBlock> toolUses) {
+        return toolUses.stream().anyMatch(tu -> EXIT_PLAN_MODE.equals(tu.name()));
+    }
+
     private static boolean isTruncated(String stopReason) {
         return "max_tokens".equals(stopReason) || "length".equals(stopReason);
     }
@@ -313,7 +394,7 @@ public class Agent {
         events.offer(event);
     }
 
-    private enum TurnKind { CONTINUE, TRUNCATED, NORMAL_END, MAX_HIT, CANCELED, ERROR }
+    private enum TurnKind { CONTINUE, TRUNCATED, NORMAL_END, MAX_HIT, CANCELED, PLAN_DELIVERED, ERROR }
 
     private record TurnOutcome(TurnKind kind) {
         static TurnOutcome continueTurn() { return new TurnOutcome(TurnKind.CONTINUE); }
@@ -321,6 +402,7 @@ public class Agent {
         static TurnOutcome normalEnd() { return new TurnOutcome(TurnKind.NORMAL_END); }
         static TurnOutcome maxHit() { return new TurnOutcome(TurnKind.MAX_HIT); }
         static TurnOutcome cancelled() { return new TurnOutcome(TurnKind.CANCELED); }
+        static TurnOutcome planDelivered() { return new TurnOutcome(TurnKind.PLAN_DELIVERED); }
         static TurnOutcome error() { return new TurnOutcome(TurnKind.ERROR); }
     }
 }

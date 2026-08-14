@@ -210,103 +210,21 @@ class LiveRegionRendererTest {
         assertEquals(0, renderer.rowsWritten());
     }
 
-    // ---- 新增：footer 追加式路径 ----
+    // ---- 新增：appendCommitted 追加式空行语义 ----
 
     @Test
-    void truncateToWidthLeavesShortLineUnchanged() {
-        assertEquals("abc", LiveRegionRenderer.truncateToWidth("abc", 10));
-        assertEquals("", LiveRegionRenderer.truncateToWidth("", 10));
-    }
-
-    @Test
-    void truncateToWidthCutsLongLineToWithinWidth() {
-        String cut = LiveRegionRenderer.truncateToWidth("abcdefghij", 4);
-        assertEquals(4, displayWidth(cut));
-        assertTrue(cut.startsWith("abcd"), "截断保留最长前缀");
-        assertTrue(cut.endsWith("\033[0m"), "截断处补 RESET 防颜色泄漏");
-    }
-
-    @Test
-    void truncateToWidthHandlesCjkWidth() {
-        // CJK 每字 2 列：宽度 6 恰好放下「一二三」，下一个字放不下则截断
-        assertEquals("一二三", LiveRegionRenderer.truncateToWidth("一二三四五六", 6).replace("\033[0m", ""));
-    }
-
-    @Test
-    void truncateToWidthKeepsAnsiSequenceIntact() {
-        String cut = LiveRegionRenderer.truncateToWidth("\033[31m" + "一二三四五" + "\033[0m", 6);
-        assertTrue(cut.startsWith("\033[31m"), "保留前导颜色");
-        assertEquals(6, displayWidth(cut), "截断后显示宽度 ≤ 终端宽度");
-        assertTrue(cut.endsWith("\033[0m"));
-    }
-
-    @Test
-    void truncateToWidthOfWidthZeroReturnsEmpty() {
-        assertEquals("", LiveRegionRenderer.truncateToWidth("abc", 0));
-        assertEquals("", LiveRegionRenderer.truncateToWidth("abc", -1));
-    }
-
-    @Test
-    void redrawFooterWritesCommittedThenTruncatedFooterOnFirstFrame() {
+    void appendCommittedWritesBlankLineForLoneNewline() {
         StringWriter sw = new StringWriter();
         LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
-        renderer.redrawFooter(sw, List.of("line1"), List.of("abcdefghij"));
-        // 首帧无上移：清到屏尾 → 已提交行 → footer 截断到 20 内
-        assertEquals("\033[J" + "line1\r\n" + "abcdefghij\r\n", sw.toString());
-        assertEquals(1, renderer.footerRows());
+        renderer.appendCommitted(sw, "\n");
+        assertEquals("\r\n", sw.toString());
     }
 
     @Test
-    void redrawFooterWritesUpMoveOnSubsequentFrame() {
+    void appendCommittedKeepsBlankLinesBetweenLines() {
+        StringWriter sw = new StringWriter();
         LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
-        renderer.redrawFooter(new StringWriter(), List.of(), List.of("a"));
-        assertEquals(1, renderer.footerRows());
-        StringWriter sw = new StringWriter();
-        renderer.redrawFooter(sw, List.of("b"), List.of("c", "d"));
-        assertEquals("\033[1A" + "\033[J" + "b\r\n" + "c\r\n" + "d\r\n", sw.toString());
-        assertEquals(2, renderer.footerRows());
-    }
-
-    @Test
-    void redrawFooterTruncatesFooterRowsToWidth() {
-        StringWriter sw = new StringWriter();
-        LiveRegionRenderer renderer = new LiveRegionRenderer(4, 10);
-        renderer.redrawFooter(sw, List.of(), List.of("abcdefghij"));
-        assertEquals("\033[J" + "abcd\033[0m\r\n", sw.toString(), "footer 行截断到终端宽度");
-    }
-
-    @Test
-    void commitFooterClearsFooterAndWritesCommitted() {
-        LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
-        renderer.redrawFooter(new StringWriter(), List.of(), List.of("a", "b"));
-        assertEquals(2, renderer.footerRows());
-        StringWriter sw = new StringWriter();
-        renderer.commitFooter(sw, List.of("done"));
-        assertEquals("\033[2A" + "\033[J" + "done\r\n", sw.toString());
-        assertEquals(0, renderer.footerRows());
-    }
-
-    @Test
-    void redrawFooterAfterSizeChangeResetsFooterRows() {
-        int[] w = {20};
-        int[] h = {10};
-        LiveRegionRenderer renderer = new LiveRegionRenderer(() -> w[0], () -> h[0]);
-        renderer.redrawFooter(new StringWriter(), List.of(), List.of("a"));
-        assertEquals(1, renderer.footerRows());
-        w[0] = 30;
-        StringWriter sw = new StringWriter();
-        renderer.redrawFooter(sw, List.of(), List.of("b"));
-        assertEquals("\033[J" + "b\r\n", sw.toString(), "尺寸变化后不再上移旧 footer 行数");
-        assertEquals(1, renderer.footerRows());
-    }
-
-    @Test
-    void commitRegionResetsFooterRows() {
-        LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
-        renderer.redrawFooter(new StringWriter(), List.of(), List.of("a", "b", "c"));
-        assertEquals(3, renderer.footerRows());
-        renderer.commitRegion();
-        assertEquals(0, renderer.footerRows());
-        assertEquals(0, renderer.rowsWritten());
+        renderer.appendCommitted(sw, "a\n\nb\n");
+        assertEquals("a\r\n\r\nb\r\n", sw.toString());
     }
 }

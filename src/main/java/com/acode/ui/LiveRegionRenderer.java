@@ -10,14 +10,13 @@ import java.util.List;
 import java.util.function.IntSupplier;
 
 /**
- * 活跃区渲染器：屏幕底部可原地重绘的文本块（流式回复、工具卡片、状态行）。
+ * 活跃区渲染器：屏幕底部可原地重绘的文本块（菜单 overlay 等）。
  * 已完成内容由 appendCommitted 追加进原生回滚（一次打印、可划选复制、永不再改）；
- * 活跃区每次重绘用「上移已写行数 → 清到屏尾 → 重写可见后缀」，不触碰上方历史。
- * 重绘只发相对移动（\033[NA）与清屏（\033[J）序列，绝不用绝对定位（\033[r;cH）。
+ * 重绘用「上移已写行数 → 清到屏尾 → 重写可见后缀」，不触碰上方历史，
+ * 只发相对移动（\033[NA）与清屏（\033[J）序列，绝不用绝对定位（\033[r;cH）。
+ * 流式回复不再走重绘：由 StreamPrinter 对每个完成的渲染行追加式写屏（无光标操作）。
  */
 public class LiveRegionRenderer {
-
-    private static final String RESET = "\033[0m";
 
     private final IntSupplier widthSupplier;
     private final IntSupplier heightSupplier;
@@ -26,8 +25,6 @@ public class LiveRegionRenderer {
     private int lastH = -1;
     /** 活跃区已写行数：重绘时需从当前光标位置上移回到活跃区顶部的行数。 */
     private int rowsWritten = 0;
-    /** 底部活跃区（footer 追加式路径）已写行数：每行保证恰占一个物理行，故可精确上移。 */
-    private int footerRows = 0;
 
     public LiveRegionRenderer(int width, int height) {
         this(() -> width, () -> height);
@@ -162,93 +159,6 @@ public class LiveRegionRenderer {
     /** 活跃区内容转为回滚中的历史：已写行数归零、屏幕文本保留（重绘状态重置）。 */
     public void commitRegion() {
         rowsWritten = 0;
-        footerRows = 0;
-    }
-
-    /** 底部活跃区（追加式流式）当前已写行数（测试断言用）。 */
-    int footerRows() {
-        return footerRows;
-    }
-
-    /**
-     * 追加式重绘底部活跃区（流式回复/工具卡片用）：按已写 footer 行数精确上移 → 清到屏尾 →
-     * 写本次新增的已提交行（原生折行、可划选、只写一次）与 footer 行（截断到恰一行）。
-     * 已提交行不参与重绘，宽度失配不累积错位；footer 每行恰占一个物理行，上移精确。
-     * 终端尺寸变化时旧 footer 布局失效，先归零重锚定。
-     */
-    public void redrawFooter(Writer out, List<String> newCommitted, List<String> footerLines) {
-        int w = widthSupplier.getAsInt();
-        int h = heightSupplier.getAsInt();
-        if (w != lastW || h != lastH) {
-            footerRows = 0;
-            lastW = w;
-            lastH = h;
-        }
-        try {
-            if (footerRows > 0) {
-                out.write("\033[" + footerRows + "A");
-            }
-            out.write("\033[J");
-            for (String line : newCommitted) {
-                out.write(line.replace("\r", "") + "\r\n");
-            }
-            for (String line : footerLines) {
-                out.write(truncateToWidth(line, w) + "\r\n");
-            }
-            out.flush();
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-        footerRows = footerLines.size();
-    }
-
-    /** 轮次收尾：把 footer 内容转正为已提交行、footer 清零（后续追加从下方开始）。 */
-    public void commitFooter(Writer out, List<String> newCommitted) {
-        redrawFooter(out, newCommitted, List.of());
-    }
-
-    /**
-     * 按终端显示宽度截断单行：跳过 ANSI（SGR 颜色）序列、按 wcwidth 度量（CJK 占 2 列），
-     * 切到最长前缀显示宽度 ≤ width；截断处补 RESET 防颜色泄漏。返回文本必不折行（恰一行）。
-     * 不加省略号：流式行本就未完成，下一帧尾部替换；省略号自身宽度歧义会破坏「恰一行」保证。
-     */
-    static String truncateToWidth(String line, int width) {
-        if (width <= 0) {
-            return "";
-        }
-        StringBuilder cur = new StringBuilder();
-        int disp = 0;
-        int i = 0;
-        int n = line.length();
-        while (i < n) {
-            char c = line.charAt(i);
-            if (c == '\033') {
-                int j = i + 1;
-                if (j < n && line.charAt(j) == '[') {
-                    j++;
-                    while (j < n && !isAnsiFinalByte(line.charAt(j))) {
-                        j++;
-                    }
-                    j++;
-                } else {
-                    j++;
-                }
-                cur.append(line, i, j);
-                i = j;
-            } else {
-                int cp = line.codePointAt(i);
-                int w = WCWidth.wcwidth(cp);
-                int cnt = Character.charCount(cp);
-                if (w > 0 && disp + w > width) {
-                    cur.append(RESET);
-                    return cur.toString();
-                }
-                cur.append(line, i, i + cnt);
-                disp += Math.max(0, w);
-                i += cnt;
-            }
-        }
-        return cur.toString();
     }
 
     private static void writeSequence(Writer out, int up, List<String> segs) {

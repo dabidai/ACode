@@ -43,8 +43,20 @@ class ToolCallDisplayTest {
         assertEquals(1, lines.size());
         String line = lines.get(0);
         assertTrue(line.contains("ReadFile"));
-        assertTrue(line.contains("运行中"));
+        assertTrue(line.contains("调用工具"));
         assertTrue(line.contains(ToolCallDisplay.STYLE_RUNNING));
+    }
+
+    @Test
+    void replacingLinesResetsScreenAppended() {
+        ToolCallDisplay card = new ToolCallDisplay("ReadFile", "file_path=\"a.txt\"");
+        card.appendRunning();
+        card.markAppended(1);
+        assertEquals(1, card.screenAppended());
+        card.appendRunning();
+        assertEquals(0, card.screenAppended(), "替换渲染行后未写屏计数应归零");
+        card.appendDone(ToolResult.success("ok"));
+        assertEquals(0, card.screenAppended(), "终态行替换后未写屏计数应归零");
     }
 
     @Test

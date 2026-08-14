@@ -5,17 +5,15 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.io.Writer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 用 {@link FakeTerminal} 忠实模拟终端（折行/滚动/光标上移/清屏），驱动真实的
- * LiveRegionRenderer + StreamPrinter 走「追加式流式」（完整行提交进回滚 + footer 重绘），
- * 断言「增量流式的最终屏幕」与「一次性渲染最终内容」逐行逐格一致。
- * 追加式下完整行只写一次、footer 每行截断到恰一物理行，宽度失配不再累积错位；
- * 该测试守护的是「真实终端上代码假定宽度 ≠ 终端实际宽度」时不乱码的回归。
+ * 用 {@link FakeTerminal} 忠实模拟终端（折行/滚动），驱动真实的 LiveRegionRenderer +
+ * StreamPrinter 走「纯追加式流式」（每个完成的渲染行经 appendCommitted 写屏一次、无任何
+ * 光标操作序列），断言「增量流式的最终屏幕」与「一次性渲染最终内容」逐行逐格一致，
+ * 并断言全程不发射 \033[NA / \033[J（追加式无重绘，宽度失配在真实终端也不可能错位）。
  */
 class LiveRegionTerminalSimTest {
 
@@ -58,7 +56,7 @@ class LiveRegionTerminalSimTest {
         int height = 24;
         String full = fullText();
 
-        // 实际：逐字符增量流式（追加式：完整行提交 + footer 重绘）
+        // 实际：逐字符增量流式（纯追加式）
         FakeTerminal actual = new FakeTerminal(termWidth, height);
         LiveRegionRenderer live = new LiveRegionRenderer(codeWidth, height);
         if (!committed.isEmpty()) {
@@ -68,7 +66,7 @@ class LiveRegionTerminalSimTest {
         streamCharByChar(printer);
         printer.finishTurn();
 
-        // 期望：一次性把完整文本各渲染行作已提交行写屏（屏幕自然滚动）
+        // 期望：一次性把完整文本各渲染行作已提交行追加写屏（与流式同一机制）
         FakeTerminal expected = new FakeTerminal(termWidth, height);
         LiveRegionRenderer elive = new LiveRegionRenderer(codeWidth, height);
         if (!committed.isEmpty()) {
@@ -76,14 +74,8 @@ class LiveRegionTerminalSimTest {
         }
         MarkdownRenderer renderer = new MarkdownRenderer();
         renderer.append(full);
-        Writer ew = expected.writer();
-        try {
-            for (String line : splitLines(renderer.render())) {
-                ew.write(line.replace("\r", "") + "\r\n");
-            }
-            ew.flush();
-        } catch (java.io.IOException e) {
-            throw new java.io.UncheckedIOException(e);
+        for (String line : splitLines(renderer.render())) {
+            elive.appendCommitted(expected.writer(), line + "\n");
         }
 
         StringBuilder diff = new StringBuilder();
@@ -94,58 +86,31 @@ class LiveRegionTerminalSimTest {
                         .append("\n  actual: [").append(actual.line(r)).append("]\n");
             }
         }
+        String debug = actual.debugLog();
+        assertTrue(!hasCursorOps(debug),
+                "追加式流式不应发射光标上移/清屏序列：\n" + debug);
         assertTrue(diff.isEmpty(),
-                "增量流式与一次性渲染不一致（活跃区重绘错位），共 "
+                "增量流式与一次性渲染不一致（追加式应逐行一致），共 "
                         + diff.toString().lines().count() / 3 + " 行：\n" + diff
                         + "\nACTUAL SCREEN:\n" + actual.screenText());
     }
 
-    /** 宽度失配下的内容连贯断言：各渲染行按序、恰好一次出现在最终屏幕。 */
-    private static void assertCommittedContentCoherent(int termWidth, int codeWidth, String committed) {
-        int height = 24;
-        String full = fullText();
-
-        FakeTerminal actual = new FakeTerminal(termWidth, height);
-        LiveRegionRenderer live = new LiveRegionRenderer(codeWidth, height);
-        if (!committed.isEmpty()) {
-            live.appendCommitted(actual.writer(), committed);
-        }
-        StreamPrinter printer = new StreamPrinter(new OutputPane(), live, actual.writer());
-        streamCharByChar(printer);
-        printer.finishTurn();
-
-        String compact = actual.screenText().replaceAll("\\s", "");
-        if (!committed.isEmpty()) {
-            assertTrue(compact.contains(committed.replaceAll("\\s", "")),
-                    "已提交输入行应完整保留（宽度失配也不抹除）：\n" + actual.screenText());
-        }
-        int last = -1;
-        for (String m : renderedVisibleLines(full)) {
-            int idx = compact.indexOf(m, last + 1);
-            assertTrue(idx > last,
-                    "渲染行应按序完整出现（宽度失配也不错位/抹除）：[" + m + "]\n屏幕：\n" + actual.screenText());
-            assertTrue(compact.indexOf(m, idx + 1) == -1,
-                    "渲染行不应重复出现（宽度失配也不重复）：[" + m + "]\n屏幕：\n" + actual.screenText());
-            last = idx;
-        }
-    }
-
-    /** full 文本经 MarkdownRenderer 渲染后的可见行（去 ANSI、去空白，空行跳过）。 */
-    private static List<String> renderedVisibleLines(String text) {
-        MarkdownRenderer renderer = new MarkdownRenderer();
-        renderer.append(text);
-        List<String> out = new ArrayList<>();
-        for (String line : splitLines(renderer.render())) {
-            String m = stripAnsi(line).replaceAll("\\s", "");
-            if (!m.isEmpty()) {
-                out.add(m);
+    /** debugLog 中是否存在光标上移（\033[NA）或清屏（\033[J）序列（SGR 以 m 结尾不算）。 */
+    private static boolean hasCursorOps(String s) {
+        char esc = '\033';
+        for (int i = 0; i + 1 < s.length(); i++) {
+            if (s.charAt(i) == esc && s.charAt(i + 1) == '[') {
+                int j = i + 2;
+                while (j < s.length() && (s.charAt(j) >= '0' && s.charAt(j) <= '9'
+                        || s.charAt(j) == ';' || s.charAt(j) == '?')) {
+                    j++;
+                }
+                if (j < s.length() && (s.charAt(j) == 'A' || s.charAt(j) == 'J')) {
+                    return true;
+                }
             }
         }
-        return out;
-    }
-
-    private static String stripAnsi(String s) {
-        return s.replaceAll("\\[[0-9;]*m", "");
+        return false;
     }
 
     private static List<String> splitLines(String text) {
@@ -169,11 +134,17 @@ class LiveRegionTerminalSimTest {
         assertIncrementalMatchesClean(80, 80, "");
     }
 
-    /** 终端实际宽度比代码假定窄 2/4 列：完整行只写一次、原生折行，已提交内容不乱码。 */
+    /** 终端实际宽度与代码假定不一致（更窄 / 远窄于渲染行）：追加式下逐行一致、不重绘。 */
     @Test
-    void narrowerTerminalKeepsCommittedContentCoherent() {
-        assertCommittedContentCoherent(78, 80, "● 介绍下pom.xml文件的内容");
-        assertCommittedContentCoherent(76, 80, "● 介绍下pom.xml文件的内容");
+    void mismatchedWidthStillMatchesCleanRender() {
+        assertIncrementalMatchesClean(78, 80, "● 介绍下pom.xml文件的内容");
+        assertIncrementalMatchesClean(76, 80, "● 介绍下pom.xml文件的内容");
+    }
+
+    /** 渲染行长于终端宽度（原生折行）：追加式下两侧仍逐行一致。 */
+    @Test
+    void linesLongerThanTerminalWidthStillMatch() {
+        assertIncrementalMatchesClean(60, 80, "● 介绍下pom.xml文件的内容");
     }
 
     /** 短回复：屏幕应完整包含最终文本。 */
@@ -190,7 +161,7 @@ class LiveRegionTerminalSimTest {
         assertTrue(term.screenText().contains("这是一句话。"), "短回复应完整显示，实际：\n" + term.screenText());
     }
 
-    /** 错误路径：清除半截回复并显示错误行，不残留错位。 */
+    /** 错误路径：丢弃半截未完成行、追加错误行，屏幕无残留错位。 */
     @Test
     void errorKeepsScreenCoherent() {
         FakeTerminal term = new FakeTerminal(80, 24);

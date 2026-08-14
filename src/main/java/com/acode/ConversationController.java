@@ -42,8 +42,10 @@ import org.jline.utils.NonBlockingReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.StringWriter;
+import java.io.UncheckedIOException;
 import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -446,9 +448,59 @@ public class ConversationController {
             return screenWriter;
         }
         if (tui != null) {
-            return tui.terminal().writer();
+            Writer w = tui.terminal().writer();
+            String tee = System.getenv("ACODE_TEE");
+            if (tee == null) {
+                return w;
+            }
+            TeeWriter tw = new TeeWriter(w, tee);
+            try {
+                tw.logOnly("\n== ACODE TEE w=" + tui.width() + " h=" + tui.height() + " ==\n");
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+            return tw;
         }
         return new StringWriter();
+    }
+
+    /** 诊断用：把写进终端的每个字节按原样追加到日志文件（含 ANSI 与 \r\n），环境变量 ACODE_TEE 指定路径。 */
+    private static final class TeeWriter extends Writer {
+        private final Writer target;
+        private final BufferedWriter log;
+
+        TeeWriter(Writer target, String path) {
+            this.target = target;
+            try {
+                this.log = new BufferedWriter(new java.io.FileWriter(path, true));
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+
+        @Override
+        public void write(char[] cbuf, int off, int len) throws IOException {
+            target.write(cbuf, off, len);
+            log.write("[" + Thread.currentThread().getName() + "]");
+            log.write(cbuf, off, len);
+            log.flush();
+        }
+
+        /** 只写日志文件、不进终端（诊断头信息用）。 */
+        void logOnly(String s) throws IOException {
+            log.write(s);
+            log.flush();
+        }
+
+        @Override
+        public void flush() throws IOException {
+            target.flush();
+        }
+
+        @Override
+        public void close() throws IOException {
+            target.close();
+        }
     }
 
     /** 测试用：访问对话历史 */
@@ -467,7 +519,7 @@ public class ConversationController {
         output.append("● " + input + "\n");
         LiveRegionRenderer live = liveRenderer();
         Writer writer = screenWriter();
-        live.commitRegion(); // 上一轮活跃区已留在屏上作历史，本轮重绘状态（含 footer）归零
+        live.commitRegion(); // 上一轮活跃区已留在屏上作历史，本轮菜单重绘状态归零
         live.appendCommitted(writer, "● " + input);
 
         Agent agent = new Agent(provider, conversation, toolRegistry,

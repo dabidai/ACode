@@ -87,14 +87,14 @@ class StreamPrinterTest {
     }
 
     @Test
-    void redrawTriggeredOnEachDeltaAndError() {
+    void writeHappensOnlyOnCompletedLine() {
         OutputPane pane = new OutputPane();
         CountingRenderer live = new CountingRenderer();
         StreamPrinter printer = new StreamPrinter(pane, live, new StringWriter());
-        printer.onDelta("a");
-        printer.onDelta("b");
-        printer.onError(new ProviderException("x"));
-        assertEquals(3, live.redraws.get());
+        printer.onDelta("a\n");   // 完整行 → 1 次写屏
+        printer.onDelta("b");     // 未完成行不写屏
+        printer.onError(new ProviderException("x")); // 错误行 → 共 2 次
+        assertEquals(2, live.appends.get());
     }
 
     @Test
@@ -103,6 +103,15 @@ class StreamPrinterTest {
         StreamPrinter printer = printer(pane);
         printer.onDelta("`code`");
         assertTrue(pane.lines().get(0).contains(MarkdownRenderer.STYLE_INLINE_CODE));
+    }
+
+    @Test
+    void blankLinesPreservedInScreenWrite() {
+        OutputPane pane = new OutputPane();
+        StringWriter sw = new StringWriter();
+        StreamPrinter printer = new StreamPrinter(pane, new LiveRegionRenderer(80, 24), sw);
+        printer.onDelta("a\n\nb\n");
+        assertTrue(sw.toString().contains("a\r\n\r\nb\r\n"), "空行应保留在写屏输出：[" + sw + "]");
     }
 
     @Test
@@ -115,8 +124,8 @@ class StreamPrinterTest {
                 JSON.createObjectNode().put("file_path", "a.txt")));
         assertEquals(1, pane.lineCount(), "运行中卡片不写入内容模型，模型只保留已提交文本");
         assertTrue(pane.lines().get(0).contains("先看下文件"), "文本应保留在模型中");
-        assertTrue(sw.toString().contains("ReadFile"), "运行中卡片应渲染进活跃区");
-        assertTrue(sw.toString().contains("运行中"));
+        assertTrue(sw.toString().contains("ReadFile"), "运行中卡片应追加写屏");
+        assertTrue(sw.toString().contains("调用工具"));
     }
 
     @Test
@@ -167,18 +176,18 @@ class StreamPrinterTest {
         assertEquals(0, pane.lineCount(), "未 updateToolCalls 的运行中卡片不进入内容模型");
     }
 
-    /** 计数活跃区重绘次数的假渲染器（追加式路径）。 */
+    /** 计数追加写屏次数的假渲染器（追加式路径）。 */
     static class CountingRenderer extends LiveRegionRenderer {
-        final AtomicInteger redraws = new AtomicInteger();
+        final AtomicInteger appends = new AtomicInteger();
 
         CountingRenderer() {
             super(80, 24);
         }
 
         @Override
-        public void redrawFooter(Writer out, List<String> newCommitted, List<String> footerLines) {
-            redraws.incrementAndGet();
-            super.redrawFooter(out, newCommitted, footerLines);
+        public void appendCommitted(Writer out, String text) {
+            appends.incrementAndGet();
+            super.appendCommitted(out, text);
         }
     }
 }

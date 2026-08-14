@@ -265,7 +265,7 @@ class ConversationControllerTest {
     }
 
     @Test
-    void streamingDeltasTriggerLiveRedraw() throws Exception {
+    void streamingDeltasTriggerAppendWriteOnFinishTurn() throws Exception {
         FakeProvider provider = FakeProvider.scripted(List.of(
                 List.of(FakeProvider.delta("第一段"), FakeProvider.delta("第二段"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
@@ -273,10 +273,13 @@ class ConversationControllerTest {
         controller.setOutput(output);
         CountingLive live = new CountingLive(80, 24);
         controller.setLive(live);
-        controller.setScreenWriter(new StringWriter());
+        StringWriter sw = new StringWriter();
+        controller.setScreenWriter(sw);
         controller.handleExchange("你好", () -> false, () -> { });
 
-        assertTrue(live.redraws.get() >= 2, "流式增量应每次触发活跃区重绘");
+        // 无换行的增量不逐段写屏，轮次收尾 finishTurn 一次性提交
+        assertTrue(live.appends.get() >= 1, "流式收尾应触发追加写屏");
+        assertTrue(sw.toString().contains("第一段第二段"), "最终文本应完整写屏：[" + sw + "]");
         assertTrue(String.join("\n", output.lines()).contains("第一段"), "内容模型仍应收到流式文本");
     }
 
@@ -300,18 +303,18 @@ class ConversationControllerTest {
         assertTrue(ConversationController.renderHistoryMessage(failure).contains("[工具结果 失败"));
     }
 
-    /** 计数活跃区重绘次数的假渲染器（追加式路径）。 */
+    /** 计数追加写屏次数的假渲染器（追加式路径）。 */
     static class CountingLive extends LiveRegionRenderer {
-        final AtomicInteger redraws = new AtomicInteger();
+        final AtomicInteger appends = new AtomicInteger();
 
         CountingLive(int width, int height) {
             super(width, height);
         }
 
         @Override
-        public void redrawFooter(Writer out, List<String> newCommitted, List<String> footerLines) {
-            redraws.incrementAndGet();
-            super.redrawFooter(out, newCommitted, footerLines);
+        public void appendCommitted(Writer out, String text) {
+            appends.incrementAndGet();
+            super.appendCommitted(out, text);
         }
     }
 }

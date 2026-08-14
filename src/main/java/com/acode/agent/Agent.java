@@ -404,7 +404,7 @@ public class Agent {
     }
 
     private void emit(AgentEvent event) {
-        events.offer(event);
+        AgentEvent.putSafe(events, event);
     }
 
     private enum TurnKind { CONTINUE, TRUNCATED, NORMAL_END, MAX_HIT, CANCELED, PLAN_DELIVERED, ERROR }

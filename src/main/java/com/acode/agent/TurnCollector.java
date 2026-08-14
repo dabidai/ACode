@@ -35,7 +35,7 @@ public class TurnCollector implements ChatListener {
             return;
         }
         text.append(delta);
-        events.offer(new StreamText(delta));
+        AgentEvent.putSafe(events, new StreamText(delta));
     }
 
     @Override
@@ -44,7 +44,7 @@ public class TurnCollector implements ChatListener {
             return;
         }
         toolUses.add(toolUse);
-        events.offer(new ToolUseEvent(toolUse.id(), toolUse.name(), toolUse.input()));
+        AgentEvent.putSafe(events, new ToolUseEvent(toolUse.id(), toolUse.name(), toolUse.input()));
     }
 
     @Override

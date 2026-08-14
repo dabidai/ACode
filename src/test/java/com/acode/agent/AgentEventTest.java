@@ -10,6 +10,10 @@ import com.acode.agent.AgentEvent.TurnComplete;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -81,5 +85,52 @@ class AgentEventTest {
     @Test
     void queueCapacityIs64() {
         assertEquals(64, AgentEvent.QUEUE_CAPACITY);
+    }
+
+    @Test
+    void putSafeEnqueuesEvent() {
+        BlockingQueue<AgentEvent> queue = new ArrayBlockingQueue<>(2);
+        AgentEvent.putSafe(queue, new StreamText("你好"));
+        AgentEvent.putSafe(queue, new ErrorEvent("x"));
+        assertEquals(2, queue.size());
+        assertEquals(new StreamText("你好"), queue.poll());
+        assertEquals(new ErrorEvent("x"), queue.poll());
+    }
+
+    @Test
+    void putSafeBlocksUntilCapacityAndThenCompletes() throws Exception {
+        BlockingQueue<AgentEvent> queue = new ArrayBlockingQueue<>(1);
+        AgentEvent.putSafe(queue, new StreamText("第一"));
+        AtomicBoolean done = new AtomicBoolean(false);
+        Thread producer = new Thread(() -> {
+            AgentEvent.putSafe(queue, new StreamText("第二"));
+            done.set(true);
+        });
+        producer.start();
+        Thread.sleep(100);
+        // 队满时 offer() 会直接放弃，putSafe 必须阻塞到腾位——用 offer() 本测试即失败
+        assertTrue(producer.isAlive(), "队满时 putSafe 应阻塞而非丢事件");
+        AgentEvent polled = queue.poll();
+        assertEquals(new StreamText("第一"), polled);
+        producer.join(1000);
+        assertTrue(done.get(), "腾位后 putSafe 应完成入队");
+        assertEquals(new StreamText("第二"), queue.poll());
+    }
+
+    @Test
+    void putSafeRestoresInterruptFlagWhenInterrupted() throws Exception {
+        BlockingQueue<AgentEvent> queue = new ArrayBlockingQueue<>(1);
+        AgentEvent.putSafe(queue, new StreamText("第一"));
+        Thread producer = new Thread(() ->
+                AgentEvent.putSafe(queue, new StreamText("第二")));
+        producer.start();
+        Thread.sleep(100);
+        assertTrue(producer.isAlive(), "队满时 putSafe 应阻塞");
+        producer.interrupt();
+        producer.join(1000);
+        assertFalse(producer.isAlive(), "被中断的线程应退出");
+        assertTrue(producer.isInterrupted(), "putSafe 被中断后应恢复中断位，供上层取消路径感知");
+        assertEquals(1, queue.size(), "被中断的 put 不应入队");
+        assertEquals(new StreamText("第一"), queue.poll());
     }
 }

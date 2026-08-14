@@ -109,7 +109,7 @@ public class StreamingToolExecutor {
             return;
         }
         results[index] = result;
-        events.offer(new ToolResultEvent(call.id(), call.name(), result.content(), result.isError()));
+        AgentEvent.putSafe(events, new ToolResultEvent(call.id(), call.name(), result.content(), result.isError()));
     }
 
     private static List<ToolResult> fillCancelled(ToolResult[] results) {

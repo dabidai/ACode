@@ -17,6 +17,7 @@ import com.acode.conversation.Conversation;
 import com.acode.provider.ChatMessage;
 import com.acode.provider.ChatProvider;
 import com.acode.provider.ContentBlock;
+import com.acode.provider.ProviderException;
 import com.acode.provider.TextBlock;
 import com.acode.provider.ToolResultBlock;
 import com.acode.provider.ToolUseBlock;
@@ -31,6 +32,7 @@ import com.acode.tool.ToolResult;
 import com.acode.ui.AcodeTerminal;
 import com.acode.ui.CommandRouter;
 import com.acode.ui.InputPane;
+import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
 import com.acode.ui.StreamPrinter;
 import com.acode.ui.ToolCallDisplay;
@@ -41,6 +43,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.StringWriter;
+import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -82,6 +86,8 @@ public class ConversationController {
 
     private AcodeTerminal tui;
     private OutputPane output;
+    private LiveRegionRenderer live;
+    private Writer screenWriter;
 
     public static void run(boolean resume) {
         AppConfig config;
@@ -123,8 +129,12 @@ public class ConversationController {
         try (AcodeTerminal terminal = AcodeTerminal.open()) {
             this.tui = terminal;
             this.output = new OutputPane();
+            LiveRegionRenderer live = liveRenderer();
+            Writer writer = screenWriter();
             output.append(BANNER);
+            live.appendCommitted(writer, BANNER);
             output.appendLine("输入 /help 查看命令，/quit 退出");
+            live.appendCommitted(writer, "输入 /help 查看命令，/quit 退出");
             restoreIfResume();
             mainLoop();
         } catch (IllegalStateException e) {
@@ -139,32 +149,25 @@ public class ConversationController {
         Optional<Session> latest = sessionStore.readLatest();
         if (latest.isEmpty()) {
             output.appendLine("（没有可恢复的会话）");
+            liveRenderer().appendCommitted(screenWriter(), "（没有可恢复的会话）");
             return;
         }
         Session session = latest.get();
+        LiveRegionRenderer live = liveRenderer();
+        Writer writer = screenWriter();
         for (ChatMessage message : session.getMessages()) {
             conversation.addMessage(message);
-            appendHistoryMessage(message);
+            appendHistoryMessage(message, live, writer);
         }
         output.appendLine("（已恢复会话 " + session.getId() + "，共 " + session.getMessages().size() + " 条消息）");
+        live.appendCommitted(writer, "（已恢复会话 " + session.getId() + "，共 " + session.getMessages().size() + " 条消息）");
     }
 
     private void mainLoop() {
-        InputPane input = new InputPane(tui.terminal(), "> ", new InputPane.ScrollHandler() {
-            @Override
-            public void scroll(int delta) {
-                output.scrollBy(delta);
-                tui.repaintOutputArea(output);
-            }
-
-            @Override
-            public void scrollToY(int y) {
-                tui.scrollToMouseY(output, y);
-                tui.repaintOutputArea(output);
-            }
-        });
+        InputPane input = new InputPane(tui.terminal(), "> ");
+        LiveRegionRenderer live = liveRenderer();
+        Writer writer = screenWriter();
         while (true) {
-            tui.repaint(output);
             String line;
             try {
                 line = input.readLine();
@@ -172,31 +175,34 @@ public class ConversationController {
                 saveSession();
                 return;
             }
-            // JLine 回车会物理滚动终端（旧分隔线残影残留），清 shadow 让下次 repaint 全量重绘擦掉
-            tui.invalidateShadow();
             switch (CommandRouter.route(line)) {
                 case QUIT -> {
                     saveSession();
                     return;
                 }
                 case CLEAR -> {
-                    output.clear();
-                    output.resetScroll();
                     conversation.clear();
+                    output.clear();
                     output.appendLine("（已清空）");
+                    live.appendCommitted(writer, "（已清空）");
                 }
-                case HELP -> output.append(CommandRouter.HELP_TEXT);
+                case HELP -> {
+                    output.append(CommandRouter.HELP_TEXT);
+                    live.appendCommitted(writer, CommandRouter.HELP_TEXT);
+                }
                 case RESUME -> selectSession();
                 case PLAN -> {
                     planMode = true;
                     output.appendLine("（已进入规划模式：只读探索，计划落盘到 .acode/plans/）");
+                    live.appendCommitted(writer, "（已进入规划模式：只读探索，计划落盘到 .acode/plans/）");
                 }
                 case DO -> {
                     planMode = false;
                     output.appendLine("（已退出规划模式，开始执行）");
+                    live.appendCommitted(writer, "（已退出规划模式，开始执行）");
                 }
                 case SKIP -> {
-                    // 空白输入，仅重绘
+                    // 空白输入，忽略
                 }
                 case CHAT -> handleChat(line);
             }
@@ -211,35 +217,34 @@ public class ConversationController {
 
     /**
      * /resume：列出历史会话，↑/↓ 选择、回车加载、Esc 取消。
-     * 菜单以输出区尾部块呈现，每次按键移除旧块重画，不污染历史消息。
+     * 菜单作为活跃区 overlay 渲染：只重绘屏幕底部、不进回滚；选定/取消后清掉菜单，历史再追加。
      */
     private void selectSession() {
         List<Session> sessions = sessionStore.list();
         if (sessions.isEmpty()) {
             output.appendLine("（没有可恢复的会话）");
+            liveRenderer().appendCommitted(screenWriter(), "（没有可恢复的会话）");
             return;
         }
         drainPendingInput();
+        LiveRegionRenderer live = liveRenderer();
+        Writer writer = screenWriter();
+        live.commitRegion(); // 上次活跃区已留在屏上作历史，菜单从下方空白处画起
         int selected = sessions.size() - 1;
-        int menuStart = output.lineCount();
         while (true) {
-            output.removeLast(output.lineCount() - menuStart);
-            output.appendLine("（↑/↓ 选择会话，回车加载，Esc 取消）");
-            for (int i = 0; i < sessions.size(); i++) {
-                output.appendLine(menuLine(sessions.get(i), i == selected));
-            }
-            tui.repaint(output);
+            live.redraw(writer, menuLines(sessions, selected));
             switch (readMenuKey()) {
                 case KEY_UP -> selected = (selected - 1 + sessions.size()) % sessions.size();
                 case KEY_DOWN -> selected = (selected + 1) % sessions.size();
                 case KEY_ENTER -> {
-                    output.removeLast(output.lineCount() - menuStart);
+                    live.clear(writer);
                     loadSession(sessions.get(selected));
                     return;
                 }
                 case KEY_CANCEL -> {
-                    output.removeLast(output.lineCount() - menuStart);
+                    live.clear(writer);
                     output.appendLine("（已取消）");
+                    live.appendCommitted(writer, "（已取消）");
                     return;
                 }
                 default -> {
@@ -247,6 +252,16 @@ public class ConversationController {
                 }
             }
         }
+    }
+
+    /** 菜单渲染行：提示 + 逐会话条目（选中行反显），供活跃区 overlay 使用。 */
+    private List<String> menuLines(List<Session> sessions, int selected) {
+        List<String> lines = new ArrayList<>();
+        lines.add("（↑/↓ 选择会话，回车加载，Esc 取消）");
+        for (int i = 0; i < sessions.size(); i++) {
+            lines.add(menuLine(sessions.get(i), i == selected));
+        }
+        return lines;
     }
 
     /** 单条会话菜单行：时间戳 + 消息数 + 首条用户消息预览；选中行反显。 */
@@ -326,33 +341,31 @@ public class ConversationController {
         }
     }
 
-    /** 用某个会话的历史替换当前对话：清空上下文与界面，回显该会话全部消息。 */
+    /** 用某个会话的历史替换当前对话：回滚为 append-only，历史经追加式渲染进回滚（不重复打印 banner）。 */
     private void loadSession(Session session) {
         conversation.clear();
-        for (ChatMessage message : session.getMessages()) {
-            conversation.addMessage(message);
-        }
-        output.clear();
-        output.resetScroll();
-        output.append(BANNER);
-        output.appendLine("输入 /help 查看命令，/quit 退出");
+        LiveRegionRenderer live = liveRenderer();
+        Writer writer = screenWriter();
         output.appendLine("（已加载会话 " + session.getId() + "，共 " + session.getMessages().size() + " 条消息）");
+        live.appendCommitted(writer, "（已加载会话 " + session.getId() + "，共 " + session.getMessages().size() + " 条消息）");
         for (ChatMessage message : session.getMessages()) {
             conversation.addMessage(message);
-            appendHistoryMessage(message);
+            appendHistoryMessage(message, live, writer);
         }
     }
 
-    /** 把一条历史消息渲染进输出区：文本照常，工具块压缩为单行摘要。 */
-    private void appendHistoryMessage(ChatMessage message) {
+    /** 把一条历史消息渲染进回滚：内容模型 + 活跃区追加式写屏，工具块压缩为单行摘要。 */
+    private void appendHistoryMessage(ChatMessage message, LiveRegionRenderer live, Writer writer) {
         String rendered = renderHistoryMessage(message);
         if (rendered.isEmpty()) {
             return;
         }
         if (message.role() == ChatMessage.Role.USER) {
             output.append("● " + rendered + "\n");
+            live.appendCommitted(writer, "● " + rendered);
         } else {
             output.append(rendered);
+            live.appendCommitted(writer, rendered);
         }
     }
 
@@ -398,12 +411,44 @@ public class ConversationController {
     }
 
     private void handleChat(String input) {
-        handleExchange(input, this::ctrlCPressed, () -> tui.repaint(output));
+        handleExchange(input, this::ctrlCPressed, () -> { });
     }
 
     /** 测试用：注入输出面板（真实流程在 start() 中创建） */
     void setOutput(OutputPane output) {
         this.output = output;
+    }
+
+    /** 测试用：注入活跃区渲染器（断言流式重绘；真实流程按终端尺寸新建） */
+    void setLive(LiveRegionRenderer live) {
+        this.live = live;
+    }
+
+    /** 测试用：注入活跃区输出目标（真实流程用终端 writer） */
+    void setScreenWriter(Writer writer) {
+        this.screenWriter = writer;
+    }
+
+    /** 活跃区渲染器：测试注入优先，否则按终端尺寸实时新建（窗口变化随读随取）。 */
+    private LiveRegionRenderer liveRenderer() {
+        if (live != null) {
+            return live;
+        }
+        if (tui != null) {
+            return new LiveRegionRenderer(tui::width, tui::height);
+        }
+        return new LiveRegionRenderer(80, 24);
+    }
+
+    /** 活跃区输出目标：测试注入优先，否则用终端 writer；无终端时丢弃到 StringWriter。 */
+    private Writer screenWriter() {
+        if (screenWriter != null) {
+            return screenWriter;
+        }
+        if (tui != null) {
+            return tui.terminal().writer();
+        }
+        return new StringWriter();
     }
 
     /** 测试用：访问对话历史 */
@@ -414,26 +459,29 @@ public class ConversationController {
     /**
      * 单次输入触发 Agent 循环：追加 user 消息 → new Agent(...).run() 在虚拟线程跑 ReAct 循环 →
      * 主线程订阅事件队列逐条渲染（流式文本 / 工具卡片 / 轮次收尾 / 重试 / 错误 / 循环结束提示）。
-     * ctrlC 注入中断源（真实终端为 Ctrl+C），repaint 注入重绘回调，便于用 FakeProvider 单测编排。
+     * ctrlC 注入中断源（真实终端为 Ctrl+C），便于用 FakeProvider 单测编排。
+     * repaint 为保留参数：渲染已全部经活跃区完成，测试沿用传 no-op 的签名。
      */
     void handleExchange(String input, BooleanSupplier ctrlC, Runnable repaint) {
-        output.resetScroll();
         conversation.addMessage(ChatMessage.of(ChatMessage.Role.USER, input));
         output.append("● " + input + "\n");
-        repaint.run();
+        LiveRegionRenderer live = liveRenderer();
+        Writer writer = screenWriter();
+        live.commitRegion(); // 上一轮活跃区已留在屏上作历史，本轮重绘状态归零
+        live.appendCommitted(writer, "● " + input);
 
         Agent agent = new Agent(provider, conversation, toolRegistry,
                 new ToolContext(Path.of(System.getProperty("user.dir"))), maxIterations());
         agent.setPlanMode(planMode);
         BlockingQueue<AgentEvent> events = agent.run();
 
-        StreamPrinter printer = new StreamPrinter(output, repaint);
+        StreamPrinter printer = new StreamPrinter(output, live, writer);
         List<ToolResult> turnResults = new ArrayList<>();
         while (true) {
             if (ctrlC.getAsBoolean()) {
                 agent.cancel();
                 output.appendLine("（已中断）");
-                repaint.run();
+                live.appendCommitted(writer, "（已中断）");
                 awaitLoopEnd(agent); // 取消不吐 LoopComplete：等循环线程收尾（补「已取消」）再返回
                 break;
             }
@@ -446,7 +494,7 @@ public class ConversationController {
             }
             if (event instanceof LoopComplete) {
                 printer.updateToolCalls(turnResults);
-                completeLoop(agent);
+                completeLoop(agent, live, writer);
                 break;
             } else if (event instanceof StreamText streamText) {
                 printer.onDelta(streamText.text());
@@ -459,16 +507,15 @@ public class ConversationController {
             } else if (event instanceof TurnComplete) {
                 printer.updateToolCalls(turnResults);
                 turnResults = new ArrayList<>();
-                printer = new StreamPrinter(output, repaint); // R3：跨轮不复用，收尾后新建
+                live.commitRegion(); // 本轮卡片留在屏上作历史，下一轮区域从下方开始
+                printer = new StreamPrinter(output, live, writer);
             } else if (event instanceof RetryEvent retry) {
                 output.appendLine("（重试中：" + retry.reason() + "）");
-                repaint.run();
+                live.appendCommitted(writer, "（重试中：" + retry.reason() + "）");
             } else if (event instanceof ErrorEvent error) {
-                output.appendLine("（错误：" + error.message() + "）");
-                repaint.run();
+                printer.onError(new ProviderException(error.message()));
             }
         }
-        repaint.run();
     }
 
     /** 循环轮数上限：配置缺失时用默认值（与 ConfigValidator 一致） */
@@ -501,22 +548,32 @@ public class ConversationController {
     }
 
     /** 循环收尾：按终止原因补提示（MAX_ITERATIONS / PLAN_DELIVERED / CANCELED / ERROR） */
-    private void completeLoop(Agent agent) {
+    private void completeLoop(Agent agent, LiveRegionRenderer live, Writer writer) {
         switch (agent.termination()) {
-            case MAX_ITERATIONS -> output.appendLine("（达到最大轮数，已停止执行）");
+            case MAX_ITERATIONS -> {
+                output.appendLine("（达到最大轮数，已停止执行）");
+                live.appendCommitted(writer, "（达到最大轮数，已停止执行）");
+            }
             case PLAN_DELIVERED -> {
                 output.appendLine("（计划已交付）");
+                live.appendCommitted(writer, "（计划已交付）");
                 Path plan = agent.planPath();
                 if (plan != null) {
                     try {
-                        output.append(Files.readString(plan));
+                        String content = Files.readString(plan);
+                        output.append(content);
+                        live.appendCommitted(writer, content);
                     } catch (IOException e) {
                         log.warn("读取计划文件失败：{}", e.getMessage());
                     }
                 }
                 output.appendLine("输入 /do 退出 plan 模式开始执行");
+                live.appendCommitted(writer, "输入 /do 退出 plan 模式开始执行");
             }
-            case CANCELED -> output.appendLine("（已中断）");
+            case CANCELED -> {
+                output.appendLine("（已中断）");
+                live.appendCommitted(writer, "（已中断）");
+            }
             case ERROR -> { /* ErrorEvent 已输出错误行，无需重复 */ }
             case NORMAL -> { /* 自然收尾，无提示 */ }
         }

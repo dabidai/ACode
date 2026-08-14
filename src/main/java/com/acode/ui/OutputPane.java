@@ -4,8 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 输出区内容模型：逐行保存，超出上限丢弃最早行，防止内存无限增长。
- * 只管理文本内容，不涉及终端绘制（绘制由 AcodeTerminal 负责）。
+ * 输出区内容模型：逐行保存已提交内容，超出上限丢弃最早行，防止内存无限增长。
+ * 只管理文本内容，不涉及终端绘制（绘制由 LiveRegionRenderer 负责）。
  */
 public class OutputPane {
 
@@ -13,8 +13,6 @@ public class OutputPane {
 
     private final int maxLines;
     private final List<String> lines = new ArrayList<>();
-    /** 滚动回看偏移：0 = 跟随底部；>0 = 向上回看的历史行数（会被视口高度 clamp）。 */
-    private int scrollOffset = 0;
 
     public OutputPane() {
         this(DEFAULT_MAX_LINES);
@@ -68,60 +66,9 @@ public class OutputPane {
     }
 
     /**
-     * 全部行的快照副本（不可修改）。流式输出时工作线程会并发 append，若返回的是底层列表的
-     * 视图，读取方在同一时刻看到的 size 可能不断增长（如 computeWrapCounts 按 size 预分配数组
-     * 后遍历会越界）；快照保证读取方看到稳定的行集。
+     * 全部行的快照副本（不可修改）。流式输出时工作线程会并发 append，快照保证读取方看到稳定的行集。
      */
     public synchronized List<String> lines() {
         return List.copyOf(lines);
-    }
-
-    /** 可见窗口：按滚动偏移取窗口（0 = 底部跟随，>0 = 向上回看）；高度超过内容时偏移被 clamp 到顶部。 */
-    public synchronized List<String> visibleLines(int height) {
-        if (height <= 0 || lines.isEmpty()) {
-            return List.of();
-        }
-        int maxOffset = Math.max(0, lines.size() - height);
-        scrollOffset = Math.min(scrollOffset, maxOffset);
-        int from = Math.max(0, lines.size() - height - scrollOffset);
-        return List.copyOf(lines.subList(from, Math.min(lines.size(), from + height)));
-    }
-
-    /** 向上滚动 n 行（回看更早历史）；偏移会被下次 visibleLines 按视口高度 clamp 到顶部。 */
-    public synchronized void scrollUp(int n) {
-        if (n > 0) {
-            scrollOffset += n;
-        }
-    }
-
-    /** 向下滚动 n 行（回到更晚内容）；最小到 0（跟随底部）。 */
-    public synchronized void scrollDown(int n) {
-        if (n > 0) {
-            scrollOffset = Math.max(0, scrollOffset - n);
-        }
-    }
-
-    /** 统一滚动：delta > 0 向上回看，delta < 0 向下回底部；0 无操作。滚轮传小步长，翻页传一屏。 */
-    public synchronized void scrollBy(int delta) {
-        if (delta > 0) {
-            scrollUp(delta);
-        } else if (delta < 0) {
-            scrollDown(-delta);
-        }
-    }
-
-    /** 回到底部跟随模式；提交新消息/加载会话/清屏后调用，确保视口回到最新内容。 */
-    public synchronized void resetScroll() {
-        scrollOffset = 0;
-    }
-
-    /** 直接设置滚动偏移（0 = 底部跟随；>0 = 向上回看）。上界由 visibleLines 按视口高度 clamp。 */
-    public synchronized void setScrollOffset(int offset) {
-        scrollOffset = Math.max(0, offset);
-    }
-
-    /** 当前滚动偏移（0 = 底部跟随；>0 = 向上回看的历史行数）。 */
-    public synchronized int scrollOffset() {
-        return scrollOffset;
     }
 }

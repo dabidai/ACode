@@ -7,17 +7,21 @@ import com.acode.provider.FakeProvider;
 import com.acode.provider.TextBlock;
 import com.acode.provider.ToolResultBlock;
 import com.acode.provider.ToolUseBlock;
+import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.StringWriter;
+import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -261,6 +265,22 @@ class ConversationControllerTest {
     }
 
     @Test
+    void streamingDeltasTriggerLiveRedraw() throws Exception {
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.delta("第一段"), FakeProvider.delta("第二段"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        CountingLive live = new CountingLive(80, 24);
+        controller.setLive(live);
+        controller.setScreenWriter(new StringWriter());
+        controller.handleExchange("你好", () -> false, () -> { });
+
+        assertTrue(live.redraws.get() >= 2, "流式增量应每次触发活跃区重绘");
+        assertTrue(String.join("\n", output.lines()).contains("第一段"), "内容模型仍应收到流式文本");
+    }
+
+    @Test
     void renderHistoryMessageSummarizesToolBlocks() {
         ChatMessage assistant = new ChatMessage(ChatMessage.Role.ASSISTANT, List.of(
                 new TextBlock("先看文件"),
@@ -278,5 +298,20 @@ class ConversationControllerTest {
         ChatMessage failure = new ChatMessage(ChatMessage.Role.USER, List.of(
                 new ToolResultBlock("id-2", "文件不存在", true)));
         assertTrue(ConversationController.renderHistoryMessage(failure).contains("[工具结果 失败"));
+    }
+
+    /** 计数活跃区重绘次数的假渲染器。 */
+    static class CountingLive extends LiveRegionRenderer {
+        final AtomicInteger redraws = new AtomicInteger();
+
+        CountingLive(int width, int height) {
+            super(width, height);
+        }
+
+        @Override
+        public void redraw(Writer out, List<String> renderLines) {
+            redraws.incrementAndGet();
+            super.redraw(out, renderLines);
+        }
     }
 }

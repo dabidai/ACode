@@ -9,9 +9,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 工具调用卡片：把一次工具调用渲染成输出区若干行。
- * 生命周期：appendRunning() 画「进行中」→ 执行结束后 appendDone() 更新为成功/失败 + 结果摘要。
- * 卡片整体由 StreamPrinter 按批替换，本类只负责渲染与记录自身行数。
+ * 工具调用卡片：把一次工具调用渲染成若干行。渲染与写入解耦——本类只产生渲染行，
+ * 由 StreamPrinter 决定进活跃区还是提交内容模型。
+ * 生命周期：appendRunning() 画「进行中」（仅供活跃区）→ 执行结束后 appendDone()
+ * 更新为成功/失败 + 结果摘要（由 StreamPrinter 写入内容模型）。
  */
 public class ToolCallDisplay {
 
@@ -26,7 +27,7 @@ public class ToolCallDisplay {
 
     private final String toolName;
     private final String paramsSummary;
-    private int lineCount;
+    private List<String> renderedLines = List.of();
 
     public ToolCallDisplay(String toolName, String paramsSummary) {
         this.toolName = toolName;
@@ -52,32 +53,35 @@ public class ToolCallDisplay {
         return String.join(" ", parts);
     }
 
-    /** 在输出区末尾画「进行中」卡片 */
-    public void appendRunning(OutputPane output) {
+    /** 「进行中」卡片渲染行；仅供活跃区渲染，不提交内容模型。 */
+    public List<String> appendRunning() {
         String line = "▸ " + STYLE_NAME + toolName + RESET
                 + (paramsSummary.isEmpty() ? "" : "(" + paramsSummary + ")")
                 + " 运行中…";
-        append(output, STYLE_RUNNING + line + RESET);
+        renderedLines = List.of(STYLE_RUNNING + line + RESET);
+        return renderedLines;
     }
 
-    /** 在输出区末尾画「终态」卡片：成功/失败 + 结果摘要 */
-    public void appendDone(OutputPane output, ToolResult result) {
+    /** 「终态」卡片渲染行：成功/失败 + 结果摘要；由 StreamPrinter 写入内容模型进入回滚。 */
+    public List<String> appendDone(ToolResult result) {
         String head = "▸ " + STYLE_NAME + toolName + RESET
                 + (paramsSummary.isEmpty() ? "" : "(" + paramsSummary + ")");
         boolean ok = result != null && result.isSuccess();
         String style = ok ? STYLE_OK : STYLE_ERR;
         String status = ok ? "成功" : "失败";
         String summary = result != null ? collapse(result.content()) : "（无返回结果）";
-        append(output, style + head + " " + status + "：" + summary + RESET);
+        renderedLines = List.of(style + head + " " + status + "：" + summary + RESET);
+        return renderedLines;
     }
 
+    /** 当前渲染行数（活跃区与模型行数统计用）。 */
     public int lineCount() {
-        return lineCount;
+        return renderedLines.size();
     }
 
-    private void append(OutputPane output, String line) {
-        output.appendLine(line);
-        lineCount++;
+    /** 当前渲染行（运行中或终态）。 */
+    List<String> renderedLines() {
+        return renderedLines;
     }
 
     /** 结果正文压缩为单行摘要：换行折叠、超长截断 */

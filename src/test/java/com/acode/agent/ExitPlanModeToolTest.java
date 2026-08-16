@@ -2,6 +2,7 @@ package com.acode.agent;
 
 import com.acode.tool.ToolContext;
 import com.acode.tool.ToolResult;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -45,5 +46,13 @@ class ExitPlanModeToolTest {
         ToolResult result = tool.execute(JSON.createObjectNode(), context);
 
         assertTrue(result.isError());
+    }
+
+    @Test
+    void inputSchemaDeclaresObjectType() {
+        // Anthropic/OpenAI 均要求 schema 顶层 type:"object"，缺了会 400
+        JsonNode schema = tool.inputSchema();
+        assertEquals("object", schema.path("type").asText());
+        assertTrue(schema.path("properties").isObject());
     }
 }

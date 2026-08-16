@@ -6,6 +6,7 @@ import com.acode.tool.ToolContext;
 import com.acode.tool.ToolResult;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 /**
  * plan 模式交付工具：模型调用后表示计划已完成，Agent 结束循环并落盘计划。
@@ -32,7 +33,12 @@ public class ExitPlanModeTool implements Tool {
 
     @Override
     public JsonNode inputSchema() {
-        return JSON.createObjectNode();
+        // 无参数工具也要声明 type:"object"：Anthropic/OpenAI 均拒绝缺顶层 type 的空 schema
+        ObjectNode schema = JSON.createObjectNode();
+        schema.put("type", "object");
+        schema.putObject("properties");
+        schema.putArray("required");
+        return schema;
     }
 
     @Override

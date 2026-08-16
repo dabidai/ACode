@@ -26,7 +26,10 @@ public class GlobTool extends BaseTool {
     public static final int MAX_RESULTS = 200;
 
     public GlobTool() {
-        super("Glob", "按 glob 模式递归匹配文件路径（支持 **），返回匹配路径列表",
+        super("Glob",
+                "按 glob 模式递归匹配文件路径（支持 **），返回匹配到的路径列表。"
+                        + "需要按文件名查找或列出目录内容时用本工具；不要用 Bash 执行 ls/dir/find 来列文件。"
+                        + "pattern 示例 **/*.java；path 为搜索基准目录，缺省为工作目录。结果超 200 条截断并附提示。",
                 Permission.READ);
     }
 

@@ -22,7 +22,10 @@ public class ReadFileTool extends BaseTool {
     public static final int MAX_LINES = 2000;
 
     public ReadFileTool() {
-        super("ReadFile", "读取文本文件内容，可限定起始行与行数，超长文件自动截断",
+        super("ReadFile",
+                "读取文本文件内容，返回文件文本。可传 offset/limit 定位起始行与最大行数，超长自动截断并附提示。"
+                        + "需要查看文件内容时用本工具；大文件建议先用 Grep 定位相关行，再按 offset/limit 局部读取。"
+                        + "路径相对工作目录解析，也可传绝对路径。二进制文件不可读取，请改用 Bash 执行合适的命令。",
                 Permission.READ);
     }
 

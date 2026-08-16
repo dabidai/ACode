@@ -18,10 +18,14 @@ import java.util.List;
  * 一次调用内做多段精确替换：每段 old 必须在当前内容中恰好匹配一处。
  * 任一段不匹配或匹配不唯一 → 整体失败、文件字节不变；全部通过后按段顺序一次写回。
  */
-public class EditFileTool extends BaseTool {
+public class
+EditFileTool extends BaseTool {
 
     public EditFileTool() {
-        super("EditFile", "多段精确替换文件内容，任一段不匹配或匹配不唯一则整体失败且文件不动",
+        super("EditFile",
+                "在文件中做多段精确替换：每段 old 必须在当前内容中恰好匹配一处，任一段不匹配或匹配不唯一则整体失败、文件不动。"
+                        + "修改已有文件的小片段时用本工具；新建或整体重写用 WriteFile。"
+                        + "edits 为数组，每项含 old（被替换的原文）与 new（新文），须逐字精确匹配（含缩进与空白）。",
                 Permission.WRITE);
     }
 

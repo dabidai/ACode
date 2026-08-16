@@ -19,7 +19,11 @@ import java.util.List;
 public class WriteFileTool extends BaseTool {
 
     public WriteFileTool() {
-        super("WriteFile", "覆盖写整个文件，缺失的父目录自动创建", Permission.WRITE);
+        super("WriteFile",
+                "覆盖写整个文件，缺失的父目录自动创建。新建文件或整体替换内容时用本工具；"
+                        + "只改已有文件的小片段时用 EditFile 更安全。路径相对工作目录解析，也可传绝对路径。"
+                        + "注意：会完全覆盖原内容，不可恢复。",
+                Permission.WRITE);
     }
 
     @Override

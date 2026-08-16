@@ -2,6 +2,7 @@ package com.acode;
 
 import com.acode.agent.Agent;
 import com.acode.agent.AgentEvent;
+import com.acode.agent.AgentEvent.ChoiceRequestEvent;
 import com.acode.agent.AgentEvent.ConfirmationRequestEvent;
 import com.acode.agent.AgentEvent.ErrorEvent;
 import com.acode.agent.AgentEvent.LoopComplete;
@@ -10,6 +11,7 @@ import com.acode.agent.AgentEvent.StreamText;
 import com.acode.agent.AgentEvent.ToolResultEvent;
 import com.acode.agent.AgentEvent.ToolUseEvent;
 import com.acode.agent.AgentEvent.TurnComplete;
+import com.acode.agent.AskUserTool;
 import com.acode.agent.EventConfirmationGate;
 import com.acode.config.AppConfig;
 import com.acode.config.ConfigException;
@@ -37,11 +39,12 @@ import com.acode.ui.ConfirmationPrompt;
 import com.acode.ui.InputPane;
 import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
+import com.acode.ui.SelectionMenu;
 import com.acode.ui.StreamPrinter;
+import com.acode.ui.TerminalMenuKeySource;
 import com.acode.ui.ToolCallDisplay;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.UserInterruptException;
-import org.jline.utils.NonBlockingReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -95,11 +98,11 @@ public class ConversationController {
     private LiveRegionRenderer live;
     private Writer screenWriter;
 
-    /** 主循环输入面板：确认提示经它读行（仅主线程触碰终端，agent 线程安全）。 */
-    private InputPane inputPane;
-
     /** 确认应答器：收到 ConfirmationRequestEvent 后渲染提示并返回批准与否；测试可注入替身。 */
     private Function<ConfirmationRequestEvent, Boolean> confirmAnswerer = this::answerConfirmationPrompt;
+
+    /** 选择应答器：收到 ChoiceRequestEvent 后弹多选项菜单并返回选中项（取消返回 null）；测试可注入替身。 */
+    private Function<ChoiceRequestEvent, String> choiceAnswerer = this::answerChoicePrompt;
 
     public static void run(boolean resume) {
         AppConfig config;
@@ -125,6 +128,7 @@ public class ConversationController {
                 config.getMaxContextTokens());
         this.toolRegistry = new ToolRegistry();
         DefaultToolset.registerAll(toolRegistry);
+        toolRegistry.register(new AskUserTool());
         this.sessionStore = new SessionStore(SessionStore.defaultDir());
         this.resume = resume;
     }
@@ -177,7 +181,6 @@ public class ConversationController {
 
     private void mainLoop() {
         InputPane input = new InputPane(tui.terminal(), "> ");
-        this.inputPane = input;
         LiveRegionRenderer live = liveRenderer();
         Writer writer = screenWriter();
         while (true) {
@@ -222,12 +225,6 @@ public class ConversationController {
         }
     }
 
-    private static final int KEY_NONE = 0;
-    private static final int KEY_UP = 1;
-    private static final int KEY_DOWN = 2;
-    private static final int KEY_ENTER = 3;
-    private static final int KEY_CANCEL = 4;
-
     /**
      * /resume：列出历史会话，↑/↓ 选择、回车加载、Esc 取消。
      * 菜单作为活跃区 overlay 渲染：只重绘屏幕底部、不进回滚；选定/取消后清掉菜单，历史再追加。
@@ -239,48 +236,21 @@ public class ConversationController {
             liveRenderer().appendCommitted(screenWriter(), "（没有可恢复的会话）");
             return;
         }
-        drainPendingInput();
         LiveRegionRenderer live = liveRenderer();
         Writer writer = screenWriter();
         live.commitRegion(); // 上次活跃区已留在屏上作历史，菜单从下方空白处画起
-        int selected = sessions.size() - 1;
-        while (true) {
-            live.redraw(writer, menuLines(sessions, selected));
-            switch (readMenuKey()) {
-                case KEY_UP -> selected = (selected - 1 + sessions.size()) % sessions.size();
-                case KEY_DOWN -> selected = (selected + 1) % sessions.size();
-                case KEY_ENTER -> {
-                    live.clear(writer);
-                    loadSession(sessions.get(selected));
-                    return;
-                }
-                case KEY_CANCEL -> {
-                    live.clear(writer);
-                    output.appendLine("（已取消）");
-                    live.appendCommitted(writer, "（已取消）");
-                    return;
-                }
-                default -> {
-                    // 忽略无关按键，保持菜单
-                }
-            }
+        List<String> entries = new ArrayList<>();
+        for (Session session : sessions) {
+            entries.add(session.getId() + "  " + session.getMessages().size() + " 条 · " + preview(session));
         }
-    }
-
-    /** 菜单渲染行：提示 + 逐会话条目（选中行反显），供活跃区 overlay 使用。 */
-    private List<String> menuLines(List<Session> sessions, int selected) {
-        List<String> lines = new ArrayList<>();
-        lines.add("（↑/↓ 选择会话，回车加载，Esc 取消）");
-        for (int i = 0; i < sessions.size(); i++) {
-            lines.add(menuLine(sessions.get(i), i == selected));
+        int selected = new SelectionMenu(entries, "（↑/↓ 选择会话，回车加载，Esc 取消）", sessions.size() - 1)
+                .select(live, writer, new TerminalMenuKeySource(tui.terminal().reader()));
+        if (selected >= 0) {
+            loadSession(sessions.get(selected));
+        } else {
+            output.appendLine("（已取消）");
+            live.appendCommitted(writer, "（已取消）");
         }
-        return lines;
-    }
-
-    /** 单条会话菜单行：时间戳 + 消息数 + 首条用户消息预览；选中行反显。 */
-    private static String menuLine(Session session, boolean selected) {
-        String body = session.getId() + "  " + session.getMessages().size() + " 条 · " + preview(session);
-        return selected ? "\033[7m▸ " + body + "\033[0m" : "  " + body;
     }
 
     private static String preview(Session session) {
@@ -291,67 +261,6 @@ public class ConversationController {
             }
         }
         return "（无用户消息）";
-    }
-
-    /**
-     * 直接读终端键：方向键/回车/Esc 分别归类；Ctrl+C 视为取消。
-     * 方向键存在两种序列：CSI 模式 `\033[A` 与 SS3 模式 `\033OA`（JLine 进入应用光标模式后常见），都要识别。
-     */
-    private int readMenuKey() {
-        try {
-            NonBlockingReader reader = tui.terminal().reader();
-            int c = reader.read();
-            if (c == '\r' || c == '\n') {
-                return KEY_ENTER;
-            }
-            if (c == 0x03) {
-                return KEY_CANCEL;
-            }
-            if (c == 0x1b) {
-                int next = reader.peek(50);
-                if (next == '[' || next == 'O') {
-                    reader.read(0); // 消费 '[' 或 'O'
-                    int ch = reader.read(50);
-                    if (ch == 'A') {
-                        return KEY_UP;
-                    }
-                    if (ch == 'B') {
-                        return KEY_DOWN;
-                    }
-                    return KEY_NONE;
-                }
-                log.info("菜单取消：裸 ESC（跟随字节 0x{}）", Integer.toHexString(next));
-                return KEY_CANCEL; // 裸 Esc
-            }
-            log.info("菜单忽略未知键：0x{}", Integer.toHexString(c));
-            return KEY_NONE;
-        } catch (IOException e) {
-            return KEY_NONE;
-        }
-    }
-
-    /**
-     * 排空 readLine 返回后共享 reader 中残留的字节（如 Windows Enter 的 \r\n 里未消费的 \n），
-     * 避免被菜单误判为按键导致立即取消/加载。
-     */
-    private void drainPendingInput() {
-        try {
-            NonBlockingReader reader = tui.terminal().reader();
-            long deadline = System.currentTimeMillis() + 50;
-            int drained = 0;
-            while (System.currentTimeMillis() < deadline) {
-                if (reader.peek(5) == NonBlockingReader.READ_EXPIRED) {
-                    break;
-                }
-                reader.read(0);
-                drained++;
-            }
-            if (drained > 0) {
-                log.info("进菜单前排空残留输入 {} 字节", drained);
-            }
-        } catch (IOException e) {
-            // 读取失败视为无残留
-        }
     }
 
     /** 用某个会话的历史替换当前对话：回滚为 append-only，历史经追加式渲染进回滚（不重复打印 banner）。 */
@@ -447,13 +356,39 @@ public class ConversationController {
         this.confirmAnswerer = answerer;
     }
 
-    /** 默认确认应答：渲染「要执行 X …？[y/n]」并读一行；无输入面板（纯测试环境）视为拒绝。 */
+    /** 测试用：注入选择应答器（跳过真实终端读键）。 */
+    void setChoiceAnswerer(Function<ChoiceRequestEvent, String> answerer) {
+        this.choiceAnswerer = answerer;
+    }
+
+    /** 默认确认应答：渲染「要执行 X …？」并弹 ↑↓ 选择菜单；无终端（纯测试环境）视为拒绝。 */
     private boolean answerConfirmationPrompt(ConfirmationRequestEvent event) {
-        if (inputPane == null) {
+        if (tui == null) {
             return false;
         }
-        ConfirmationPrompt prompt = new ConfirmationPrompt(inputPane::readLine, liveRenderer(), screenWriter());
+        ConfirmationPrompt prompt = new ConfirmationPrompt(
+                new TerminalMenuKeySource(tui.terminal().reader()), liveRenderer(), screenWriter());
         return prompt.ask(event.toolName(), event.argsSummary());
+    }
+
+    /** 默认选择应答：渲染 question 并弹多选项菜单；无终端（纯测试环境）返回 null（取消）。 */
+    private String answerChoicePrompt(ChoiceRequestEvent event) {
+        if (tui == null) {
+            return null;
+        }
+        LiveRegionRenderer live = liveRenderer();
+        Writer writer = screenWriter();
+        live.appendCommitted(writer, event.question());
+        live.commitRegion();
+        int selected = new SelectionMenu(event.options(), "（↑/↓ 选择，回车确认，Esc 取消）", 0)
+                .select(live, writer, new TerminalMenuKeySource(tui.terminal().reader()));
+        if (selected < 0) {
+            live.appendCommitted(writer, "（已取消）");
+            return null;
+        }
+        String picked = event.options().get(selected);
+        live.appendCommitted(writer, "（已选择「" + picked + "」）");
+        return picked;
     }
 
     /** 活跃区渲染器：测试注入优先，否则按终端尺寸实时新建（窗口变化随读随取）。 */
@@ -554,6 +489,7 @@ public class ConversationController {
 
         StreamPrinter printer = new StreamPrinter(output, live, writer, config.isTeeEnabled());
         List<ToolResult> turnResults = new ArrayList<>();
+        List<Long> elapsedList = new ArrayList<>();
         while (true) {
             if (ctrlC.getAsBoolean()) {
                 agent.cancel();
@@ -571,7 +507,7 @@ public class ConversationController {
                 continue;
             }
             if (event instanceof LoopComplete) {
-                printer.updateToolCalls(turnResults);
+                printer.updateToolCalls(turnResults, elapsedList);
                 printer.finishTurn();
                 completeLoop(agent, live, writer);
                 break;
@@ -583,10 +519,12 @@ public class ConversationController {
                 turnResults.add(toolResult.isError()
                         ? ToolResult.failure(toolResult.output())
                         : ToolResult.success(toolResult.output()));
+                elapsedList.add(toolResult.elapsedMs());
             } else if (event instanceof TurnComplete) {
-                printer.updateToolCalls(turnResults);
+                printer.updateToolCalls(turnResults, elapsedList);
                 printer.finishTurn(); // 本轮文本与卡片转正进回滚，下一轮从下方开始
                 turnResults = new ArrayList<>();
+                elapsedList = new ArrayList<>();
                 printer = new StreamPrinter(output, live, writer, config.isTeeEnabled());
             } else if (event instanceof RetryEvent retry) {
                 output.appendLine("（重试中：" + retry.reason() + "）");
@@ -595,6 +533,8 @@ public class ConversationController {
                 printer.onError(new ProviderException(error.message()));
             } else if (event instanceof ConfirmationRequestEvent confirm) {
                 confirm.response().answer(confirmAnswerer.apply(confirm));
+            } else if (event instanceof ChoiceRequestEvent choice) {
+                choice.response().answer(choiceAnswerer.apply(choice));
             }
         }
     }

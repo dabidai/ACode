@@ -1,14 +1,10 @@
 package com.acode.ui;
 
-import org.jline.reader.EndOfFileException;
-import org.jline.reader.UserInterruptException;
 import org.junit.jupiter.api.Test;
 
 import java.io.StringWriter;
+import java.io.Writer;
 import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.List;
-import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -16,82 +12,72 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ConfirmationPromptTest {
 
-    /** 脚本化读行器：按序吐出 answers，耗尽后一律答 n。 */
-    private static ConfirmationPrompt scripted(LiveRegionRenderer live, StringWriter writer, String... answers) {
-        Deque<String> queue = new ArrayDeque<>(List.of(answers));
-        return new ConfirmationPrompt(prompt -> queue.isEmpty() ? "n" : queue.poll(), live, writer);
+    /** 脚本化语义键队列的按键源；耗尽即测试失败（菜单应已退出）。 */
+    static class ScriptedKeys implements MenuKeySource {
+        private final ArrayDeque<Integer> keys = new ArrayDeque<>();
+
+        ScriptedKeys(int... ks) {
+            for (int k : ks) {
+                keys.add(k);
+            }
+        }
+
+        @Override
+        public int readKey() {
+            if (keys.isEmpty()) {
+                throw new AssertionError("按键序列耗尽，菜单未退出");
+            }
+            return keys.poll();
+        }
+    }
+
+    private static boolean ask(StringWriter writer, int... keys) {
+        return new ConfirmationPrompt(new ScriptedKeys(keys), new LiveRegionRenderer(80, 24), writer)
+                .ask("WriteFile", "{\"file_path\":\"a.txt\"}");
     }
 
     @Test
-    void askReturnsTrueWhenAnswerIsYes() {
+    void defaultYesSelectionApproves() {
         StringWriter writer = new StringWriter();
-        ConfirmationPrompt prompt = scripted(new LiveRegionRenderer(80, 24), writer, "y");
-        assertTrue(prompt.ask("WriteFile", "{\"file_path\":\"a.txt\"}"));
-        assertTrue(writer.toString().contains("要执行「WriteFile（{\"file_path\":\"a.txt\"}）」？[y/n]"));
+        assertTrue(ask(writer, MenuKeySource.KEY_ENTER), "默认选中「是」，Enter 应批准");
         assertTrue(writer.toString().contains("（已批准执行「WriteFile」）"));
     }
 
     @Test
-    void askReturnsFalseWhenAnswerIsNo() {
+    void movingToNoThenEnterRejects() {
         StringWriter writer = new StringWriter();
-        ConfirmationPrompt prompt = scripted(new LiveRegionRenderer(80, 24), writer, "n");
-        assertFalse(prompt.ask("Bash", ""));
-        assertTrue(writer.toString().contains("（已拒绝执行「Bash」）"));
+        assertFalse(ask(writer, MenuKeySource.KEY_DOWN, MenuKeySource.KEY_ENTER), "↓ 后 Enter 应拒绝");
+        assertTrue(writer.toString().contains("（已拒绝执行「WriteFile」）"));
     }
 
     @Test
-    void askReasksOnInvalidAnswerUntilAccepted() {
+    void escCancelsAsRejection() {
         StringWriter writer = new StringWriter();
-        ConfirmationPrompt prompt = scripted(new LiveRegionRenderer(80, 24), writer, "啥", "y");
-        assertTrue(prompt.ask("WriteFile", ""));
-        assertTrue(writer.toString().contains("（请输入 y 或 n）"));
-    }
-
-    @Test
-    void askRejectsOnUserInterrupt() {
-        StringWriter writer = new StringWriter();
-        ConfirmationPrompt prompt = new ConfirmationPrompt(
-                p -> { throw new UserInterruptException(""); },
-                new LiveRegionRenderer(80, 24), writer);
-        assertFalse(prompt.ask("WriteFile", ""));
+        assertFalse(ask(writer, MenuKeySource.KEY_CANCEL), "Esc 应取消=拒绝");
         assertTrue(writer.toString().contains("（已取消）"));
     }
 
     @Test
-    void askRejectsOnEndOfFile() {
-        ConfirmationPrompt prompt = new ConfirmationPrompt(
-                p -> { throw new EndOfFileException(""); },
-                new LiveRegionRenderer(80, 24), new StringWriter());
-        assertFalse(prompt.ask("WriteFile", ""));
+    void promptLineOmitsYnpromptAndKeepsArgs() {
+        assertEquals("要执行「WriteFile（{\"file_path\":\"a.txt\"}）」？", ConfirmationPrompt.promptLine("WriteFile", "{\"file_path\":\"a.txt\"}"));
+        assertEquals("要执行「WriteFile」？", ConfirmationPrompt.promptLine("WriteFile", ""));
+        assertEquals("要执行「WriteFile」？", ConfirmationPrompt.promptLine("WriteFile", null));
+        assertEquals("要执行「WriteFile」？", ConfirmationPrompt.promptLine("WriteFile", "  "));
     }
 
     @Test
-    void yesAnswersAreCaseInsensitiveAndTrimmed() {
-        for (String answer : new String[]{"Y", "yes", " Yes ", "YES"}) {
-            assertTrue(ConfirmationPrompt.isYes(answer), "isYes(" + answer + ") 应为 true");
-        }
-        assertFalse(ConfirmationPrompt.isYes("n"));
-        assertFalse(ConfirmationPrompt.isYes(null));
+    void menuRenderedWithSelectedYesAndOptionNo() {
+        StringWriter writer = new StringWriter();
+        ask(writer, MenuKeySource.KEY_ENTER);
+        assertTrue(writer.toString().contains("\033[7m> 是\033[0m"), "默认选中「是」应反显：" + writer);
+        assertTrue(writer.toString().contains("  否"), "未选中「否」两空格前缀：" + writer);
     }
 
     @Test
-    void noAnswersAreCaseInsensitiveAndTrimmed() {
-        for (String answer : new String[]{"N", "no", " No ", "NO"}) {
-            assertTrue(ConfirmationPrompt.isNo(answer), "isNo(" + answer + ") 应为 true");
-        }
-        assertFalse(ConfirmationPrompt.isNo("y"));
-        assertFalse(ConfirmationPrompt.isNo(null));
-    }
-
-    @Test
-    void promptLineOmitArgsWhenEmpty() {
-        assertEquals("要执行「WriteFile」？[y/n]", ConfirmationPrompt.promptLine("WriteFile", ""));
-        assertEquals("要执行「WriteFile」？[y/n]", ConfirmationPrompt.promptLine("WriteFile", null));
-        assertEquals("要执行「WriteFile」？[y/n]", ConfirmationPrompt.promptLine("WriteFile", "  "));
-    }
-
-    @Test
-    void promptLineKeepsArgsSummary() {
-        assertEquals("要执行「Bash（ls -la）」？[y/n]", ConfirmationPrompt.promptLine("Bash", "ls -la"));
+    void promptLineAndMenuAppendAsCommitted() {
+        StringWriter writer = new StringWriter();
+        ask(writer, MenuKeySource.KEY_ENTER);
+        assertTrue(writer.toString().contains("要执行「WriteFile（{\"file_path\":\"a.txt\"}）」？"));
+        assertTrue(writer.toString().contains("（已批准执行「WriteFile」）"));
     }
 }

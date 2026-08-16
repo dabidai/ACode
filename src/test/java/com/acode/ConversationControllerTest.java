@@ -9,7 +9,9 @@ import com.acode.provider.ToolResultBlock;
 import com.acode.provider.ToolUseBlock;
 import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
+import com.acode.ui.ToolCallDisplay;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -55,6 +57,8 @@ class ConversationControllerTest {
         ConversationController controller = new ConversationController(provider, config(), false);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
+        StringWriter sw = new StringWriter();
+        controller.setScreenWriter(sw);
         controller.handleExchange("读一下 a.txt", () -> false, () -> { });
 
         // 两轮请求：第一轮带工具，第二轮历史含 tool_result 回传
@@ -69,10 +73,11 @@ class ConversationControllerTest {
         assertFalse(block.isError(), "成功结果不应带错误标记");
         assertTrue(block.content().contains("你好世界"), "回传内容应为工具输出");
 
-        // 界面：工具卡片成功 + 最终文本
+        // 界面：● 运行行（带工具名）进回滚 + 成功输出块（绿色 ⎿）进模型 + 最终文本
+        assertTrue(sw.toString().contains("ReadFile"), "运行行应带工具名进回滚");
         String joined = String.join("\n", output.lines());
-        assertTrue(joined.contains("ReadFile"), "应渲染工具卡片");
-        assertTrue(joined.contains("成功"), "卡片应为成功状态");
+        assertTrue(joined.contains("  ⎿  "), "应渲染工具输出块");
+        assertTrue(joined.contains(ToolCallDisplay.STYLE_OK), "卡片应为成功状态（绿色）");
         assertTrue(joined.contains("文件内容是：你好世界"), "应显示最终文本");
 
         // 对话历史：user → assistant(工具调用) → user(tool_result) → assistant(最终文本)
@@ -100,7 +105,7 @@ class ConversationControllerTest {
         assertTrue(block.isError(), "失败工具结果应带错误标记");
 
         String joined = String.join("\n", output.lines());
-        assertTrue(joined.contains("失败"), "卡片应显示失败状态");
+        assertTrue(joined.contains(ToolCallDisplay.STYLE_ERR), "卡片应显示失败状态（红色）");
         assertTrue(joined.contains("文件不存在，请检查路径"));
     }
 
@@ -356,6 +361,65 @@ class ConversationControllerTest {
         ChatMessage last = requests.get(1).messages().get(requests.get(1).messages().size() - 1);
         ToolResultBlock block = (ToolResultBlock) last.blocks().get(0);
         assertFalse(block.isError(), "批准后的工具结果不应带错误标记");
+    }
+
+    @Test
+    void askUserSelectionPassedBackAsToolResult() throws Exception {
+        ObjectNode args = JSON.createObjectNode().put("question", "先做哪个？");
+        args.putArray("options").add("A").add("B");
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.toolUse("id-1", "AskUser", args), FakeProvider.complete()),
+                List.of(FakeProvider.delta("好的，先做 B"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setChoiceAnswerer(event -> {
+            assertEquals(List.of("A", "B"), event.options());
+            assertEquals("先做哪个？", event.question());
+            return "B";
+        });
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        StringWriter sw = new StringWriter();
+        controller.setScreenWriter(sw);
+        controller.handleExchange("帮我做个选择", () -> false, () -> { });
+
+        // 首轮请求工具表含 AskUser；第二轮 tool_result 回传选中项 B
+        List<ChatRequest> requests = provider.receivedRequests();
+        assertEquals(2, requests.size());
+        assertTrue(requests.get(0).tools().stream().anyMatch(t -> t.name().equals("AskUser")),
+                "首轮请求应携带 AskUser 工具");
+        ChatMessage last = requests.get(1).messages().get(requests.get(1).messages().size() - 1);
+        ToolResultBlock block = (ToolResultBlock) last.blocks().get(0);
+        assertEquals("id-1", block.toolUseId(), "回传应关联原 tool_use id");
+        assertFalse(block.isError(), "选中项应作为成功结果回传");
+        assertTrue(block.content().contains("B"), "回传内容应为选中项文本");
+
+        // 界面：AskUser 工具卡片进回滚；状态行「（已选择「B」）」由真实 answerChoicePrompt
+        // 在 T9 真终端手测覆盖（setChoiceAnswerer 桩跳过 UI 写入）
+        assertTrue(sw.toString().contains("AskUser"), "AskUser 工具卡片应进回滚：" + sw);
+    }
+
+    @Test
+    void askUserCancelPassesFailureBackToModel() throws Exception {
+        ObjectNode args = JSON.createObjectNode().put("question", "先做哪个？");
+        args.putArray("options").add("A").add("B");
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.toolUse("id-1", "AskUser", args), FakeProvider.complete()),
+                List.of(FakeProvider.delta("那我自己决定"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setChoiceAnswerer(event -> null); // 用户取消
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        StringWriter sw = new StringWriter();
+        controller.setScreenWriter(sw);
+        controller.handleExchange("帮我做个选择", () -> false, () -> { });
+
+        List<ChatRequest> requests = provider.receivedRequests();
+        assertEquals(2, requests.size(), "取消后模型应收到失败结果并再走一轮");
+        ChatMessage last = requests.get(1).messages().get(requests.get(1).messages().size() - 1);
+        ToolResultBlock block = (ToolResultBlock) last.blocks().get(0);
+        assertTrue(block.isError(), "取消结果应带错误标记");
+        assertTrue(block.content().contains("取消"), "模型应收到「用户取消选择」：" + block.content());
+        assertTrue(sw.toString().contains("AskUser"), "AskUser 工具卡片应进回滚：" + sw);
     }
 
     /** 计数追加写屏次数的假渲染器（追加式路径）。 */

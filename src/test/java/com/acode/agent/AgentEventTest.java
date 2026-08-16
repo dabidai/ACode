@@ -1,5 +1,6 @@
 package com.acode.agent;
 
+import com.acode.agent.AgentEvent.ChoiceRequestEvent;
 import com.acode.agent.AgentEvent.ConfirmationRequestEvent;
 import com.acode.agent.AgentEvent.ErrorEvent;
 import com.acode.agent.AgentEvent.LoopComplete;
@@ -11,6 +12,7 @@ import com.acode.agent.AgentEvent.TurnComplete;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -40,12 +42,14 @@ class AgentEventTest {
 
     @Test
     void toolResultEventRecordCarriesOutputAndErrorFlag() {
-        ToolResultEvent ok = new ToolResultEvent("toolu_1", "ReadFile", "内容", false);
+        ToolResultEvent ok = new ToolResultEvent("toolu_1", "ReadFile", "内容", false, 0);
         assertFalse(ok.isError());
         assertEquals("内容", ok.output());
+        assertEquals(0, ok.elapsedMs());
 
-        ToolResultEvent fail = new ToolResultEvent("toolu_2", "Bash", "命令失败", true);
+        ToolResultEvent fail = new ToolResultEvent("toolu_2", "Bash", "命令失败", true, 250);
         assertTrue(fail.isError());
+        assertEquals(250, fail.elapsedMs());
     }
 
     @Test
@@ -82,17 +86,30 @@ class AgentEventTest {
     }
 
     @Test
-    void allEightEventTypesAreSealedMembers() {
-        // sealed interface 的编译期约束：这 8 种 record 都能被 instanceof 判别
+    void choiceRequestEventCarriesQuestionOptionsAndResponse() {
+        Choice response = new Choice();
+        ChoiceRequestEvent event =
+                new ChoiceRequestEvent("toolu_1", "AskUser", "你想先做哪个？", List.of("A", "B"), response);
+        assertEquals("toolu_1", event.toolId());
+        assertEquals("AskUser", event.toolName());
+        assertEquals("你想先做哪个？", event.question());
+        assertEquals(List.of("A", "B"), event.options());
+        assertTrue(event.response() instanceof Choice);
+    }
+
+    @Test
+    void allEventTypesAreSealedMembers() {
+        // sealed interface 的编译期约束：这 9 种 record 都能被 instanceof 判别
         AgentEvent e = new StreamText("x");
         assertTrue(e instanceof StreamText);
         assertTrue(new ToolUseEvent("id", "n", JSON.createObjectNode()) instanceof AgentEvent);
-        assertTrue(new ToolResultEvent("id", "n", "out", false) instanceof AgentEvent);
+        assertTrue(new ToolResultEvent("id", "n", "out", false, 0) instanceof AgentEvent);
         assertTrue(new TurnComplete(1) instanceof AgentEvent);
         assertTrue(new LoopComplete(1) instanceof AgentEvent);
         assertTrue(new ErrorEvent("e") instanceof AgentEvent);
         assertTrue(new RetryEvent("r", 0) instanceof AgentEvent);
         assertTrue(new ConfirmationRequestEvent("id", "n", "", new Confirmation()) instanceof AgentEvent);
+        assertTrue(new ChoiceRequestEvent("id", "n", "q", List.of("A"), new Choice()) instanceof AgentEvent);
     }
 
     @Test

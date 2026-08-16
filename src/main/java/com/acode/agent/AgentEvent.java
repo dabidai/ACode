@@ -2,6 +2,7 @@ package com.acode.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import java.util.List;
 import java.util.concurrent.BlockingQueue;
 
 /**
@@ -31,8 +32,9 @@ public sealed interface AgentEvent {
     /** 模型发起工具调用 */
     record ToolUseEvent(String toolId, String toolName, JsonNode args) implements AgentEvent {}
 
-    /** 单个工具执行完成 */
-    record ToolResultEvent(String toolId, String toolName, String output, boolean isError) implements AgentEvent {}
+    /** 单个工具执行完成（elapsedMs 为工具实际执行耗时毫秒，确认拒绝/取消路径记 0） */
+    record ToolResultEvent(String toolId, String toolName, String output, boolean isError, long elapsedMs)
+            implements AgentEvent {}
 
     /** 一轮结束（工具结果已回填，可开始下一轮） */
     record TurnComplete(int turn) implements AgentEvent {}
@@ -48,5 +50,9 @@ public sealed interface AgentEvent {
 
     /** 工具确认请求：UI 弹 y/n 后经 response 答复；agent 线程在 await 阻塞等待 */
     record ConfirmationRequestEvent(String toolId, String toolName, String argsSummary, Confirmation response)
+            implements AgentEvent {}
+
+    /** AI 选择请求：UI 弹多选项菜单，选中项经 response 回传；agent 线程在 await 阻塞等待 */
+    record ChoiceRequestEvent(String toolId, String toolName, String question, List<String> options, Choice response)
             implements AgentEvent {}
 }

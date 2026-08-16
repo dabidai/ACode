@@ -19,8 +19,8 @@ import java.util.List;
  * 追加式：每个完成的渲染行（以换行结尾）经 appendCommitted 写屏一次，原生折行进回滚、
  * 可划选、永不再改——不发射任何光标操作序列，宽度失配/终端差异不可能造成错位。
  * 未完成尾行暂不显示，等换行到达（或 finishTurn/onComplete 定稿）再提交；
- * onError 时丢弃（本就没写屏，无需清理）。工具卡片为静态两行：先「⏳ 调用工具」，
- * 结果到达后追加终态行。内容模型行为不变（运行中卡片不进模型、终态卡片进模型）。
+ * onError 时丢弃（本就没写屏，无需清理）。工具卡片为静态多行：先「● 工具名(参数)」，
+ * 结果到达后追加输出块（首行 ⎿ 着色 + 后续行缩进 + 耗时脚注）。内容模型行为不变（运行中卡片不进模型、终态卡片进模型）。
  */
 public class StreamPrinter implements ChatListener {
 
@@ -67,14 +67,18 @@ public class StreamPrinter implements ChatListener {
         flushCards();
     }
 
-    /** 工具执行完成后，按顺序把全部卡片更新为终态（成功/失败 + 结果摘要）并写入内容模型。 */
-    public void updateToolCalls(List<ToolResult> results) {
+    /**
+     * 工具执行完成后，按顺序把全部卡片更新为终态输出块（多行 + 耗时脚注）并写入内容模型。
+     * elapsedMsList 与 results 按声明顺序平行对齐，缺位补 0。
+     */
+    public void updateToolCalls(List<ToolResult> results, List<Long> elapsedMsList) {
         if (toolCalls.isEmpty()) {
             return;
         }
         for (int i = 0; i < toolCalls.size(); i++) {
             ToolResult result = (i < results.size()) ? results.get(i) : null;
-            List<String> lines = toolCalls.get(i).appendDone(result);
+            long elapsed = (i < elapsedMsList.size()) ? elapsedMsList.get(i) : 0;
+            List<String> lines = toolCalls.get(i).appendDone(result, elapsed);
             for (String line : lines) {
                 output.appendLine(line);
             }

@@ -114,16 +114,30 @@ public class StreamingToolExecutor {
         if (tool != null && tool.permission() != Permission.READ
                 && !confirmationGate.confirm(call, events, cancelled)) {
             results[index] = ToolResult.failure("用户拒绝执行「" + call.name() + "」");
+            // 拒绝路径耗时记 0：不含用户确认思考时间
             AgentEvent.putSafe(events, new ToolResultEvent(call.id(), call.name(),
-                    results[index].content(), true));
+                    results[index].content(), true, 0));
             return;
         }
+        if (tool instanceof InteractiveTool interactive) {
+            ToolResult result = interactive.executeInteractive(call, events, cancelled);
+            if (cancelled.get()) {
+                return; // fillCancelled 兜底「已取消」
+            }
+            results[index] = result;
+            // 交互耗时记 0：不含用户思考时间
+            AgentEvent.putSafe(events, new ToolResultEvent(call.id(), call.name(),
+                    result.content(), result.isError(), 0));
+            return;
+        }
+        long start = System.nanoTime();
         ToolResult result = executor.execute(call);
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
         if (cancelled.get()) {
             return;
         }
         results[index] = result;
-        AgentEvent.putSafe(events, new ToolResultEvent(call.id(), call.name(), result.content(), result.isError()));
+        AgentEvent.putSafe(events, new ToolResultEvent(call.id(), call.name(), result.content(), result.isError(), elapsedMs));
     }
 
     private static List<ToolResult> fillCancelled(ToolResult[] results) {

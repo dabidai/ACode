@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ToolCallDisplayTest {
@@ -36,15 +37,16 @@ class ToolCallDisplayTest {
     }
 
     @Test
-    void runningCardShowsToolNameAndRunningState() {
+    void runningCardShowsBulletAndToolName() {
         ToolCallDisplay card = new ToolCallDisplay("ReadFile", "file_path=\"a.txt\"");
         List<String> lines = card.appendRunning();
         assertEquals(1, card.lineCount());
         assertEquals(1, lines.size());
         String line = lines.get(0);
+        assertTrue(line.contains("●"), "运行行应以 ● 开头：" + line);
         assertTrue(line.contains("ReadFile"));
-        assertTrue(line.contains("调用工具"));
-        assertTrue(line.contains(ToolCallDisplay.STYLE_RUNNING));
+        assertFalse(line.contains("调用工具"), "不再用「调用工具」字样");
+        assertTrue(line.contains(ToolCallDisplay.STYLE_NAME));
     }
 
     @Test
@@ -55,35 +57,93 @@ class ToolCallDisplayTest {
         assertEquals(1, card.screenAppended());
         card.appendRunning();
         assertEquals(0, card.screenAppended(), "替换渲染行后未写屏计数应归零");
-        card.appendDone(ToolResult.success("ok"));
-        assertEquals(0, card.screenAppended(), "终态行替换后未写屏计数应归零");
+        card.appendDone(ToolResult.success("ok"), 0);
+        assertEquals(0, card.screenAppended(), "终态块替换后未写屏计数应归零");
     }
 
     @Test
-    void successCardShowsResultSummary() {
+    void doneCardFirstLineColoredForSuccess() {
         ToolCallDisplay card = new ToolCallDisplay("Bash", "command=\"echo hi\"");
-        List<String> lines = card.appendDone(ToolResult.success("hi\n"));
-        String line = lines.get(0);
-        assertTrue(line.contains("成功"));
-        assertTrue(line.contains("hi"), "结果摘要应包含输出：" + line);
-        assertTrue(line.contains(ToolCallDisplay.STYLE_OK));
+        List<String> lines = card.appendDone(ToolResult.success("hi\n"), 0);
+        String first = lines.get(0);
+        assertTrue(first.contains("  ⎿  "), "首行为 ⎿ 前缀：" + first);
+        assertTrue(first.contains(ToolCallDisplay.STYLE_OK));
+        assertTrue(first.contains("hi"));
+        assertFalse(first.contains("成功"), "状态以颜色区分，不应有显式成功字");
     }
 
     @Test
-    void failureCardShowsErrorMessage() {
+    void doneCardFirstLineColoredForFailure() {
         ToolCallDisplay card = new ToolCallDisplay("ReadFile", "file_path=\"nope.txt\"");
-        List<String> lines = card.appendDone(ToolResult.failure("文件不存在"));
-        String line = lines.get(0);
-        assertTrue(line.contains("失败"));
-        assertTrue(line.contains("文件不存在"));
-        assertTrue(line.contains(ToolCallDisplay.STYLE_ERR));
+        List<String> lines = card.appendDone(ToolResult.failure("文件不存在"), 0);
+        String first = lines.get(0);
+        assertTrue(first.contains("  ⎿  "));
+        assertTrue(first.contains(ToolCallDisplay.STYLE_ERR));
+        assertTrue(first.contains("文件不存在"));
+        assertFalse(first.contains("失败"), "状态以颜色区分，不应有显式失败字");
     }
 
     @Test
-    void multilineResultCollapsedToSingleLine() {
+    void doneCardMultiLineOutputIndented() {
         ToolCallDisplay card = new ToolCallDisplay("Grep", "pattern=\"x\"");
-        List<String> lines = card.appendDone(ToolResult.success("line1\nline2\nline3"));
-        assertEquals(1, lines.size(), "多行结果应折叠为一行");
-        assertTrue(lines.get(0).contains("line1 line2 line3"));
+        List<String> lines = card.appendDone(ToolResult.success("line1\nline2\nline3"), 0);
+        assertEquals(4, lines.size(), "三行内容 + 耗时脚注");
+        assertTrue(lines.get(0).contains("line1"));
+        assertTrue(lines.get(0).contains(ToolCallDisplay.STYLE_OK));
+        assertTrue(lines.get(1).startsWith("     "), "后续行对齐缩进：" + lines.get(1));
+        assertTrue(lines.get(1).contains("line2"));
+        assertTrue(lines.get(2).startsWith("     "));
+        assertTrue(lines.get(2).contains("line3"));
+        assertFalse(lines.get(1).contains(ToolCallDisplay.STYLE_OK), "后续行不带成败色");
+    }
+
+    @Test
+    void doneCardPreservesMiddleBlankLinesButDropsTrailing() {
+        ToolCallDisplay card = new ToolCallDisplay("Bash", "command=\"ls\"");
+        List<String> lines = card.appendDone(ToolResult.success("a\n\nb\n"), 0);
+        assertEquals(4, lines.size(), "中间空行保留，末尾换行去除 + 脚注");
+        assertTrue(lines.get(1).equals("     "), "中间空行应保留（5 空格缩进）");
+        assertTrue(lines.get(2).contains("b"));
+    }
+
+    @Test
+    void doneCardTruncatesLongOutput() {
+        String longOutput = "line\n".repeat(400);
+        ToolCallDisplay card = new ToolCallDisplay("Bash", "command=\"ls -R\"");
+        List<String> lines = card.appendDone(ToolResult.success(longOutput), 0);
+        assertEquals(ToolCallDisplay.MAX_DISPLAY_LINES + 2, lines.size(), "300 行内容 + 截断 marker + 脚注");
+        boolean hasMarker = lines.stream().anyMatch(l -> l.contains("输出过长"));
+        assertTrue(hasMarker, "应含截断 marker");
+        assertTrue(lines.contains("  ⎿  …（输出过长，已截断）"));
+    }
+
+    @Test
+    void doneCardEmptyContentShowsPlaceholder() {
+        ToolCallDisplay empty = new ToolCallDisplay("Bash", "command=\"true\"");
+        List<String> lines = empty.appendDone(ToolResult.success(""), 0);
+        assertTrue(lines.get(0).contains("无返回结果"), "空内容出占位行：" + lines.get(0));
+
+        ToolCallDisplay nullResult = new ToolCallDisplay("Bash", "command=\"true\"");
+        List<String> nullLines = nullResult.appendDone(null, 0);
+        assertTrue(nullLines.get(0).contains("无返回结果"), "null 结果出占位行");
+    }
+
+    @Test
+    void doneCardAppendsDurationFooter() {
+        ToolCallDisplay card = new ToolCallDisplay("Bash", "command=\"echo hi\"");
+        List<String> lines = card.appendDone(ToolResult.success("hi\n"), 823);
+        String footer = lines.get(lines.size() - 1);
+        assertTrue(footer.contains("  ⎿  "), "脚注 ⎿ 前缀：" + footer);
+        assertTrue(footer.contains("(823ms)"));
+        assertTrue(footer.contains(ToolCallDisplay.STYLE_DIM), "脚注为灰色");
+    }
+
+    @Test
+    void formatDurationFormatsMsAndSeconds() {
+        assertEquals("0ms", ToolCallDisplay.formatDuration(0));
+        assertEquals("823ms", ToolCallDisplay.formatDuration(823));
+        assertEquals("2.3s", ToolCallDisplay.formatDuration(2300));
+        assertEquals("5.0s", ToolCallDisplay.formatDuration(5000));
+        assertEquals("0ms", ToolCallDisplay.formatDuration(-5), "负值按 0 处理");
     }
 }

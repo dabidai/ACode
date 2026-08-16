@@ -125,7 +125,7 @@ class StreamPrinterTest {
         assertEquals(1, pane.lineCount(), "运行中卡片不写入内容模型，模型只保留已提交文本");
         assertTrue(pane.lines().get(0).contains("先看下文件"), "文本应保留在模型中");
         assertTrue(sw.toString().contains("ReadFile"), "运行中卡片应追加写屏");
-        assertTrue(sw.toString().contains("调用工具"));
+        assertTrue(sw.toString().contains("●"));
     }
 
     @Test
@@ -148,12 +148,15 @@ class StreamPrinterTest {
         printer.onToolUse(new ToolUseBlock("id-2", "Bash",
                 JSON.createObjectNode().put("command", "echo hi")));
         assertEquals(0, pane.lineCount(), "运行中卡片不占模型行");
-        printer.updateToolCalls(List.of(ToolResult.success("文件内容"), ToolResult.failure("命令失败")));
-        assertEquals(2, pane.lineCount(), "终态卡片写入内容模型");
-        assertTrue(pane.lines().get(0).contains("成功"));
+        printer.updateToolCalls(List.of(ToolResult.success("文件内容"), ToolResult.failure("命令失败")),
+                List.of(0L, 2300L));
+        assertEquals(4, pane.lineCount(), "每个终态卡片为输出块（内容行 + 耗时脚注）写入内容模型");
         assertTrue(pane.lines().get(0).contains("文件内容"));
-        assertTrue(pane.lines().get(1).contains("失败"));
-        assertTrue(pane.lines().get(1).contains("命令失败"));
+        assertTrue(pane.lines().get(0).contains(ToolCallDisplay.STYLE_OK));
+        assertTrue(pane.lines().get(1).contains("(0ms)"), "应含耗时脚注：" + pane.lines().get(1));
+        assertTrue(pane.lines().get(2).contains("命令失败"));
+        assertTrue(pane.lines().get(2).contains(ToolCallDisplay.STYLE_ERR));
+        assertTrue(pane.lines().get(3).contains("(2.3s)"), "应含耗时脚注：" + pane.lines().get(3));
     }
 
     @Test

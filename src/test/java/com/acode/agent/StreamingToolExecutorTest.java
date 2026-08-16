@@ -199,8 +199,10 @@ class StreamingToolExecutorTest {
         assertEquals("Read", e1.toolName());
         assertEquals("Read-output", e1.output());
         assertFalse(e1.isError());
+        assertTrue(e1.elapsedMs() >= 0, "正常执行应带耗时：" + e1.elapsedMs());
         ToolResultEvent e2 = (ToolResultEvent) list.get(1);
         assertEquals("Write", e2.toolName());
+        assertTrue(e2.elapsedMs() >= 0, "正常执行应带耗时：" + e2.elapsedMs());
     }
 
     @Test
@@ -290,6 +292,7 @@ class StreamingToolExecutorTest {
         ToolResultEvent e = (ToolResultEvent) list.get(0);
         assertTrue(e.isError());
         assertTrue(e.output().contains("拒绝"));
+        assertEquals(0, e.elapsedMs(), "拒绝路径耗时记 0（不含确认等待）");
     }
 
     @Test
@@ -336,5 +339,170 @@ class StreamingToolExecutorTest {
         List<ToolResult> results = future.get(2, TimeUnit.SECONDS);
         assertTrue(results.get(0).isError(), "取消置位后确认失败，返回拒绝结果");
         assertFalse(log.contains("Write_start"), "确认被取消拦截，工具不应执行");
+    }
+
+    // ---- 交互工具（InteractiveTool） ----
+
+    /** 同时实现 Tool + InteractiveTool 的桩：验证走 executeInteractive 而非 execute。 */
+    private static class InteractiveStub implements Tool, InteractiveTool {
+        final String name;
+        final List<String> log;
+
+        InteractiveStub(String name, List<String> log) {
+            this.name = name;
+            this.log = log;
+        }
+
+        @Override
+        public String description() {
+            return "interactive stub";
+        }
+
+        @Override
+        public String name() {
+            return name;
+        }
+
+        @Override
+        public Permission permission() {
+            return Permission.READ;
+        }
+
+        @Override
+        public JsonNode inputSchema() {
+            return JSON.createObjectNode();
+        }
+
+        @Override
+        public ToolResult execute(JsonNode input, ToolContext context) {
+            log.add(name + "_execute");
+            return ToolResult.success("from-execute");
+        }
+
+        @Override
+        public ToolResult executeInteractive(ToolUseBlock call, BlockingQueue<AgentEvent> events, AtomicBoolean cancelled) {
+            log.add(name + "_interactive");
+            return ToolResult.success("B");
+        }
+    }
+
+    /** executeInteractive 阻塞直至 release 的桩：测取消路径。 */
+    private static class BlockingInteractiveStub implements Tool, InteractiveTool {
+        final String name;
+        final CountDownLatch entered = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+
+        BlockingInteractiveStub(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public String description() {
+            return "blocking interactive stub";
+        }
+
+        @Override
+        public String name() {
+            return name;
+        }
+
+        @Override
+        public Permission permission() {
+            return Permission.READ;
+        }
+
+        @Override
+        public JsonNode inputSchema() {
+            return JSON.createObjectNode();
+        }
+
+        @Override
+        public ToolResult execute(JsonNode input, ToolContext context) {
+            return ToolResult.success("from-execute");
+        }
+
+        @Override
+        public ToolResult executeInteractive(ToolUseBlock call, BlockingQueue<AgentEvent> events, AtomicBoolean cancelled) {
+            entered.countDown();
+            try {
+                release.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return ToolResult.success("late");
+        }
+    }
+
+    @Test
+    void interactiveToolRunsExecuteInteractiveInsteadOfExecute() {
+        List<String> log = new ArrayList<>();
+        Tool tool = new InteractiveStub("AskUser", log);
+        BlockingQueue<AgentEvent> events = queue();
+        StreamingToolExecutor executor = executor(registry(tool));
+        List<ToolResult> results = executor.execute(
+                List.of(call("id1", "AskUser")), events, new AtomicBoolean(false));
+
+        assertEquals(1, results.size());
+        assertEquals("B", results.get(0).output());
+        assertFalse(results.get(0).isError());
+        assertTrue(log.contains("AskUser_interactive"), "交互工具应走 executeInteractive");
+        assertFalse(log.contains("AskUser_execute"), "不应走 BaseTool.execute 路径");
+    }
+
+    @Test
+    void interactiveToolResultEventHasZeroElapsed() {
+        Tool tool = new InteractiveStub("AskUser", new ArrayList<>());
+        BlockingQueue<AgentEvent> events = queue();
+        StreamingToolExecutor executor = executor(registry(tool));
+        executor.execute(List.of(call("id1", "AskUser")), events, new AtomicBoolean(false));
+
+        List<AgentEvent> list = new ArrayList<>();
+        events.drainTo(list);
+        assertEquals(1, list.size());
+        ToolResultEvent e = (ToolResultEvent) list.get(0);
+        assertEquals("id1", e.toolId());
+        assertEquals("B", e.output());
+        assertFalse(e.isError());
+        assertEquals(0, e.elapsedMs(), "交互耗时记 0（不含用户思考时间）");
+    }
+
+    @Test
+    void interactiveReadToolSkipsConfirmationGate() {
+        AtomicBoolean gateCalled = new AtomicBoolean(false);
+        ConfirmationGate trackingGate = (call, events, cancelled) -> {
+            gateCalled.set(true);
+            return false;
+        };
+        List<String> log = new ArrayList<>();
+        Tool tool = new InteractiveStub("AskUser", log);
+        BlockingQueue<AgentEvent> events = queue();
+        StreamingToolExecutor executor = executor(registry(tool), trackingGate);
+        List<ToolResult> results = executor.execute(
+                List.of(call("id1", "AskUser")), events, new AtomicBoolean(false));
+
+        assertFalse(results.get(0).isError(), "READ 交互工具应正常执行");
+        assertFalse(gateCalled.get(), "READ 交互工具不应触发确认门槛");
+        assertTrue(log.contains("AskUser_interactive"));
+    }
+
+    @Test
+    void interactiveToolCancelledFillsPlaceholderWithoutEvent() throws Exception {
+        BlockingInteractiveStub tool = new BlockingInteractiveStub("AskUser");
+        BlockingQueue<AgentEvent> events = queue();
+        AtomicBoolean cancelled = new AtomicBoolean(false);
+        StreamingToolExecutor executor = executor(registry(tool));
+        java.util.concurrent.Future<List<ToolResult>> future = java.util.concurrent.CompletableFuture
+                .supplyAsync(() -> executor.execute(List.of(call("id1", "AskUser")), events, cancelled));
+
+        assertTrue(tool.entered.await(2, TimeUnit.SECONDS), "交互执行应已进入");
+        cancelled.set(true);
+        tool.release.countDown();
+        List<ToolResult> results = future.get(5, TimeUnit.SECONDS);
+
+        assertTrue(results.get(0).isError(), "取消的交互调用应补「已取消」");
+        assertEquals("已取消", results.get(0).errorMessage());
+        List<AgentEvent> list = new ArrayList<>();
+        events.drainTo(list);
+        assertTrue(list.isEmpty(), "取消的交互调用不应发 ToolResultEvent");
     }
 }

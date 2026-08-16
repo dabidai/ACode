@@ -16,3 +16,6 @@ dependency-reduced-pom.xml
 # 系统
 .DS_Store
 Thumbs.db
+
+# 手测 fixture（M15 用）
+hello.cpp

@@ -69,6 +69,15 @@ public class Agent {
     private volatile int totalTurns = 0;
     private int recoveryCount = 0;
 
+    /** 工具确认门槛：默认放行；UI 装配时替换为事件握手实现 */
+    private ConfirmationGate confirmationGate = ConfirmationGate.ALWAYS_ALLOW;
+
+    public void setConfirmationGate(ConfirmationGate gate) {
+        if (gate != null) {
+            this.confirmationGate = gate;
+        }
+    }
+
     private volatile boolean planMode = false;
     private volatile Path planPath;
 
@@ -339,7 +348,8 @@ public class Agent {
         if (toolUses.isEmpty()) {
             return;
         }
-        StreamingToolExecutor executor = new StreamingToolExecutor(registry, planMode ? planContext : context);
+        StreamingToolExecutor executor =
+                new StreamingToolExecutor(registry, planMode ? planContext : context, confirmationGate);
         List<ToolResult> results = executor.execute(toolUses, events, cancelled);
         List<ToolResultBlock> blocks = new ArrayList<>(results.size());
         for (int i = 0; i < toolUses.size(); i++) {

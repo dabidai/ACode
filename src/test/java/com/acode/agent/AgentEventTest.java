@@ -1,5 +1,6 @@
 package com.acode.agent;
 
+import com.acode.agent.AgentEvent.ConfirmationRequestEvent;
 import com.acode.agent.AgentEvent.ErrorEvent;
 import com.acode.agent.AgentEvent.LoopComplete;
 import com.acode.agent.AgentEvent.RetryEvent;
@@ -70,8 +71,19 @@ class AgentEventTest {
     }
 
     @Test
-    void allSevenEventTypesAreSealedMembers() {
-        // sealed interface 的编译期约束：这 7 种 record 都能被 instanceof 判别
+    void confirmationRequestEventCarriesToolAndResponseChannel() {
+        Confirmation response = new Confirmation();
+        ConfirmationRequestEvent event =
+                new ConfirmationRequestEvent("toolu_1", "WriteFile", "{\"file_path\":\"a.txt\"}", response);
+        assertEquals("toolu_1", event.toolId());
+        assertEquals("WriteFile", event.toolName());
+        assertEquals("{\"file_path\":\"a.txt\"}", event.argsSummary());
+        assertTrue(event.response() instanceof Confirmation);
+    }
+
+    @Test
+    void allEightEventTypesAreSealedMembers() {
+        // sealed interface 的编译期约束：这 8 种 record 都能被 instanceof 判别
         AgentEvent e = new StreamText("x");
         assertTrue(e instanceof StreamText);
         assertTrue(new ToolUseEvent("id", "n", JSON.createObjectNode()) instanceof AgentEvent);
@@ -80,6 +92,7 @@ class AgentEventTest {
         assertTrue(new LoopComplete(1) instanceof AgentEvent);
         assertTrue(new ErrorEvent("e") instanceof AgentEvent);
         assertTrue(new RetryEvent("r", 0) instanceof AgentEvent);
+        assertTrue(new ConfirmationRequestEvent("id", "n", "", new Confirmation()) instanceof AgentEvent);
     }
 
     @Test

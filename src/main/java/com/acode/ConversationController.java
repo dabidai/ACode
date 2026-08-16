@@ -2,6 +2,7 @@ package com.acode;
 
 import com.acode.agent.Agent;
 import com.acode.agent.AgentEvent;
+import com.acode.agent.AgentEvent.ConfirmationRequestEvent;
 import com.acode.agent.AgentEvent.ErrorEvent;
 import com.acode.agent.AgentEvent.LoopComplete;
 import com.acode.agent.AgentEvent.RetryEvent;
@@ -9,6 +10,7 @@ import com.acode.agent.AgentEvent.StreamText;
 import com.acode.agent.AgentEvent.ToolResultEvent;
 import com.acode.agent.AgentEvent.ToolUseEvent;
 import com.acode.agent.AgentEvent.TurnComplete;
+import com.acode.agent.EventConfirmationGate;
 import com.acode.config.AppConfig;
 import com.acode.config.ConfigException;
 import com.acode.config.ConfigLoader;
@@ -31,6 +33,7 @@ import com.acode.tool.ToolRegistry;
 import com.acode.tool.ToolResult;
 import com.acode.ui.AcodeTerminal;
 import com.acode.ui.CommandRouter;
+import com.acode.ui.ConfirmationPrompt;
 import com.acode.ui.InputPane;
 import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
@@ -55,6 +58,7 @@ import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 
 /**
  * T12 主循环与装配：配置 → Provider → 会话 → TUI 串成完整对话。
@@ -90,6 +94,12 @@ public class ConversationController {
     private OutputPane output;
     private LiveRegionRenderer live;
     private Writer screenWriter;
+
+    /** 主循环输入面板：确认提示经它读行（仅主线程触碰终端，agent 线程安全）。 */
+    private InputPane inputPane;
+
+    /** 确认应答器：收到 ConfirmationRequestEvent 后渲染提示并返回批准与否；测试可注入替身。 */
+    private Function<ConfirmationRequestEvent, Boolean> confirmAnswerer = this::answerConfirmationPrompt;
 
     public static void run(boolean resume) {
         AppConfig config;
@@ -167,6 +177,7 @@ public class ConversationController {
 
     private void mainLoop() {
         InputPane input = new InputPane(tui.terminal(), "> ");
+        this.inputPane = input;
         LiveRegionRenderer live = liveRenderer();
         Writer writer = screenWriter();
         while (true) {
@@ -431,6 +442,20 @@ public class ConversationController {
         this.screenWriter = writer;
     }
 
+    /** 测试用：注入确认应答器（跳过真实终端读行）。 */
+    void setConfirmAnswerer(Function<ConfirmationRequestEvent, Boolean> answerer) {
+        this.confirmAnswerer = answerer;
+    }
+
+    /** 默认确认应答：渲染「要执行 X …？[y/n]」并读一行；无输入面板（纯测试环境）视为拒绝。 */
+    private boolean answerConfirmationPrompt(ConfirmationRequestEvent event) {
+        if (inputPane == null) {
+            return false;
+        }
+        ConfirmationPrompt prompt = new ConfirmationPrompt(inputPane::readLine, liveRenderer(), screenWriter());
+        return prompt.ask(event.toolName(), event.argsSummary());
+    }
+
     /** 活跃区渲染器：测试注入优先，否则按终端尺寸实时新建（窗口变化随读随取）。 */
     private LiveRegionRenderer liveRenderer() {
         if (live != null) {
@@ -524,6 +549,7 @@ public class ConversationController {
         Agent agent = new Agent(provider, conversation, toolRegistry,
                 new ToolContext(Path.of(System.getProperty("user.dir"))), maxIterations());
         agent.setPlanMode(planMode);
+        agent.setConfirmationGate(new EventConfirmationGate());
         BlockingQueue<AgentEvent> events = agent.run();
 
         StreamPrinter printer = new StreamPrinter(output, live, writer, config.isTeeEnabled());
@@ -567,6 +593,8 @@ public class ConversationController {
                 live.appendCommitted(writer, "（重试中：" + retry.reason() + "）");
             } else if (event instanceof ErrorEvent error) {
                 printer.onError(new ProviderException(error.message()));
+            } else if (event instanceof ConfirmationRequestEvent confirm) {
+                confirm.response().answer(confirmAnswerer.apply(confirm));
             }
         }
     }

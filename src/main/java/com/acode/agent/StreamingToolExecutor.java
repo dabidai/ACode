@@ -27,11 +27,17 @@ public class StreamingToolExecutor {
     private final ToolRegistry registry;
     private final ToolContext context;
     private final ToolExecutor executor;
+    private final ConfirmationGate confirmationGate;
 
     public StreamingToolExecutor(ToolRegistry registry, ToolContext context) {
+        this(registry, context, ConfirmationGate.ALWAYS_ALLOW);
+    }
+
+    public StreamingToolExecutor(ToolRegistry registry, ToolContext context, ConfirmationGate confirmationGate) {
         this.registry = registry;
         this.context = context;
         this.executor = new ToolExecutor(registry, context);
+        this.confirmationGate = confirmationGate;
     }
 
     /**
@@ -104,6 +110,14 @@ public class StreamingToolExecutor {
             return;
         }
         ToolUseBlock call = calls.get(index);
+        Tool tool = registry.available(call.name());
+        if (tool != null && tool.permission() != Permission.READ
+                && !confirmationGate.confirm(call, events, cancelled)) {
+            results[index] = ToolResult.failure("用户拒绝执行「" + call.name() + "」");
+            AgentEvent.putSafe(events, new ToolResultEvent(call.id(), call.name(),
+                    results[index].content(), true));
+            return;
+        }
         ToolResult result = executor.execute(call);
         if (cancelled.get()) {
             return;

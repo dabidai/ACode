@@ -49,4 +49,9 @@ public class InputPane {
     public String readLine() {
         return reader.readLine(prompt);
     }
+
+    /** 阻塞读取一行，使用自定义提示符（工具确认提示等需区分场景时用）。 */
+    public String readLine(String prompt) {
+        return reader.readLine(prompt);
+    }
 }

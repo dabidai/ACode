@@ -303,6 +303,61 @@ class ConversationControllerTest {
         assertTrue(ConversationController.renderHistoryMessage(failure).contains("[工具结果 失败"));
     }
 
+    @Test
+    void deniedConfirmationPassesFailureBackToModel() throws Exception {
+        Path target = tempDir.resolve("out.txt");
+        AtomicInteger asks = new AtomicInteger();
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.toolUse("id-1", "WriteFile",
+                                JSON.createObjectNode().put("file_path", target.toString()).put("content", "hi")),
+                        FakeProvider.complete()),
+                List.of(FakeProvider.delta("好的，我不覆盖文件"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setConfirmAnswerer(event -> {
+            asks.incrementAndGet();
+            assertEquals("WriteFile", event.toolName());
+            return false;
+        });
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        controller.handleExchange("覆盖 out.txt", () -> false, () -> { });
+
+        assertFalse(Files.exists(target), "拒绝后工具不应执行（文件不应创建）");
+        assertEquals(1, asks.get(), "确认提示应恰好弹出一次");
+        List<ChatRequest> requests = provider.receivedRequests();
+        assertEquals(2, requests.size(), "拒绝后模型应收到失败结果并再走一轮");
+        ChatMessage last = requests.get(1).messages().get(requests.get(1).messages().size() - 1);
+        ToolResultBlock block = (ToolResultBlock) last.blocks().get(0);
+        assertTrue(block.isError(), "拒绝结果应带错误标记");
+        assertTrue(block.content().contains("拒绝"), "模型应收到「用户拒绝执行」原因");
+    }
+
+    @Test
+    void approvedConfirmationExecutesTool() throws Exception {
+        Path target = tempDir.resolve("out.txt");
+        AtomicInteger asks = new AtomicInteger();
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.toolUse("id-1", "WriteFile",
+                                JSON.createObjectNode().put("file_path", target.toString()).put("content", "hi")),
+                        FakeProvider.complete()),
+                List.of(FakeProvider.delta("已写入"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setConfirmAnswerer(event -> {
+            asks.incrementAndGet();
+            return true;
+        });
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        controller.handleExchange("写 out.txt", () -> false, () -> { });
+
+        assertEquals(1, asks.get(), "确认提示应恰好弹出一次");
+        assertEquals("hi", Files.readString(target), "批准后工具应执行并写入文件");
+        List<ChatRequest> requests = provider.receivedRequests();
+        ChatMessage last = requests.get(1).messages().get(requests.get(1).messages().size() - 1);
+        ToolResultBlock block = (ToolResultBlock) last.blocks().get(0);
+        assertFalse(block.isError(), "批准后的工具结果不应带错误标记");
+    }
+
     /** 计数追加写屏次数的假渲染器（追加式路径）。 */
     static class CountingLive extends LiveRegionRenderer {
         final AtomicInteger appends = new AtomicInteger();

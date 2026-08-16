@@ -45,4 +45,8 @@ public sealed interface AgentEvent {
 
     /** 重试预告（UI 显示等待状态） */
     record RetryEvent(String reason, long waitMs) implements AgentEvent {}
+
+    /** 工具确认请求：UI 弹 y/n 后经 response 答复；agent 线程在 await 阻塞等待 */
+    record ConfirmationRequestEvent(String toolId, String toolName, String argsSummary, Confirmation response)
+            implements AgentEvent {}
 }

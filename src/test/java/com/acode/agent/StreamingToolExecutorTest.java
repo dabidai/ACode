@@ -110,6 +110,13 @@ class StreamingToolExecutorTest {
         return new StreamingToolExecutor(registry, new ToolContext(java.nio.file.Path.of(".")));
     }
 
+    private static StreamingToolExecutor executor(ToolRegistry registry, ConfirmationGate gate) {
+        return new StreamingToolExecutor(registry, new ToolContext(java.nio.file.Path.of(".")), gate);
+    }
+
+    private static final ConfirmationGate APPROVE = (call, events, cancelled) -> true;
+    private static final ConfirmationGate DENY = (call, events, cancelled) -> false;
+
     @Test
     void mixedBatchRunsReadsBeforeWriteAndKeepsSerialOrder() throws Exception {
         List<String> log = new ArrayList<>();
@@ -245,5 +252,89 @@ class StreamingToolExecutorTest {
         List<AgentEvent> list = new ArrayList<>();
         events.drainTo(list);
         assertTrue(list.isEmpty(), "空批次不产生事件");
+    }
+
+    // ---- 确认门槛（T3） ----
+
+    @Test
+    void writeToolRunsWhenGateApproves() {
+        List<String> log = new ArrayList<>();
+        Tool write = new RecordingTool("Write", Permission.WRITE, log);
+        BlockingQueue<AgentEvent> events = queue();
+        StreamingToolExecutor executor = executor(registry(write), APPROVE);
+        List<ToolResult> results = executor.execute(
+                List.of(call("id1", "Write")), events, new AtomicBoolean(false));
+
+        assertEquals(1, results.size());
+        assertFalse(results.get(0).isError());
+        assertEquals("Write-output", results.get(0).output());
+        assertTrue(log.contains("Write_start"), "批准后工具应执行");
+    }
+
+    @Test
+    void writeToolNotExecutedAndFailureWhenGateDenies() {
+        List<String> log = new ArrayList<>();
+        Tool write = new RecordingTool("Write", Permission.WRITE, log);
+        BlockingQueue<AgentEvent> events = queue();
+        StreamingToolExecutor executor = executor(registry(write), DENY);
+        List<ToolResult> results = executor.execute(
+                List.of(call("id1", "Write")), events, new AtomicBoolean(false));
+
+        assertEquals(1, results.size());
+        assertTrue(results.get(0).isError());
+        assertTrue(results.get(0).content().contains("拒绝"));
+        assertFalse(log.contains("Write_start"), "拒绝后工具不应执行");
+        List<AgentEvent> list = new ArrayList<>();
+        events.drainTo(list);
+        assertEquals(1, list.size(), "拒绝也发一条 ToolResultEvent 供 UI 渲染");
+        ToolResultEvent e = (ToolResultEvent) list.get(0);
+        assertTrue(e.isError());
+        assertTrue(e.output().contains("拒绝"));
+    }
+
+    @Test
+    void readToolSkipsConfirmationGate() {
+        AtomicBoolean gateCalled = new AtomicBoolean(false);
+        ConfirmationGate trackingGate = (call, events, cancelled) -> {
+            gateCalled.set(true);
+            return false;
+        };
+        Tool read = new RecordingTool("Read", Permission.READ, new ArrayList<>());
+        BlockingQueue<AgentEvent> events = queue();
+        StreamingToolExecutor executor = executor(registry(read), trackingGate);
+        List<ToolResult> results = executor.execute(
+                List.of(call("id1", "Read")), events, new AtomicBoolean(false));
+
+        assertFalse(results.get(0).isError(), "READ 工具应正常执行");
+        assertFalse(gateCalled.get(), "READ 工具不应触发确认门槛");
+    }
+
+    @Test
+    void gateDeniedUnderCancellationReturnsFailureWithoutHang() throws Exception {
+        List<String> log = new ArrayList<>();
+        Tool write = new RecordingTool("Write", Permission.WRITE, log);
+        AtomicBoolean cancelled = new AtomicBoolean(false);
+        // 模拟 EventConfirmationGate：取消置位前阻塞等待，取消后确认失败
+        ConfirmationGate cancelAwareGate = (call, events, cancelledFlag) -> {
+            while (!cancelledFlag.get()) {
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+            return false;
+        };
+        BlockingQueue<AgentEvent> events = queue();
+        StreamingToolExecutor executor = executor(registry(write), cancelAwareGate);
+        java.util.concurrent.Future<List<ToolResult>> future = java.util.concurrent.CompletableFuture
+                .supplyAsync(() -> executor.execute(List.of(call("id1", "Write")), events, cancelled));
+
+        Thread.sleep(100);
+        cancelled.set(true);
+        List<ToolResult> results = future.get(2, TimeUnit.SECONDS);
+        assertTrue(results.get(0).isError(), "取消置位后确认失败，返回拒绝结果");
+        assertFalse(log.contains("Write_start"), "确认被取消拦截，工具不应执行");
     }
 }

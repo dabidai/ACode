@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentEventTest {
@@ -41,15 +42,17 @@ class AgentEventTest {
     }
 
     @Test
-    void toolResultEventRecordCarriesOutputAndErrorFlag() {
-        ToolResultEvent ok = new ToolResultEvent("toolu_1", "ReadFile", "内容", false, 0);
+    void toolResultEventRecordCarriesOutputErrorFlagAndDisplay() {
+        ToolResultEvent ok = new ToolResultEvent("toolu_1", "ReadFile", "内容", false, 0, "返回 1 行（L1-1）");
         assertFalse(ok.isError());
         assertEquals("内容", ok.output());
         assertEquals(0, ok.elapsedMs());
+        assertEquals("返回 1 行（L1-1）", ok.display());
 
-        ToolResultEvent fail = new ToolResultEvent("toolu_2", "Bash", "命令失败", true, 250);
+        ToolResultEvent fail = new ToolResultEvent("toolu_2", "Bash", "命令失败", true, 250, null);
         assertTrue(fail.isError());
         assertEquals(250, fail.elapsedMs());
+        assertNull(fail.display(), "失败/拒绝路径 display 为 null");
     }
 
     @Test
@@ -103,7 +106,7 @@ class AgentEventTest {
         AgentEvent e = new StreamText("x");
         assertTrue(e instanceof StreamText);
         assertTrue(new ToolUseEvent("id", "n", JSON.createObjectNode()) instanceof AgentEvent);
-        assertTrue(new ToolResultEvent("id", "n", "out", false, 0) instanceof AgentEvent);
+        assertTrue(new ToolResultEvent("id", "n", "out", false, 0, null) instanceof AgentEvent);
         assertTrue(new TurnComplete(1) instanceof AgentEvent);
         assertTrue(new LoopComplete(1) instanceof AgentEvent);
         assertTrue(new ErrorEvent("e") instanceof AgentEvent);

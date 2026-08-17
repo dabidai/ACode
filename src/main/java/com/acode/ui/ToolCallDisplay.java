@@ -66,16 +66,19 @@ public class ToolCallDisplay {
         return renderedLines;
     }
 
-    /** 「终态」卡片渲染行：输出块（首行 ⎿ 成败着色 + 后续行缩进 + 截断 marker + 耗时脚注）。 */
+    /** 「终态」卡片渲染行：输出块（首行 ⎿ 成败着色 + 后续行缩进 + 截断 marker + 耗时脚注）。
+     * 展示正文（display）非空且成功时优先渲染，否则回退回传正文（content）。 */
     public List<String> appendDone(ToolResult result, long elapsedMs) {
         screenAppended = 0;
         List<String> block = new ArrayList<>();
         boolean ok = result != null && result.isSuccess();
         String content = result != null ? result.content() : null;
-        if (content == null || content.isEmpty()) {
+        String display = result != null ? result.display() : null;
+        String text = (ok && display != null && !display.isEmpty()) ? display : content;
+        if (text == null || text.isEmpty()) {
             block.add("  ⎿  （无返回结果）");
         } else {
-            String[] parts = content.split("\\r?\\n", -1);
+            String[] parts = text.split("\\r?\\n", -1);
             int end = parts.length;
             while (end > 0 && parts[end - 1].isEmpty()) {
                 end--; // 输出常以换行结尾，去掉末尾空行，保留中间空行
@@ -85,12 +88,9 @@ public class ToolCallDisplay {
             } else {
                 int limit = Math.min(end, MAX_DISPLAY_LINES);
                 for (int i = 0; i < limit; i++) {
-                    String line = parts[i];
-                    if (i == 0) {
-                        block.add("  ⎿  " + (ok ? STYLE_OK : STYLE_ERR) + line + RESET);
-                    } else {
-                        block.add("     " + line);
-                    }
+                    block.add(i == 0
+                            ? "  ⎿  " + styleLine(parts[i], true, ok)
+                            : "     " + styleLine(parts[i], false, ok));
                 }
                 if (end > MAX_DISPLAY_LINES) {
                     block.add("  ⎿  …（输出过长，已截断）");
@@ -100,6 +100,20 @@ public class ToolCallDisplay {
         block.add("  ⎿  " + STYLE_DIM + "(" + formatDuration(elapsedMs) + ")" + RESET);
         renderedLines = block;
         return renderedLines;
+    }
+
+    /** 行着色：`+ ` 绿 / `- ` 红通用着色；其余行首行用成败色、后续行原色。 */
+    private static String styleLine(String line, boolean first, boolean ok) {
+        if (line.startsWith("+ ")) {
+            return STYLE_OK + line + RESET;
+        }
+        if (line.startsWith("- ")) {
+            return STYLE_ERR + line + RESET;
+        }
+        if (first) {
+            return (ok ? STYLE_OK : STYLE_ERR) + line + RESET;
+        }
+        return line;
     }
 
     /** 耗时展示：<1s 毫秒（823ms），≥1s 秒一位小数（2.3s）；负值按 0 处理。 */

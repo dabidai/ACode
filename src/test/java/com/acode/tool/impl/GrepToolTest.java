@@ -93,4 +93,25 @@ class GrepToolTest {
         assertTrue(r.isError());
         assertTrue(r.errorMessage().contains("nope"));
     }
+
+    @Test
+    void displaySummaryShowsHitCount() throws Exception {
+        Files.writeString(tempDir.resolve("a.txt"), "match1\nmatch2\n", StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve("b.txt"), "match3\n", StandardCharsets.UTF_8);
+        ToolResult r = TOOL.execute(input("match"), context());
+        assertTrue(r.isSuccess());
+        assertEquals("返回 3 条命中", r.display());
+    }
+
+    @Test
+    void displaySummaryMarksTruncation() throws Exception {
+        List<String> lines = new ArrayList<>();
+        for (int i = 0; i < 600; i++) {
+            lines.add("match" + i);
+        }
+        Files.write(tempDir.resolve("big.txt"), lines, StandardCharsets.UTF_8);
+        ToolResult r = TOOL.execute(input("match"), context());
+        assertTrue(r.isSuccess());
+        assertEquals("返回 500 条命中（已截断）", r.display());
+    }
 }

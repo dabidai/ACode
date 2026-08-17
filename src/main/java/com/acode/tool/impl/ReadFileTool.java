@@ -54,11 +54,15 @@ public class ReadFileTool extends BaseTool {
             for (int i = start; i < showEnd; i++) {
                 sb.append(lines.get(i)).append('\n');
             }
-            if (lines.size() > MAX_LINES) {
+            boolean truncated = lines.size() > MAX_LINES;
+            if (truncated) {
                 sb.append("\n…（已截断：共 ").append(lines.size())
                         .append(" 行，返回 ").append(showEnd - start).append(" 行）");
             }
-            return ToolResult.success(sb.toString());
+            int returned = Math.max(0, showEnd - start);
+            String summary = "返回 " + returned + " 行（L" + (start + 1) + "-" + showEnd + "）"
+                    + (truncated ? "（已截断）" : "");
+            return ToolResult.success(sb.toString()).withDisplay(summary);
         } catch (IOException e) {
             return ToolResult.failure("读取文件失败：" + file + "：" + e.getMessage());
         }

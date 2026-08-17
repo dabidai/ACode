@@ -146,4 +146,50 @@ class ToolCallDisplayTest {
         assertEquals("5.0s", ToolCallDisplay.formatDuration(5000));
         assertEquals("0ms", ToolCallDisplay.formatDuration(-5), "负值按 0 处理");
     }
+
+    @Test
+    void doneCardPrefersDisplayOverContent() {
+        ToolCallDisplay card = new ToolCallDisplay("ReadFile", "file_path=\"a.txt\"");
+        List<String> lines = card.appendDone(
+                ToolResult.success("机密内容").withDisplay("返回 2 行（L1-2）"), 0);
+        assertEquals(2, lines.size(), "摘要行 + 脚注");
+        assertTrue(lines.get(0).contains("返回 2 行"));
+        assertFalse(lines.get(0).contains("机密内容"), "display 非空时不应渲染 content");
+    }
+
+    @Test
+    void doneCardColorsDiffPrefixLines() {
+        ToolCallDisplay card = new ToolCallDisplay("WriteFile", "file_path=\"a.txt\"");
+        List<String> lines = card.appendDone(
+                ToolResult.success("已写入 a.txt（5 字符）").withDisplay("已写入 a.txt（5 字符）\n+ hi\n- bye"), 0);
+        assertTrue(lines.get(1).contains(ToolCallDisplay.STYLE_OK), "+ 行应为绿色：" + lines.get(1));
+        assertTrue(lines.get(1).contains("+ hi"));
+        assertTrue(lines.get(2).contains(ToolCallDisplay.STYLE_ERR), "- 行应为红色：" + lines.get(2));
+        assertTrue(lines.get(2).contains("- bye"));
+    }
+
+    @Test
+    void doneCardEmptyDisplayFallsBackToContent() {
+        ToolCallDisplay card = new ToolCallDisplay("ReadFile", "file_path=\"a.txt\"");
+        List<String> lines = card.appendDone(ToolResult.success("正文").withDisplay(""), 0);
+        assertTrue(lines.get(0).contains("正文"), "display 为空串时应回退渲染 content");
+    }
+
+    @Test
+    void doneCardFailureIgnoresDisplay() {
+        ToolCallDisplay card = new ToolCallDisplay("ReadFile", "file_path=\"nope.txt\"");
+        List<String> lines = card.appendDone(
+                ToolResult.failure("文件不存在").withDisplay("返回 0 行"), 0);
+        assertTrue(lines.get(0).contains("文件不存在"), "失败结果即使带 display 仍渲染错误正文：" + lines.get(0));
+        assertTrue(lines.get(0).contains(ToolCallDisplay.STYLE_ERR));
+    }
+
+    @Test
+    void doneCardLongDisplayTruncated() {
+        String display = "已写入 a.txt\n" + ("+ x\n".repeat(400));
+        ToolCallDisplay card = new ToolCallDisplay("WriteFile", "file_path=\"a.txt\"");
+        List<String> lines = card.appendDone(ToolResult.success("确认").withDisplay(display), 0);
+        assertEquals(ToolCallDisplay.MAX_DISPLAY_LINES + 2, lines.size(), "300 行 + 截断 marker + 脚注");
+        assertTrue(lines.contains("  ⎿  …（输出过长，已截断）"));
+    }
 }

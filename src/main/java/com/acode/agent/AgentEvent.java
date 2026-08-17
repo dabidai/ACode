@@ -32,8 +32,9 @@ public sealed interface AgentEvent {
     /** 模型发起工具调用 */
     record ToolUseEvent(String toolId, String toolName, JsonNode args) implements AgentEvent {}
 
-    /** 单个工具执行完成（elapsedMs 为工具实际执行耗时毫秒，确认拒绝/取消路径记 0） */
-    record ToolResultEvent(String toolId, String toolName, String output, boolean isError, long elapsedMs)
+    /** 单个工具执行完成（elapsedMs 为工具实际执行耗时毫秒，确认拒绝/取消路径记 0；
+     * display 为仅供界面展示的正文，普通/交互路径随结果透传，拒绝路径为 null） */
+    record ToolResultEvent(String toolId, String toolName, String output, boolean isError, long elapsedMs, String display)
             implements AgentEvent {}
 
     /** 一轮结束（工具结果已回填，可开始下一轮） */

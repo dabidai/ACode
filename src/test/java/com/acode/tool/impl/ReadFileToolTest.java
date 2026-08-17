@@ -10,6 +10,8 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -85,5 +87,45 @@ class ReadFileToolTest {
         ToolResult result = TOOL.execute(input, context(tempDir));
         assertTrue(result.isSuccess());
         assertEquals("相对路径内容\n", result.output());
+    }
+
+    @Test
+    void displaySummaryShowsLineRangeAndCount() throws Exception {
+        Path file = tempDir.resolve("display.txt");
+        List<String> lines = new ArrayList<>();
+        for (int i = 0; i < 87; i++) {
+            lines.add("row-" + i);
+        }
+        Files.write(file, lines, StandardCharsets.UTF_8);
+        ToolResult result = TOOL.execute(params(file), context(tempDir));
+        assertTrue(result.isSuccess());
+        assertEquals("返回 87 行（L1-87）", result.display());
+        assertEquals(87, result.output().lines().count(), "output 仍是完整文件内容");
+    }
+
+    @Test
+    void displaySummaryRespectsOffsetAndLimit() throws Exception {
+        Path file = tempDir.resolve("display-range.txt");
+        List<String> lines = new ArrayList<>();
+        for (int i = 0; i < 200; i++) {
+            lines.add("row-" + i);
+        }
+        Files.write(file, lines, StandardCharsets.UTF_8);
+        ObjectNode input = params(file).put("offset", 95).put("limit", 87);
+        ToolResult result = TOOL.execute(input, context(tempDir));
+        assertTrue(result.isSuccess());
+        assertEquals("返回 87 行（L96-182）", result.display());
+    }
+
+    @Test
+    void displaySummaryMarksTruncation() throws Exception {
+        Path file = tempDir.resolve("display-big.txt");
+        String content = IntStream.range(0, 3000).mapToObj(i -> "line-" + i)
+                .collect(Collectors.joining("\n"));
+        Files.writeString(file, content, StandardCharsets.UTF_8);
+        ToolResult result = TOOL.execute(params(file), context(tempDir));
+        assertTrue(result.isSuccess());
+        assertTrue(result.display().contains("已截断"));
+        assertTrue(result.display().contains("L1-2000"));
     }
 }

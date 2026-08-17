@@ -518,7 +518,7 @@ public class ConversationController {
             } else if (event instanceof ToolResultEvent toolResult) {
                 turnResults.add(toolResult.isError()
                         ? ToolResult.failure(toolResult.output())
-                        : ToolResult.success(toolResult.output()));
+                        : ToolResult.success(toolResult.output()).withDisplay(toolResult.display()));
                 elapsedList.add(toolResult.elapsedMs());
             } else if (event instanceof TurnComplete) {
                 printer.updateToolCalls(turnResults, elapsedList);

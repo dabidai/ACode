@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -20,6 +21,9 @@ import java.util.List;
  */
 public class
 EditFileTool extends BaseTool {
+
+    /** diff 展示封顶：累计 diff 行数超过此值则截断并省略对比 */
+    static final int MAX_DIFF_LINES = 300;
 
     public EditFileTool() {
         super("EditFile",
@@ -80,10 +84,50 @@ EditFileTool extends BaseTool {
 
         try {
             Files.writeString(file, builder.toString(), StandardCharsets.UTF_8);
-            return ToolResult.success("已编辑 " + file + "（" + edits.size() + " 处替换）");
+            String confirmation = "已编辑 " + file + "（" + edits.size() + " 处替换）";
+            return ToolResult.success(confirmation).withDisplay(buildDisplay(confirmation, edits));
         } catch (IOException e) {
             return ToolResult.failure("写入文件失败：" + file + "：" + e.getMessage());
         }
+    }
+
+    private static String buildDisplay(String confirmation, ArrayNode edits) {
+        StringBuilder display = new StringBuilder(confirmation);
+        int count = 0;
+        for (JsonNode edit : edits) {
+            for (String line : splitLines(edit.get("old").asText())) {
+                if (count < MAX_DIFF_LINES) {
+                    display.append('\n').append("- ").append(line);
+                }
+                count++;
+            }
+            for (String line : splitLines(edit.get("new").asText())) {
+                if (count < MAX_DIFF_LINES) {
+                    display.append('\n').append("+ ").append(line);
+                }
+                count++;
+            }
+        }
+        if (count > MAX_DIFF_LINES) {
+            display.append("\n…（变化过大，省略对比）");
+        }
+        return display.toString();
+    }
+
+    /** 按行拆分：去掉末尾换行产生的空段，保留中间空行。 */
+    private static List<String> splitLines(String text) {
+        List<String> lines = new ArrayList<>();
+        int start = 0;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) == '\n') {
+                lines.add(text.substring(start, i).replace("\r", ""));
+                start = i + 1;
+            }
+        }
+        if (start < text.length()) {
+            lines.add(text.substring(start));
+        }
+        return lines;
     }
 
     private static String summarize(String s) {

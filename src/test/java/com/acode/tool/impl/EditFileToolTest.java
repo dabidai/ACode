@@ -88,4 +88,45 @@ class EditFileToolTest {
         assertTrue(result.isError());
         assertTrue(result.errorMessage().contains(file.toString()));
     }
+
+    @Test
+    void displaySingleLineReplacementShowsMinusAndPlus() throws Exception {
+        Path file = tempDir.resolve("a.txt");
+        Files.writeString(file, "hello foo bar", StandardCharsets.UTF_8);
+        ToolResult result = TOOL.execute(input(file, edit("foo", "baz")), context());
+        assertTrue(result.isSuccess());
+        assertTrue(result.display().contains("\n- foo"));
+        assertTrue(result.display().contains("\n+ baz"));
+        assertEquals("已编辑 " + file + "（1 处替换）", result.output(), "output 为原确认文案，不含 diff");
+    }
+
+    @Test
+    void displayMultiLineSegmentSplitsByLine() throws Exception {
+        Path file = tempDir.resolve("a.txt");
+        Files.writeString(file, "a\nb\nc", StandardCharsets.UTF_8);
+        ToolResult result = TOOL.execute(input(file, edit("a\nb", "x\ny")), context());
+        assertTrue(result.isSuccess());
+        assertTrue(result.display().contains("\n- a\n- b"));
+        assertTrue(result.display().contains("\n+ x\n+ y"));
+        assertEquals("x\ny\nc", Files.readString(file, StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void displayHugeCumulativeDiffIsCapped() throws Exception {
+        Path file = tempDir.resolve("a.txt");
+        StringBuilder oldBuilder = new StringBuilder();
+        StringBuilder newBuilder = new StringBuilder();
+        for (int i = 0; i < 200; i++) {
+            oldBuilder.append("o").append(i).append('\n');
+            newBuilder.append("n").append(i).append('\n');
+        }
+        String oldText = oldBuilder.toString();
+        String newText = newBuilder.toString();
+        Files.writeString(file, oldText, StandardCharsets.UTF_8);
+        ToolResult result = TOOL.execute(input(file, edit(oldText, newText)), context());
+        assertTrue(result.isSuccess());
+        assertTrue(result.display().endsWith("…（变化过大，省略对比）"));
+        assertTrue(result.display().lines().count() <= 300 + 2, "封顶 300 行 + 确认行 + marker");
+        assertEquals(newText, Files.readString(file, StandardCharsets.UTF_8));
+    }
 }

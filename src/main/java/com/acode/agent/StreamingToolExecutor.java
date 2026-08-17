@@ -116,7 +116,7 @@ public class StreamingToolExecutor {
             results[index] = ToolResult.failure("用户拒绝执行「" + call.name() + "」");
             // 拒绝路径耗时记 0：不含用户确认思考时间
             AgentEvent.putSafe(events, new ToolResultEvent(call.id(), call.name(),
-                    results[index].content(), true, 0));
+                    results[index].content(), true, 0, results[index].display()));
             return;
         }
         if (tool instanceof InteractiveTool interactive) {
@@ -127,7 +127,7 @@ public class StreamingToolExecutor {
             results[index] = result;
             // 交互耗时记 0：不含用户思考时间
             AgentEvent.putSafe(events, new ToolResultEvent(call.id(), call.name(),
-                    result.content(), result.isError(), 0));
+                    result.content(), result.isError(), 0, result.display()));
             return;
         }
         long start = System.nanoTime();
@@ -137,7 +137,8 @@ public class StreamingToolExecutor {
             return;
         }
         results[index] = result;
-        AgentEvent.putSafe(events, new ToolResultEvent(call.id(), call.name(), result.content(), result.isError(), elapsedMs));
+        AgentEvent.putSafe(events, new ToolResultEvent(call.id(), call.name(),
+                result.content(), result.isError(), elapsedMs, result.display()));
     }
 
     private static List<ToolResult> fillCancelled(ToolResult[] results) {

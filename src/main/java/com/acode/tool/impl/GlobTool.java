@@ -81,7 +81,8 @@ public class GlobTool extends BaseTool {
         if (truncated) {
             body += "\n…（结果过多，已截断，仅显示前 " + MAX_RESULTS + " 条）";
         }
-        return ToolResult.success(body);
+        return ToolResult.success(body).withDisplay(
+                "返回 " + results.size() + " 个匹配" + (truncated ? "（已截断）" : ""));
     }
 
     private static boolean matchesAny(Path rel, List<PathMatcher> matchers) {

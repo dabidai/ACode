@@ -94,7 +94,8 @@ public class GrepTool extends BaseTool {
         if (truncated) {
             body += "\n…（命中过多，已截断，仅显示前 " + MAX_HITS + " 条）";
         }
-        return ToolResult.success(body);
+        return ToolResult.success(body).withDisplay(
+                "返回 " + hits.size() + " 条命中" + (truncated ? "（已截断）" : ""));
     }
 
     private static void collectHits(Path file, Pattern pattern, List<String> hits, int max) {

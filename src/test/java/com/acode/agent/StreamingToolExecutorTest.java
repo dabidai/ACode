@@ -21,6 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class StreamingToolExecutorTest {
@@ -94,7 +95,7 @@ class StreamingToolExecutorTest {
             synchronized (log) {
                 log.add(name + "_done");
             }
-            return ToolResult.success(name + "-output");
+            return ToolResult.success(name + "-output").withDisplay(name + "-display");
         }
     }
 
@@ -199,9 +200,11 @@ class StreamingToolExecutorTest {
         assertEquals("Read", e1.toolName());
         assertEquals("Read-output", e1.output());
         assertFalse(e1.isError());
+        assertEquals("Read-display", e1.display(), "普通路径事件 display 应与 result.display() 一致");
         assertTrue(e1.elapsedMs() >= 0, "正常执行应带耗时：" + e1.elapsedMs());
         ToolResultEvent e2 = (ToolResultEvent) list.get(1);
         assertEquals("Write", e2.toolName());
+        assertEquals("Write-display", e2.display());
         assertTrue(e2.elapsedMs() >= 0, "正常执行应带耗时：" + e2.elapsedMs());
     }
 
@@ -293,6 +296,7 @@ class StreamingToolExecutorTest {
         assertTrue(e.isError());
         assertTrue(e.output().contains("拒绝"));
         assertEquals(0, e.elapsedMs(), "拒绝路径耗时记 0（不含确认等待）");
+        assertNull(e.display(), "拒绝路径 display 为 null");
     }
 
     @Test
@@ -382,7 +386,7 @@ class StreamingToolExecutorTest {
         @Override
         public ToolResult executeInteractive(ToolUseBlock call, BlockingQueue<AgentEvent> events, AtomicBoolean cancelled) {
             log.add(name + "_interactive");
-            return ToolResult.success("B");
+            return ToolResult.success("B").withDisplay("menu-choice");
         }
     }
 
@@ -464,6 +468,7 @@ class StreamingToolExecutorTest {
         assertEquals("B", e.output());
         assertFalse(e.isError());
         assertEquals(0, e.elapsedMs(), "交互耗时记 0（不含用户思考时间）");
+        assertEquals("menu-choice", e.display(), "交互路径事件 display 应与 result.display() 一致");
     }
 
     @Test

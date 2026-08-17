@@ -436,4 +436,77 @@ class ConversationControllerTest {
             super.appendCommitted(out, text);
         }
     }
+
+    @Test
+    void readFileShowsSummaryInsteadOfFileBodyInRollback() throws Exception {
+        Path file = tempDir.resolve("a.txt");
+        Files.writeString(file, "第一行\n第二行\n第三行");
+
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.toolUse("id-1", "ReadFile",
+                                JSON.createObjectNode().put("file_path", file.toString())),
+                        FakeProvider.complete()),
+                List.of(FakeProvider.delta("文件读好了"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        StringWriter sw = new StringWriter();
+        controller.setScreenWriter(sw);
+        controller.handleExchange("读 a.txt", () -> false, () -> { });
+
+        // 模型回传内容不变：第二轮 tool_result 仍含完整文件正文
+        List<ChatRequest> requests = provider.receivedRequests();
+        ChatMessage last = requests.get(1).messages().get(requests.get(1).messages().size() - 1);
+        ToolResultBlock block = (ToolResultBlock) last.blocks().get(0);
+        assertTrue(block.content().contains("第一行"), "模型回传 tool_result 仍是完整文件内容");
+
+        // 界面回滚：只出一行摘要 + 耗时，不含文件正文
+        String joined = String.join("\n", output.lines());
+        assertTrue(joined.contains("返回 3 行（L1-3）"), "应渲染一行摘要：" + joined);
+        assertTrue(joined.contains("  ⎿  "), "摘要行仍带 ⎿ 前缀");
+        assertFalse(joined.contains("第二行"), "文件正文不应进回滚");
+    }
+
+    @Test
+    void writeFileShowsGreenPlusLinesInRollback() throws Exception {
+        Path target = tempDir.resolve("out.txt");
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.toolUse("id-1", "WriteFile",
+                                JSON.createObjectNode().put("file_path", target.toString()).put("content", "你好\n世界")),
+                        FakeProvider.complete()),
+                List.of(FakeProvider.delta("写入完成"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setConfirmAnswerer(event -> true);
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        StringWriter sw = new StringWriter();
+        controller.setScreenWriter(sw);
+        controller.handleExchange("写 out.txt", () -> false, () -> { });
+
+        assertEquals("你好\n世界", Files.readString(target), "WriteFile 应真实执行");
+        String joined = String.join("\n", output.lines());
+        assertTrue(joined.contains("+ 你好"), "应渲染绿色 + 行：" + joined);
+        assertTrue(joined.contains("+ 世界"));
+        assertTrue(joined.contains(ToolCallDisplay.STYLE_OK), "+ 行应为绿色");
+    }
+
+    @Test
+    void readFileFailureStillShowsRedError() throws Exception {
+        Path missing = tempDir.resolve("nope.txt");
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.toolUse("id-1", "ReadFile",
+                                JSON.createObjectNode().put("file_path", missing.toString())),
+                        FakeProvider.complete()),
+                List.of(FakeProvider.delta("文件不存在，请检查"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        StringWriter sw = new StringWriter();
+        controller.setScreenWriter(sw);
+        controller.handleExchange("读 nope", () -> false, () -> { });
+
+        String joined = String.join("\n", output.lines());
+        assertTrue(joined.contains(ToolCallDisplay.STYLE_ERR), "失败仍显示红色：" + joined);
+        assertTrue(joined.contains("文件不存在"), "失败正文应显示");
+    }
 }

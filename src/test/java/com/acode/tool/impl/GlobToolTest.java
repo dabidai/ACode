@@ -86,4 +86,24 @@ class GlobToolTest {
         assertTrue(r.isError());
         assertTrue(r.errorMessage().contains("nope"));
     }
+
+    @Test
+    void displaySummaryShowsMatchCount() throws Exception {
+        Files.writeString(tempDir.resolve("a.java"), "x", StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve("b.java"), "x", StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve("c.java"), "x", StandardCharsets.UTF_8);
+        ToolResult r = TOOL.execute(input("**/*.java"), context());
+        assertTrue(r.isSuccess());
+        assertEquals("返回 3 个匹配", r.display());
+    }
+
+    @Test
+    void displaySummaryMarksTruncation() throws Exception {
+        for (int i = 0; i < 205; i++) {
+            Files.writeString(tempDir.resolve("f" + i + ".txt"), "x", StandardCharsets.UTF_8);
+        }
+        ToolResult r = TOOL.execute(input("*.txt"), context());
+        assertTrue(r.isSuccess());
+        assertEquals("返回 200 个匹配（已截断）", r.display());
+    }
 }

@@ -103,7 +103,7 @@
 
 # ACode 阶段四：终端渲染改造（主屏可复制）— 手动验收步骤
 
-> 对应 docs/ch00/checklist.md 的 T10 端到端验收项。需要真实 API 密钥。
+> 对应 docs/ch04/followups.md §1 的端到端验收项（原 ch00/checklist.md T10）。需要真实 API 密钥。
 > 核心变化：输出走原生 scrollback（可划选复制、可滚轮回看），不再用备用屏幕/自绘滚动条/鼠标捕获。
 > 流式输出为纯追加式：完整行出现即提交进回滚、永不再改（无任何光标重绘操作），未完成行等换行到达后显示；
 > 工具调用显示「⏳ 调用工具…」与终态行两条静态记录。因此任何终端宽度/字符宽度差异都不会造成错位。
@@ -175,7 +175,7 @@
 
 # ACode 阶段六：工具结果渲染（ch06）— 手动验收步骤
 
-> 对应 checklist.md 的 T6 端到端项。需要真实 provider 密钥；未运行手动验收前，checklist 相应项保持未勾选。
+> 对应 docs/ch04/followups.md §3 的端到端项（原 ch06/checklist.md T6）。需要真实 provider 密钥；未运行手动验收前，checklist 相应项保持未勾选。
 
 ## M11 Bash 命令输出块
 
@@ -219,7 +219,7 @@
 
 # ACode 阶段七：选择交互（↑↓ 菜单替换 y/n + AI 选择工具）— 手动验收步骤
 
-> 对应 docs/ch07/checklist.md 的 T9 端到端项。需要真实 provider 密钥。
+> 对应 docs/ch04/followups.md §4 的端到端项（原 ch07/checklist.md T9）。需要真实 provider 密钥。
 > 核心变化：确认执行不再用 `[y/n]` 行输入，改用 ↑↓ 选择菜单（`> 是` 反显默认选中）；新增 AskUser 工具让模型发起多选项单选菜单，选中结果回传模型。
 
 ## 前置
@@ -250,7 +250,7 @@
 
 # ACode 阶段八：工具结果展示策略（只读摘要 + 写入 diff）— 手动验收步骤
 
-> 对应 docs/ch08/checklist.md 的 T8 端到端项。需要真实 provider 密钥。
+> 对应 docs/ch04/followups.md §5 的端到端项（原 ch08/checklist.md T8）。需要真实 provider 密钥。
 > 核心变化：ReadFile/Glob/Grep 成功不再列出内容，只出一行摘要 + 耗时；WriteFile/EditFile 出红绿 diff（`-` 红 / `+` 绿）；Bash 与 AskUser/ExitPlanMode 展示不变；失败一律照常显示错误。
 
 ## 前置

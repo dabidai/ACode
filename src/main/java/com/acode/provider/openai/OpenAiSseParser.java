@@ -4,6 +4,7 @@ import com.acode.provider.ChatListener;
 import com.acode.provider.InvalidRequestException;
 import com.acode.provider.ProviderException;
 import com.acode.provider.ToolUseBlock;
+import com.acode.provider.Usage;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -38,6 +39,15 @@ public final class OpenAiSseParser {
             if (node.has("error")) {
                 throw new InvalidRequestException(
                         "请求错误：" + node.path("error").path("message").asText("无详情"));
+            }
+            // usage 块：流末尾带 choices 或独立 data 行下发；cache_creation 恒 0（OpenAI 自动缓存）
+            JsonNode usageNode = node.path("usage");
+            if (usageNode.isObject()) {
+                listener.onUsage(new Usage(
+                        usageNode.path("prompt_tokens").asLong(0),
+                        usageNode.path("completion_tokens").asLong(0),
+                        usageNode.path("prompt_tokens_details").path("cached_tokens").asLong(0),
+                        0));
             }
             JsonNode choice = node.path("choices").path(0);
             JsonNode delta = choice.path("delta");

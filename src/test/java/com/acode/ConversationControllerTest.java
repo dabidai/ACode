@@ -1,12 +1,14 @@
 package com.acode;
 
 import com.acode.config.AppConfig;
+import com.acode.prompt.PromptBuilder;
 import com.acode.provider.ChatMessage;
 import com.acode.provider.ChatRequest;
 import com.acode.provider.FakeProvider;
 import com.acode.provider.TextBlock;
 import com.acode.provider.ToolResultBlock;
 import com.acode.provider.ToolUseBlock;
+import com.acode.provider.Usage;
 import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
 import com.acode.ui.ToolCallDisplay;
@@ -420,6 +422,61 @@ class ConversationControllerTest {
         assertTrue(block.isError(), "取消结果应带错误标记");
         assertTrue(block.content().contains("取消"), "模型应收到「用户取消选择」：" + block.content());
         assertTrue(sw.toString().contains("AskUser"), "AskUser 工具卡片应进回滚：" + sw);
+    }
+
+    @Test
+    void requestStartsWithSystemPromptAndEnvironmentReminder() throws Exception {
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.delta("普通回答"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        controller.handleExchange("你好", () -> false, () -> { });
+
+        List<ChatMessage> messages = provider.receivedRequests().get(0).messages();
+        assertEquals(ChatMessage.Role.SYSTEM, messages.get(0).role(), "请求首位应为 SYSTEM");
+        assertEquals(PromptBuilder.buildSystemPrompt(), messages.get(0).content(), "SYSTEM 应为七模块提示词");
+        assertEquals(ChatMessage.Role.USER, messages.get(1).role(), "SYSTEM 后应为环境 system-reminder");
+        assertTrue(messages.get(1).content().startsWith("<system-reminder>"), "环境消息应带 system-reminder 标签");
+        assertTrue(messages.get(1).content().contains("# Environment"), "环境消息应含 # Environment 段落");
+        assertTrue(controller.conversation().history().stream()
+                        .noneMatch(m -> m.content().startsWith("<system-reminder>")),
+                "环境消息不应进历史");
+        assertEquals(2, controller.conversation().messageCount(), "历史仍只有 user + assistant");
+    }
+
+    @Test
+    void clearKeepsEnvironmentInjectedInNextRequest() throws Exception {
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.delta("第一次"), FakeProvider.complete()),
+                List.of(FakeProvider.delta("第二次"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        controller.handleExchange("你好", () -> false, () -> { });
+        controller.conversation().clear();
+        controller.handleExchange("再问", () -> false, () -> { });
+
+        List<ChatMessage> messages = provider.receivedRequests().get(1).messages();
+        assertEquals(ChatMessage.Role.SYSTEM, messages.get(0).role(), "CLEAR 后请求仍应以 SYSTEM 开头");
+        assertTrue(messages.get(1).content().startsWith("<system-reminder>"), "CLEAR 后环境仍注入");
+    }
+
+    @Test
+    void usageFootnotePrintedOnTurnComplete() throws Exception {
+        FakeProvider provider = FakeProvider.scripted(List.of(List.of(
+                FakeProvider.usage(new Usage(100, 20, 80, 5)),
+                FakeProvider.delta("回答"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        StringWriter sw = new StringWriter();
+        controller.setScreenWriter(sw);
+        controller.handleExchange("你好", () -> false, () -> { });
+
+        String joined = String.join("\n", output.lines());
+        assertTrue(joined.contains("usage: in 100 · cache_read 80 · cache_write 5 · out 20"),
+                "TurnComplete 应输出 usage 脚注行：" + joined);
     }
 
     /** 计数追加写屏次数的假渲染器（追加式路径）。 */

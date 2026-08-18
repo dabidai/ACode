@@ -11,6 +11,7 @@ import com.acode.agent.AgentEvent.StreamText;
 import com.acode.agent.AgentEvent.ToolResultEvent;
 import com.acode.agent.AgentEvent.ToolUseEvent;
 import com.acode.agent.AgentEvent.TurnComplete;
+import com.acode.agent.AgentEvent.UsageEvent;
 import com.acode.agent.AskUserTool;
 import com.acode.agent.EventConfirmationGate;
 import com.acode.config.AppConfig;
@@ -18,6 +19,9 @@ import com.acode.config.ConfigException;
 import com.acode.config.ConfigLoader;
 import com.acode.config.ConfigValidator;
 import com.acode.conversation.Conversation;
+import com.acode.prompt.EnvironmentDetector;
+import com.acode.prompt.PromptBuilder;
+import com.acode.prompt.SystemReminder;
 import com.acode.provider.ChatMessage;
 import com.acode.provider.ChatProvider;
 import com.acode.provider.ContentBlock;
@@ -25,6 +29,7 @@ import com.acode.provider.ProviderException;
 import com.acode.provider.TextBlock;
 import com.acode.provider.ToolResultBlock;
 import com.acode.provider.ToolUseBlock;
+import com.acode.provider.Usage;
 import com.acode.provider.anthropic.AnthropicProvider;
 import com.acode.provider.openai.OpenAiProvider;
 import com.acode.session.Session;
@@ -131,6 +136,17 @@ public class ConversationController {
         toolRegistry.register(new AskUserTool());
         this.sessionStore = new SessionStore(SessionStore.defaultDir());
         this.resume = resume;
+        initSessionState();
+    }
+
+    /**
+     * 会话启动时构建一次 system prompt 并探测环境快照存入会话状态：
+     * 每轮 buildRequest 注入（SYSTEM 首位 + 环境 system-reminder 首条），均不进历史；
+     * /clear 与恢复/加载会话不清除，下一轮仍注入。
+     */
+    private void initSessionState() {
+        conversation.setSystemPrompt(PromptBuilder.buildSystemPrompt());
+        conversation.setEnvironment(SystemReminder.environment(EnvironmentDetector.detect(config.getModel())));
     }
 
     private static ChatProvider buildProvider(AppConfig config) {
@@ -490,6 +506,7 @@ public class ConversationController {
         StreamPrinter printer = new StreamPrinter(output, live, writer, config.isTeeEnabled());
         List<ToolResult> turnResults = new ArrayList<>();
         List<Long> elapsedList = new ArrayList<>();
+        Usage lastUsage = null;
         while (true) {
             if (ctrlC.getAsBoolean()) {
                 agent.cancel();
@@ -507,6 +524,10 @@ public class ConversationController {
                 continue;
             }
             if (event instanceof LoopComplete) {
+                if (lastUsage != null) {
+                    printUsageFootnote(lastUsage, live, writer);
+                    lastUsage = null;
+                }
                 printer.updateToolCalls(turnResults, elapsedList);
                 printer.finishTurn();
                 completeLoop(agent, live, writer);
@@ -521,11 +542,17 @@ public class ConversationController {
                         : ToolResult.success(toolResult.output()).withDisplay(toolResult.display()));
                 elapsedList.add(toolResult.elapsedMs());
             } else if (event instanceof TurnComplete) {
+                if (lastUsage != null) {
+                    printUsageFootnote(lastUsage, live, writer);
+                    lastUsage = null;
+                }
                 printer.updateToolCalls(turnResults, elapsedList);
                 printer.finishTurn(); // 本轮文本与卡片转正进回滚，下一轮从下方开始
                 turnResults = new ArrayList<>();
                 elapsedList = new ArrayList<>();
                 printer = new StreamPrinter(output, live, writer, config.isTeeEnabled());
+            } else if (event instanceof UsageEvent usageEvent) {
+                lastUsage = usageEvent.usage();
             } else if (event instanceof RetryEvent retry) {
                 output.appendLine("（重试中：" + retry.reason() + "）");
                 live.appendCommitted(writer, "（重试中：" + retry.reason() + "）");
@@ -543,6 +570,17 @@ public class ConversationController {
     private int maxIterations() {
         Integer configured = config.getMaxIterations();
         return configured != null && configured > 0 ? configured : ConfigValidator.DEFAULT_MAX_ITERATIONS;
+    }
+
+    /** 每轮 TurnComplete 输出 usage 脚注行（终端 + 文件日志），供缓存命中观察 */
+    private void printUsageFootnote(Usage usage, LiveRegionRenderer live, Writer writer) {
+        String line = "usage: in " + usage.inputTokens()
+                + " · cache_read " + usage.cacheReadTokens()
+                + " · cache_write " + usage.cacheCreationTokens()
+                + " · out " + usage.outputTokens();
+        output.appendLine(line);
+        live.appendCommitted(writer, line);
+        log.info("{}", line);
     }
 
     /** 事件轮询：20ms 超时；中断恢复中断位并返回 null */

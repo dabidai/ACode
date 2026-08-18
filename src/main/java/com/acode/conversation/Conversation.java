@@ -25,6 +25,12 @@ public class Conversation {
     private final int maxTokens;
     private final int maxContextTokens;
 
+    /** 会话级 system 提示词：会话启动构建一次，会话内字节稳定（可缓存）；不进历史 */
+    private String systemPrompt;
+
+    /** 会话级环境快照（渲染好的环境 system-reminder）：每轮作为 messages 首条注入、不进历史 */
+    private ChatMessage environment;
+
     public Conversation(String model, boolean thinking, int maxTokens, int maxContextTokens) {
         this.model = model;
         this.thinking = thinking;
@@ -52,7 +58,17 @@ public class Conversation {
         return messages.size();
     }
 
-    /** 清空全部消息历史（/clear 用）。 */
+    /** 设置会话级 system 提示词（不进历史，只进请求首位） */
+    public void setSystemPrompt(String systemPrompt) {
+        this.systemPrompt = systemPrompt;
+    }
+
+    /** 设置会话级环境 system-reminder（渲染好的消息；每轮注入 messages 首条、不进历史） */
+    public void setEnvironment(ChatMessage environment) {
+        this.environment = environment;
+    }
+
+    /** 清空全部消息历史（/clear 用）。system prompt 与环境快照留在会话状态，下一轮仍注入。 */
     public void clear() {
         messages.clear();
     }
@@ -85,14 +101,21 @@ public class Conversation {
     }
 
     /**
-     * 组装请求：显式指定工具列表，并在 trim() 结果之前插入 system 提醒（不进历史）。
-     * systemReminder 为 null 时不插入；工具列表在 trim 之外独立传递，不随历史裁剪。
+     * 组装请求：按「system → 环境 → 历史 → 轮次级」四段拼接，四段都在 trim 之外独立注入、不进历史。
+     * systemPrompt 非空时首位为 SYSTEM 消息；environment 非空时紧跟一条环境 system-reminder（会话状态）；
+     * turnReminder 非空时尾插为最后一条 user 消息（近因效应）。工具列表独立传递，不随历史裁剪。
      */
-    public ChatRequest buildRequest(List<Tool> requestTools, ChatMessage systemReminder) {
-        List<ChatMessage> requestMessages = trim();
-        if (systemReminder != null) {
-            requestMessages = new ArrayList<>(requestMessages);
-            requestMessages.add(0, systemReminder);
+    public ChatRequest buildRequest(List<Tool> requestTools, ChatMessage turnReminder) {
+        List<ChatMessage> requestMessages = new ArrayList<>();
+        if (systemPrompt != null && !systemPrompt.isBlank()) {
+            requestMessages.add(ChatMessage.of(ChatMessage.Role.SYSTEM, systemPrompt));
+        }
+        if (environment != null) {
+            requestMessages.add(environment);
+        }
+        requestMessages.addAll(trim());
+        if (turnReminder != null) {
+            requestMessages.add(turnReminder);
         }
         return ChatRequest.builder()
                 .model(model)

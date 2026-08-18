@@ -159,4 +159,18 @@ class OpenAiProviderTest {
         assertEquals("system", messages.get(0).path("role").asText());
         assertEquals("你是助手", messages.get(0).path("content").asText());
     }
+
+    @Test
+    void openAiBodyHasNoCacheControl() throws Exception {
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(new ReadFileTool());
+        ChatRequest request = ChatRequest.builder()
+                .model("m")
+                .tools(registry.list())
+                .message(ChatMessage.of(ChatMessage.Role.SYSTEM, "你是助手"))
+                .message(ChatMessage.of(ChatMessage.Role.USER, "你好"))
+                .build();
+        String raw = provider.buildBody(request);
+        assertFalse(raw.contains("cache_control"), "OpenAI 端不应输出 cache_control（缓存自动生效）");
+    }
 }

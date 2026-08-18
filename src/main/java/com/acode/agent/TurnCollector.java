@@ -2,9 +2,11 @@ package com.acode.agent;
 
 import com.acode.agent.AgentEvent.StreamText;
 import com.acode.agent.AgentEvent.ToolUseEvent;
+import com.acode.agent.AgentEvent.UsageEvent;
 import com.acode.provider.ChatListener;
 import com.acode.provider.ProviderException;
 import com.acode.provider.ToolUseBlock;
+import com.acode.provider.Usage;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,10 +25,20 @@ public class TurnCollector implements ChatListener {
     private final List<ToolUseBlock> toolUses = new ArrayList<>();
     private String stopReason;
     private ProviderException error;
+    private Usage usage;
 
     public TurnCollector(BlockingQueue<AgentEvent> events, AtomicBoolean cancelled) {
         this.events = events;
         this.cancelled = cancelled;
+    }
+
+    @Override
+    public void onUsage(Usage usage) {
+        if (cancelled.get()) {
+            return;
+        }
+        this.usage = usage;
+        AgentEvent.putSafe(events, new UsageEvent(usage));
     }
 
     @Override
@@ -81,5 +93,10 @@ public class TurnCollector implements ChatListener {
     /** 本轮记录的流错误；无则 null */
     public ProviderException error() {
         return error;
+    }
+
+    /** 本轮 token 用量；解析器未上报时为 null */
+    public Usage usage() {
+        return usage;
     }
 }

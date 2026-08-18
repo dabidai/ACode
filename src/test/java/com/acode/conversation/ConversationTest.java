@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static com.acode.provider.ChatMessage.Role.ASSISTANT;
+import static com.acode.provider.ChatMessage.Role.SYSTEM;
 import static com.acode.provider.ChatMessage.Role.USER;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -162,5 +163,62 @@ class ConversationTest {
         assertTrue(first.isError() == false, "成功结果不应带错误标记");
         ToolResultBlock second = assertInstanceOf(ToolResultBlock.class, blocks.get(1));
         assertTrue(second.isError(), "失败结果应带错误标记");
+    }
+
+    @Test
+    void systemPromptPrependedAsSystemMessageNotInHistory() {
+        Conversation c = conversation();
+        c.addMessage(user("hi"));
+        c.setSystemPrompt("You are ACode.");
+        ChatRequest request = c.buildRequest();
+        assertEquals(2, request.messages().size());
+        assertEquals(SYSTEM, request.messages().get(0).role());
+        assertEquals("You are ACode.", request.messages().get(0).content());
+        assertEquals(1, c.history().size(), "system prompt 不进历史");
+    }
+
+    @Test
+    void environmentInjectedAsFirstUserMessageNotInHistory() {
+        Conversation c = conversation();
+        c.addMessage(user("hi"));
+        c.setEnvironment(ChatMessage.of(USER, "<system-reminder>\n# Environment\n</system-reminder>"));
+        ChatRequest request = c.buildRequest();
+        assertEquals(2, request.messages().size());
+        assertEquals(USER, request.messages().get(0).role());
+        assertTrue(request.messages().get(0).content().contains("# Environment"));
+        assertEquals(1, c.history().size(), "环境消息不进历史");
+    }
+
+    @Test
+    void systemThenEnvironmentThenHistoryOrder() {
+        Conversation c = conversation();
+        c.addMessage(user("hi"));
+        c.setSystemPrompt("SYSTEM_PROMPT");
+        c.setEnvironment(ChatMessage.of(USER, "<system-reminder>\nenv\n</system-reminder>"));
+        ChatRequest request = c.buildRequest();
+        assertEquals(3, request.messages().size());
+        assertEquals(SYSTEM, request.messages().get(0).role());
+        assertEquals(USER, request.messages().get(1).role());
+        assertEquals("hi", request.messages().get(2).content());
+    }
+
+    @Test
+    void turnReminderAppendedLastAndNotInHistory() {
+        Conversation c = conversation();
+        c.addMessage(user("hi"));
+        ChatMessage reminder = ChatMessage.of(USER, "<system-reminder>\nturn\n</system-reminder>");
+        ChatRequest request = c.buildRequest(List.of(), reminder);
+        assertEquals(2, request.messages().size());
+        assertEquals("hi", request.messages().get(0).content());
+        assertEquals("<system-reminder>\nturn\n</system-reminder>", request.messages().get(1).content());
+        assertEquals(1, c.history().size(), "轮次级提醒不进历史");
+    }
+
+    @Test
+    void nullTurnReminderAddsNoExtraMessage() {
+        Conversation c = conversation();
+        c.addMessage(user("hi"));
+        ChatRequest request = c.buildRequest(List.of(), null);
+        assertEquals(1, request.messages().size());
     }
 }

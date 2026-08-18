@@ -31,7 +31,7 @@ public class GrepTool extends BaseTool {
     public GrepTool() {
         super("Grep",
                 "按正则搜索文件内容，返回命中文件的路径、行号与行内容。"
-                        + "需要定位某个字符串/符号出现在哪些文件时用本工具；不要用 Bash 执行 grep/rg。"
+                        + "内容搜索用本工具，优先于 Bash 的 grep/rg；需要定位某个字符串/符号出现在哪些文件时用它。"
                         + "pattern 为正则表达式；path 为搜索基准目录，缺省为工作目录；include 按文件名过滤，如 *.java。"
                         + "命中超 500 条截断并附提示。",
                 Permission.READ);

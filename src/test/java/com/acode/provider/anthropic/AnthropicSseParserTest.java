@@ -5,6 +5,7 @@ import com.acode.provider.InvalidRequestException;
 import com.acode.provider.ProviderException;
 import com.acode.provider.RateLimitException;
 import com.acode.provider.ToolUseBlock;
+import com.acode.provider.Usage;
 import com.acode.sse.SseParser;
 import org.junit.jupiter.api.Test;
 
@@ -19,6 +20,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -32,6 +34,7 @@ class AnthropicSseParserTest {
     private final List<ToolUseBlock> toolUses = new ArrayList<>();
     private final AtomicBoolean completed = new AtomicBoolean();
     private final AtomicReference<ProviderException> error = new AtomicReference<>();
+    private final AtomicReference<Usage> usage = new AtomicReference<>();
 
     private final ChatListener listener = new ChatListener() {
         @Override
@@ -42,6 +45,11 @@ class AnthropicSseParserTest {
         @Override
         public void onToolUse(ToolUseBlock toolUse) {
             toolUses.add(toolUse);
+        }
+
+        @Override
+        public void onUsage(Usage u) {
+            usage.set(u);
         }
 
         @Override
@@ -206,6 +214,55 @@ class AnthropicSseParserTest {
         assertTrue(deltas.isEmpty(), "thinking 与 tool_use 都不该产生文本增量");
         assertTrue(completed.get());
         assertNull(error.get());
+    }
+
+    @Test
+    void messageStartUsageParsedWithCacheFields() throws IOException {
+        String sse = """
+                event: message_start
+                data: {"type":"message_start","message":{"id":"msg_1","role":"assistant","content":[],"usage":{"input_tokens":100,"cache_read_input_tokens":80,"cache_creation_input_tokens":20,"output_tokens":1}}}
+
+                event: message_stop
+                data: {"type":"message_stop"}
+                """;
+        parse(sse);
+        Usage u = usage.get();
+        assertNotNull(u);
+        assertEquals(100, u.inputTokens());
+        assertEquals(1, u.outputTokens());
+        assertEquals(80, u.cacheReadTokens());
+        assertEquals(20, u.cacheCreationTokens());
+    }
+
+    @Test
+    void messageStartUsageWithoutCacheFieldsReportsZero() throws IOException {
+        String sse = """
+                event: message_start
+                data: {"type":"message_start","message":{"id":"msg_1","role":"assistant","content":[],"usage":{"input_tokens":50,"output_tokens":2}}}
+
+                event: message_stop
+                data: {"type":"message_stop"}
+                """;
+        parse(sse);
+        Usage u = usage.get();
+        assertNotNull(u);
+        assertEquals(50, u.inputTokens());
+        assertEquals(2, u.outputTokens());
+        assertEquals(0, u.cacheReadTokens());
+        assertEquals(0, u.cacheCreationTokens());
+    }
+
+    @Test
+    void messageStartWithoutUsageDoesNotReport() throws IOException {
+        String sse = """
+                event: message_start
+                data: {"type":"message_start","message":{"id":"msg_1","role":"assistant","content":[]}}
+
+                event: message_stop
+                data: {"type":"message_stop"}
+                """;
+        parse(sse);
+        assertNull(usage.get());
     }
 
     private static ChatListener stopReasonListener(AtomicReference<String> received) {

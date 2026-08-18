@@ -2,9 +2,11 @@ package com.acode.agent;
 
 import com.acode.agent.AgentEvent.StreamText;
 import com.acode.agent.AgentEvent.ToolUseEvent;
+import com.acode.agent.AgentEvent.UsageEvent;
 import com.acode.provider.FakeProvider;
 import com.acode.provider.InvalidRequestException;
 import com.acode.provider.NetworkException;
+import com.acode.provider.Usage;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
@@ -75,6 +77,23 @@ class TurnCollectorTest {
     }
 
     @Test
+    void usageForwardedAsUsageEvent() {
+        BlockingQueue<AgentEvent> events = queue();
+        TurnCollector collector = new TurnCollector(events, new AtomicBoolean(false));
+        Usage usage = new Usage(100, 1, 80, 20);
+        FakeProvider provider = FakeProvider.scripted(List.of(List.of(
+                FakeProvider.usage(usage),
+                FakeProvider.complete())));
+        provider.streamChat(request(), collector);
+
+        assertEquals(usage, collector.usage());
+        List<AgentEvent> list = drain(events);
+        assertEquals(1, list.size());
+        UsageEvent event = assertInstanceOf(UsageEvent.class, list.get(0));
+        assertEquals(usage, event.usage());
+    }
+
+    @Test
     void callbacksIgnoredAfterCancelled() {
         BlockingQueue<AgentEvent> events = queue();
         TurnCollector collector = new TurnCollector(events, new AtomicBoolean(true));
@@ -83,11 +102,13 @@ class TurnCollectorTest {
                 JSON.createObjectNode().put("command", "x")));
         collector.onComplete("end_turn");
         collector.onError(new InvalidRequestException("错"));
+        collector.onUsage(new Usage(1, 1, 0, 0));
 
         assertEquals("", collector.text());
         assertTrue(collector.toolUses().isEmpty());
         assertNull(collector.stopReason());
         assertNull(collector.error());
+        assertNull(collector.usage());
         assertTrue(drain(events).isEmpty(), "取消后不产生事件");
     }
 

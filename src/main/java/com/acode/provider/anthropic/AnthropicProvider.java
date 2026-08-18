@@ -91,10 +91,16 @@ public class AnthropicProvider implements ChatProvider {
                 }
             }
             if (!system.isEmpty()) {
-                root.put("system", system.toString());
+                // system 必须是 content block 数组形式；cache_control 加在最后一个块（R4）
+                ObjectNode block = root.putArray("system").addObject();
+                block.put("type", "text");
+                block.put("text", system.toString());
+                block.putObject("cache_control").put("type", "ephemeral");
             }
             if (!request.tools().isEmpty()) {
-                root.set("tools", ToolSchemaConverter.toAnthropicTools(request.tools()));
+                ArrayNode tools = ToolSchemaConverter.toAnthropicTools(request.tools());
+                ((ObjectNode) tools.get(tools.size() - 1)).putObject("cache_control").put("type", "ephemeral");
+                root.set("tools", tools);
             }
             return JSON.writeValueAsString(root);
         } catch (JsonProcessingException e) {

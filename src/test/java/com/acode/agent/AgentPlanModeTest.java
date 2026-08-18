@@ -2,6 +2,7 @@ package com.acode.agent;
 
 import com.acode.agent.AgentEvent.LoopComplete;
 import com.acode.conversation.Conversation;
+import com.acode.prompt.SystemReminder;
 import com.acode.provider.ChatMessage;
 import com.acode.provider.ContentBlock;
 import com.acode.provider.FakeProvider;
@@ -140,12 +141,32 @@ class AgentPlanModeTest {
 
         untilLoop(events, 5000);
         assertEquals(Agent.Termination.PLAN_DELIVERED, agent.termination());
-        assertEquals(PlanModePrompt.buildReminder(1),
-                provider.receivedRequests().get(0).messages().get(0).content(),
-                "首轮提醒应为完整版");
-        assertEquals(PlanModePrompt.buildReminder(2),
-                provider.receivedRequests().get(1).messages().get(0).content(),
-                "后续轮提醒应为稀疏版");
+        ChatMessage first = lastMessage(provider, 0);
+        assertEquals(ChatMessage.Role.USER, first.role(), "提醒应为 user 角色");
+        assertTrue(first.content().startsWith("<system-reminder>"), "提醒应带 system-reminder 标签");
+        assertEquals(SystemReminder.wrap(PlanModePrompt.buildReminder(1)).content(),
+                first.content(), "首轮提醒应为完整版");
+        assertEquals(SystemReminder.wrap(PlanModePrompt.buildReminder(2)).content(),
+                lastMessage(provider, 1).content(), "后续轮提醒应为稀疏版");
+    }
+
+    @Test
+    void reminderCadenceRepeatsFullEveryFifthRound() {
+        String full = PlanModePrompt.buildReminder(1);
+        String sparse = PlanModePrompt.buildReminder(2);
+        assertEquals(sparse, PlanModePrompt.buildReminder(3));
+        assertEquals(sparse, PlanModePrompt.buildReminder(4));
+        assertEquals(sparse, PlanModePrompt.buildReminder(5));
+        assertEquals(full, PlanModePrompt.buildReminder(6));
+        assertEquals(sparse, PlanModePrompt.buildReminder(7));
+        assertEquals(sparse, PlanModePrompt.buildReminder(10));
+        assertEquals(full, PlanModePrompt.buildReminder(11));
+        assertEquals(full, PlanModePrompt.buildReminder(16));
+    }
+
+    private static ChatMessage lastMessage(FakeProvider provider, int requestIndex) {
+        List<ChatMessage> messages = provider.receivedRequests().get(requestIndex).messages();
+        return messages.get(messages.size() - 1);
     }
 
     private static void assertNoDanglingToolUses(List<ChatMessage> history) {

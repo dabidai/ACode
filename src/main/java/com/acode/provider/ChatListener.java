@@ -30,6 +30,11 @@ public interface ChatListener {
         onComplete();
     }
 
+    /** 收到本轮 token 用量（流结束前触发，含缓存命中字段）。 */
+    default void onUsage(Usage usage) {
+        // 默认忽略，兼容旧实现
+    }
+
     /** 失败结束 */
     void onError(ProviderException error);
 }

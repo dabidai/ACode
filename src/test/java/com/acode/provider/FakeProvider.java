@@ -39,6 +39,11 @@ public class FakeProvider implements ChatProvider {
         return listener -> listener.onError(e);
     }
 
+    /** 上报本轮 token 用量 */
+    public static Action usage(Usage usage) {
+        return listener -> listener.onUsage(usage);
+    }
+
     private final List<List<Action>> scripts;
     private final List<String> chunks;
     private final ProviderException error;

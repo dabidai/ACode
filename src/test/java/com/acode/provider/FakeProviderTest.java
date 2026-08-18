@@ -126,6 +126,28 @@ class FakeProviderTest {
     }
 
     @Test
+    void usageActionInvokesOnUsage() {
+        FakeProvider provider = FakeProvider.scripted(List.of(List.of(
+                FakeProvider.usage(new Usage(5, 1, 3, 0)))));
+        AtomicReference<Usage> received = new AtomicReference<>();
+        provider.streamChat(request, new ChatListener() {
+            @Override
+            public void onDelta(String delta) {
+            }
+
+            @Override
+            public void onUsage(Usage u) {
+                received.set(u);
+            }
+
+            @Override
+            public void onError(ProviderException e) {
+            }
+        });
+        assertEquals(new Usage(5, 1, 3, 0), received.get());
+    }
+
+    @Test
     void plainCompleteCallsStringOverloadWithNull() {
         FakeProvider provider = FakeProvider.scripted(List.of(
                 List.of(FakeProvider.complete())));

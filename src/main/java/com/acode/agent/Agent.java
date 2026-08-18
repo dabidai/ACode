@@ -5,6 +5,7 @@ import com.acode.agent.AgentEvent.LoopComplete;
 import com.acode.agent.AgentEvent.RetryEvent;
 import com.acode.agent.AgentEvent.TurnComplete;
 import com.acode.conversation.Conversation;
+import com.acode.prompt.SystemReminder;
 import com.acode.provider.ChatMessage;
 import com.acode.provider.ChatProvider;
 import com.acode.provider.ChatRequest;
@@ -369,11 +370,11 @@ public class Agent {
         conversation.addToolResults(blocks);
     }
 
-    /** 按 plan 模式组装请求：工具列表动态过滤 + 系统提醒注入（仅进请求不进历史） */
+    /** 按 plan 模式组装请求：工具列表动态过滤 + 轮次级 system-reminder 提醒（尾插，仅进请求不进历史） */
     private ChatRequest buildPlanAwareRequest(int turn) {
         if (planMode) {
             return conversation.buildRequest(planTools(),
-                    ChatMessage.of(ChatMessage.Role.SYSTEM, PlanModePrompt.buildReminder(turn)));
+                    SystemReminder.wrap(PlanModePrompt.buildReminder(turn)));
         }
         return conversation.buildRequest(normalTools(), null);
     }

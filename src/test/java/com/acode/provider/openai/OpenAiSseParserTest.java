@@ -4,6 +4,7 @@ import com.acode.provider.ChatListener;
 import com.acode.provider.InvalidRequestException;
 import com.acode.provider.ProviderException;
 import com.acode.provider.ToolUseBlock;
+import com.acode.provider.Usage;
 import com.acode.sse.SseParser;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -19,6 +20,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -32,6 +34,7 @@ class OpenAiSseParserTest {
     private final List<ToolUseBlock> toolUses = new ArrayList<>();
     private final AtomicBoolean completed = new AtomicBoolean();
     private final AtomicReference<ProviderException> error = new AtomicReference<>();
+    private final AtomicReference<Usage> usage = new AtomicReference<>();
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -44,6 +47,11 @@ class OpenAiSseParserTest {
         @Override
         public void onToolUse(ToolUseBlock toolUse) {
             toolUses.add(toolUse);
+        }
+
+        @Override
+        public void onUsage(Usage u) {
+            usage.set(u);
         }
 
         @Override
@@ -196,6 +204,50 @@ class OpenAiSseParserTest {
         OpenAiSseParser parser = new OpenAiSseParser();
         parser.handle("[DONE]", stopListener);
         assertNull(received.get());
+    }
+
+    @Test
+    void usageBlockParsedWithCachedTokens() throws IOException {
+        String sse = """
+                data: {"id":"x","choices":[{"index":0,"delta":{"content":"好"}}]}
+
+                data: {"id":"x","choices":[],"usage":{"prompt_tokens":150,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":50}}}
+
+                data: [DONE]
+                """;
+        parse(sse);
+        Usage u = usage.get();
+        assertNotNull(u);
+        assertEquals(150, u.inputTokens());
+        assertEquals(20, u.outputTokens());
+        assertEquals(50, u.cacheReadTokens());
+        assertEquals(0, u.cacheCreationTokens());
+    }
+
+    @Test
+    void usageBlockWithZeroCachedTokensParsesZero() throws IOException {
+        String sse = """
+                data: {"id":"x","choices":[],"usage":{"prompt_tokens":9,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":0}}}
+
+                data: [DONE]
+                """;
+        parse(sse);
+        Usage u = usage.get();
+        assertNotNull(u);
+        assertEquals(9, u.inputTokens());
+        assertEquals(3, u.outputTokens());
+        assertEquals(0, u.cacheReadTokens());
+    }
+
+    @Test
+    void streamWithoutUsageDoesNotReport() throws IOException {
+        String sse = """
+                data: {"id":"x","choices":[{"index":0,"delta":{"content":"hi"}}]}
+
+                data: [DONE]
+                """;
+        parse(sse);
+        assertNull(usage.get());
     }
 
     private static ChatListener stopReasonListener(AtomicReference<String> received) {

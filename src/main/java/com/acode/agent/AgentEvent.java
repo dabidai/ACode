@@ -1,5 +1,6 @@
 package com.acode.agent;
 
+import com.acode.provider.Usage;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.List;
@@ -39,6 +40,9 @@ public sealed interface AgentEvent {
 
     /** 一轮结束（工具结果已回填，可开始下一轮） */
     record TurnComplete(int turn) implements AgentEvent {}
+
+    /** 本轮 token 用量（含缓存命中字段；流结束前触发） */
+    record UsageEvent(Usage usage) implements AgentEvent {}
 
     /** 循环结束（正常/触顶/计划交付/错误统一以此事件收尾，具体原因经 Agent 查询） */
     record LoopComplete(int totalTurns) implements AgentEvent {}

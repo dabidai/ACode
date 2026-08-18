@@ -47,7 +47,8 @@ public class BashTool extends BaseTool {
     @Override
     protected List<ParamSpec> paramSpecs() {
         return List.of(
-                ParamSpec.required("command", ParamSpec.Type.STRING, "要执行的 shell 命令"),
+                ParamSpec.required("command", ParamSpec.Type.STRING,
+                        "要执行的 shell 命令（写清命令用途，便于他人理解与审查）"),
                 ParamSpec.optional("timeout_ms", ParamSpec.Type.INTEGER,
                         "超时上限（毫秒），缺省 60000"));
     }

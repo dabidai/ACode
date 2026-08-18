@@ -7,6 +7,7 @@ import com.acode.provider.ProviderException;
 import com.acode.provider.RateLimitException;
 import com.acode.provider.ServerException;
 import com.acode.provider.ToolUseBlock;
+import com.acode.provider.Usage;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -45,14 +46,26 @@ public final class AnthropicSseParser {
                     }
                 }
                 case "message_stop" -> listener.onComplete(stopReason);
+                case "message_start" -> handleMessageStart(node, listener);
                 default -> {
-                    // message_start 忽略
+                    // 其余事件忽略
                 }
             }
         } catch (JsonProcessingException e) {
             listener.onError(new InvalidRequestException("响应解析失败：" + e.getMessage(), e));
         } catch (ProviderException e) {
             listener.onError(e);
+        }
+    }
+
+    private void handleMessageStart(JsonNode node, ChatListener listener) {
+        JsonNode usage = node.path("message").path("usage");
+        if (usage.isObject()) {
+            listener.onUsage(new Usage(
+                    usage.path("input_tokens").asLong(0),
+                    usage.path("output_tokens").asLong(0),
+                    usage.path("cache_read_input_tokens").asLong(0),
+                    usage.path("cache_creation_input_tokens").asLong(0)));
         }
     }
 

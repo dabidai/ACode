@@ -6,6 +6,7 @@ import com.acode.provider.ToolResultBlock;
 import com.acode.provider.ToolUseBlock;
 import com.acode.tool.ToolRegistry;
 import com.acode.tool.impl.ReadFileTool;
+import com.acode.tool.impl.WriteFileTool;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -55,7 +56,7 @@ class AnthropicProviderTest {
     }
 
     @Test
-    void system消息进顶级字段user进messages() throws Exception {
+    void systemEmittedAsTextBlockArrayWithCacheControl() throws Exception {
         ChatRequest request = ChatRequest.builder()
                 .model("m")
                 .message(ChatMessage.of(ChatMessage.Role.SYSTEM, "你是助手"))
@@ -63,7 +64,12 @@ class AnthropicProviderTest {
                 .message(ChatMessage.of(ChatMessage.Role.ASSISTANT, "你好，请问"))
                 .build();
         JsonNode root = body(request);
-        assertEquals("你是助手", root.path("system").asText());
+        JsonNode system = root.path("system");
+        assertTrue(system.isArray(), "system 应为 content block 数组");
+        assertEquals(1, system.size());
+        assertEquals("text", system.get(0).path("type").asText());
+        assertEquals("你是助手", system.get(0).path("text").asText());
+        assertEquals("ephemeral", system.get(0).path("cache_control").path("type").asText());
         assertEquals(2, root.path("messages").size());
         assertEquals("user", root.path("messages").get(0).path("role").asText());
         assertEquals("assistant", root.path("messages").get(1).path("role").asText());
@@ -127,6 +133,23 @@ class AnthropicProviderTest {
         assertEquals("ReadFile", tools.get(0).path("name").asText());
         assertTrue(tools.get(0).hasNonNull("description"));
         assertTrue(tools.get(0).path("input_schema").isObject());
+    }
+
+    @Test
+    void toolsLastElementGetsCacheControlOnly() throws Exception {
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(new ReadFileTool());
+        registry.register(new WriteFileTool());
+        ChatRequest request = ChatRequest.builder()
+                .model("m")
+                .tools(registry.list())
+                .message(ChatMessage.of(ChatMessage.Role.USER, "你好"))
+                .build();
+        JsonNode tools = body(request).path("tools");
+        assertTrue(tools.isArray());
+        assertEquals(2, tools.size());
+        assertFalse(tools.get(0).has("cache_control"), "非末工具不应带 cache_control");
+        assertEquals("ephemeral", tools.get(1).path("cache_control").path("type").asText());
     }
 
     @Test

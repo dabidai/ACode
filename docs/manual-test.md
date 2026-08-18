@@ -286,3 +286,41 @@
 ## C6 --resume 历史不受影响
 
 1. 本会话发生一次 ReadFile（摘要行）与一次 WriteFile（diff）后退出，`--resume` 恢复 → 历史中工具结果仍是原渲染形态，摘要/diff 不丢失、不污染。
+
+---
+
+# ACode 阶段四：Prompt 工程体系 — 手动验收步骤
+
+> 对应 docs/ch05/checklist.md 的端到端验收项与 docs/ch05/eval-scenarios.md 的 5 个评估场景。
+> 需要真实 provider 密钥；场景对照以定性为准，缓存命中观察以脚注为准。
+> 核心变化：会话级 system prompt（七模块英文）+ 环境 system-reminder 每轮注入（不进历史）；
+> 每轮结束输出 usage 脚注行；plan 模式提醒改为英文 system-reminder、第 1/6/11 轮完整版。
+
+## 前置
+
+1. 配置密钥：在 `~/.acode/config.yaml`（全局）或 `.acode/config.yaml`（项目级）写入真实 `api_key` 与 `base_url` 覆盖默认值（anthropic / openai 各跑一遍）。
+2. 打包：`mvn package`（产物为 `target/acode.jar`）；源码改动后必须重新打包再启动。
+3. 启动：`java -jar target/acode.jar`；恢复上次会话：`java -jar target/acode.jar --resume`。
+
+## P1 环境注入可见
+
+1. 启动后提问「当前工作目录是什么」→ 预期模型答出真实工作目录（环境 system-reminder 已注入）；再问 Git 仓库状态（如「当前在哪个分支」）→ 答出真实分支（非 Git 仓库目录则答不出分支也不报错）。
+2. 请求侧结构（可开 tee 看日志）：SYSTEM 为英文七模块提示词，其后一条环境消息带 `<system-reminder>` 标签与 `# Environment` 段落，均不进历史。
+3. `/clear` 清空后再次提问 → 环境仍注入（不因清空历史丢失）。
+
+## P2 usage 脚注
+
+1. 执行多轮工具任务（如「读 `pom.xml` 并总结用到了哪些依赖」）。
+2. 预期：每轮结束出现脚注行 `usage: in ... · cache_read ... · cache_write ... · out ...`。
+3. 第 2 轮起（满足 provider 缓存条件时）`cache_read` > 0；若为 0，记录原因（模型/端点不支持、超 5 分钟 TTL 等），不作为代码失败唯一依据。
+
+## P3 plan 模式提醒为 system-reminder
+
+1. 输入 `/plan`，提问「规划一下给 ACode 新增一个 `/hello` 命令」。
+2. 预期：模型只做只读探索（读类 + ExitPlanMode 工具），多轮规划时提醒为英文、尾插、带 `<system-reminder>` 标签，第 1、6、11 轮为完整版、其余为稀疏版。
+3. 最终调用 ExitPlanMode 交付，计划落盘 `.acode/plans/`；`/do` 退出规划模式开始执行。
+
+## P4 评估场景人工对照
+
+1. 按 docs/ch05/eval-scenarios.md 的 5 个场景逐一执行，逐条对照「输入示例 / 期望行为 / 对照判据」。
+2. 每次场景后看脚注 `cache_read`，记录缓存命中情况（eval-scenarios.md 附录）。

@@ -450,6 +450,25 @@ class AgentTest {
                 "agent1 悬空的 tool_use（id-1）应被 sanitize 从请求剔除");
     }
 
+    @Test
+    void loopRuntimeExceptionFromToolSetsErrorAndLoopComplete() throws Exception {
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(new ExplodingTool());
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.toolUse("id-1", "Exploding", JSON.createObjectNode()),
+                        FakeProvider.complete())));
+        Agent agent = start(provider, 20, registry);
+        BlockingQueue<AgentEvent> events = agent.run();
+
+        List<AgentEvent> eventsList = untilLoop(events, 5000);
+        assertEquals(Agent.Termination.ERROR, agent.termination(),
+                "工具 execute 抛出的未捕获异常应转 ERROR 终止而非静默死亡");
+        assertTrue(eventsList.stream().anyMatch(e -> e instanceof ErrorEvent),
+                "循环顶层异常应发 ErrorEvent 通知 UI");
+        assertTrue(eventsList.stream().anyMatch(e -> e instanceof LoopComplete),
+                "异常终止也应发 LoopComplete 让 UI 走收尾");
+    }
+
     private static void assertNoDanglingToolUses(List<ChatMessage> history) {
         Set<String> issued = new HashSet<>();
         Set<String> resolved = new HashSet<>();
@@ -553,6 +572,34 @@ class AgentTest {
                 }
             }
             return ToolResult.success("unstoppable-done");
+        }
+    }
+
+    /** execute 直接抛运行时异常的桩工具：验证 loop 顶层捕获转 ERROR 终止 */
+    private static class ExplodingTool implements Tool {
+        @Override
+        public String name() {
+            return "Exploding";
+        }
+
+        @Override
+        public String description() {
+            return "test exploding tool";
+        }
+
+        @Override
+        public Permission permission() {
+            return Permission.WRITE;
+        }
+
+        @Override
+        public JsonNode inputSchema() {
+            return JSON.createObjectNode();
+        }
+
+        @Override
+        public ToolResult execute(JsonNode input, ToolContext context) {
+            throw new IllegalStateException("工具爆炸");
         }
     }
 }

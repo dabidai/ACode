@@ -119,6 +119,11 @@ public class Agent {
         loopThread = Thread.ofVirtual().name("acode-agent").start(() -> {
             try {
                 loop();
+            } catch (RuntimeException e) {
+                // 顶层兜底：未捕获异常转 ERROR 终止并通知 UI，避免虚拟线程静默死亡、用户无感知
+                termination = Termination.ERROR;
+                emit(new ErrorEvent("循环异常：" + e.getMessage()));
+                emit(new LoopComplete(totalTurns));
             } finally {
                 running.set(false);
             }

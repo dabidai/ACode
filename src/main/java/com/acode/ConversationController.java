@@ -138,7 +138,9 @@ public class ConversationController {
     ConversationController(ChatProvider provider, AppConfig config, boolean resume) {
         this.provider = provider;
         this.config = config;
-        boolean thinking = "anthropic".equals(config.getProtocol());
+        Boolean thinkingConfig = config.getThinking();
+        boolean thinking = thinkingConfig != null
+                ? thinkingConfig : "anthropic".equals(config.getProtocol());
         this.conversation = new Conversation(config.getModel(), thinking, MAX_TOKENS,
                 config.getMaxContextTokens());
         this.toolRegistry = new ToolRegistry();

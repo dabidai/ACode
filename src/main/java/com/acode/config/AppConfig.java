@@ -2,7 +2,7 @@ package com.acode.config;
 
 /**
  * ACode 配置模型。YAML 字段 snake_case 对应 Java 字段：
- * protocol / model / base_url / api_key / max_context_tokens / max_iterations
+ * protocol / model / base_url / api_key / max_context_tokens / max_iterations / tee / thinking / permission_mode
  */
 public class AppConfig {
 
@@ -13,6 +13,7 @@ public class AppConfig {
     private Integer maxContextTokens;
     private Integer maxIterations;
     private Boolean tee;
+    private Boolean thinking;
     private String permissionMode;
 
     public String getProtocol() {
@@ -74,6 +75,15 @@ public class AppConfig {
 
     public void setTee(Boolean tee) {
         this.tee = tee;
+    }
+
+    /** thinking 开关：null 时由装配层按 protocol 推断（anthropic→true、openai→false）。 */
+    public Boolean getThinking() {
+        return thinking;
+    }
+
+    public void setThinking(Boolean thinking) {
+        this.thinking = thinking;
     }
 
     /** 启动默认权限模式；null 由装配层按 default 处理。 */

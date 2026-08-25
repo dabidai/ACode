@@ -108,6 +108,19 @@ class ConfigLoaderTest {
     }
 
     @Test
+    void thinkingFlagParsedWhenTrue() throws IOException {
+        write(projectConfig(), "thinking: true\n");
+        AppConfig config = ConfigLoader.load(globalFile(), projectDir());
+        assertEquals(Boolean.TRUE, config.getThinking());
+    }
+
+    @Test
+    void thinkingNonBooleanRejected() throws IOException {
+        write(projectConfig(), "thinking: maybe\n");
+        assertThrows(ConfigException.class, () -> ConfigLoader.load(globalFile(), projectDir()));
+    }
+
+    @Test
     void 项目级protocol非法报错定位到项目文件() throws IOException {
         validGlobal();
         write(projectConfig(), "protocol: foo\n");

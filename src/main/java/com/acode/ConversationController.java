@@ -51,6 +51,7 @@ import com.acode.ui.HistoryRenderer;
 import com.acode.ui.InputPane;
 import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
+import com.acode.ui.PromptAnswerer;
 import com.acode.ui.RenderContext;
 import com.acode.ui.SelectionMenu;
 import com.acode.ui.StreamPrinter;
@@ -111,11 +112,15 @@ public class ConversationController {
     private OutputPane output;
     private final RenderContext renderContext;
 
+    private PromptAnswerer promptAnswerer;
+
     /** 确认应答器：收到 ConfirmationRequestEvent 后渲染提示并返回三选一；测试可注入替身。 */
-    private Function<ConfirmationRequestEvent, PermissionResponse> confirmAnswerer = this::answerConfirmationPrompt;
+    private Function<ConfirmationRequestEvent, PermissionResponse> confirmAnswerer =
+            event -> promptAnswerer().answerConfirmationPrompt(event);
 
     /** 选择应答器：收到 ChoiceRequestEvent 后弹多选项菜单并返回选中项（取消返回 null）；测试可注入替身。 */
-    private Function<ChoiceRequestEvent, String> choiceAnswerer = this::answerChoicePrompt;
+    private Function<ChoiceRequestEvent, String> choiceAnswerer =
+            event -> promptAnswerer().answerChoicePrompt(event);
 
     /** 权限检查器：在 handleExchange 装配注入；/permission-mode 命令即时切档用。 */
     private PermissionChecker permissionChecker;
@@ -341,34 +346,12 @@ public class ConversationController {
         this.projectRoot = projectRoot;
     }
 
-    /** 默认确认应答：渲染「要执行 X …？」并弹三选一菜单；无终端（纯测试环境）视为拒绝。 */
-    private PermissionResponse answerConfirmationPrompt(ConfirmationRequestEvent event) {
-        if (tui == null) {
-            return PermissionResponse.DENY;
+    /** 交互应答器：惰性构造，首次调用捕获当前 tui（语义与每次读 tui 字段一致）。 */
+    private PromptAnswerer promptAnswerer() {
+        if (promptAnswerer == null) {
+            promptAnswerer = new PromptAnswerer(tui, renderContext);
         }
-        ConfirmationPrompt prompt = new ConfirmationPrompt(
-                new TerminalMenuKeySource(tui.terminal().reader()), liveRenderer(), screenWriter());
-        return prompt.ask(event.toolName(), event.argsSummary());
-    }
-
-    /** 默认选择应答：渲染 question 并弹多选项菜单；无终端（纯测试环境）返回 null（取消）。 */
-    private String answerChoicePrompt(ChoiceRequestEvent event) {
-        if (tui == null) {
-            return null;
-        }
-        LiveRegionRenderer live = liveRenderer();
-        Writer writer = screenWriter();
-        live.appendCommitted(writer, event.question());
-        live.commitRegion();
-        int selected = new SelectionMenu(event.options(), "（↑/↓ 选择，回车确认，Esc 取消）", 0)
-                .select(live, writer, new TerminalMenuKeySource(tui.terminal().reader()));
-        if (selected < 0) {
-            live.appendCommitted(writer, "（已取消）");
-            return null;
-        }
-        String picked = event.options().get(selected);
-        live.appendCommitted(writer, "（已选择「" + picked + "」）");
-        return picked;
+        return promptAnswerer;
     }
 
     /** 活跃区渲染器（委托 RenderContext：测试注入优先、否则按终端尺寸实时新建） */

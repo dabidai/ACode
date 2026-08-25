@@ -1,6 +1,5 @@
 package com.acode.tool;
 
-import com.acode.provider.ToolUseBlock;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -38,7 +37,7 @@ class ToolExecutorTest {
         ToolRegistry registry = new ToolRegistry();
         registry.register(dummyTool("stub"));
         ToolExecutor executor = new ToolExecutor(registry, new ToolContext(tempDir));
-        ToolResult result = executor.execute(new ToolUseBlock("id-1", "stub", JSON.createObjectNode()));
+        ToolResult result = executor.execute("stub", JSON.createObjectNode());
         assertTrue(result.isSuccess());
         assertEquals("stub-done", result.output());
     }
@@ -46,7 +45,7 @@ class ToolExecutorTest {
     @Test
     void unknownToolReturnsFailureWithoutThrowing() {
         ToolExecutor executor = new ToolExecutor(new ToolRegistry(), new ToolContext(tempDir));
-        ToolResult result = executor.execute(new ToolUseBlock("id-1", "NoSuchTool", JSON.createObjectNode()));
+        ToolResult result = executor.execute("NoSuchTool", JSON.createObjectNode());
         assertTrue(result.isError());
         assertTrue(result.errorMessage().contains("未注册"), "错误应指明未注册：" + result.errorMessage());
     }
@@ -57,7 +56,7 @@ class ToolExecutorTest {
         registry.register(dummyTool("stub"));
         registry.disable("stub");
         ToolExecutor executor = new ToolExecutor(registry, new ToolContext(tempDir));
-        ToolResult result = executor.execute(new ToolUseBlock("id-1", "stub", JSON.createObjectNode()));
+        ToolResult result = executor.execute("stub", JSON.createObjectNode());
         assertTrue(result.isError());
         assertTrue(result.errorMessage().contains("禁用"), "错误应指明已禁用：" + result.errorMessage());
     }

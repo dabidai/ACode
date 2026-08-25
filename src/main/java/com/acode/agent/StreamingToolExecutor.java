@@ -168,7 +168,7 @@ public class StreamingToolExecutor {
             return;
         }
         long start = System.nanoTime();
-        ToolResult result = executor.execute(call);
+        ToolResult result = executor.execute(call.name(), call.input());
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
         if (cancelled.get()) {
             return;

@@ -10,6 +10,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -82,5 +83,23 @@ class BashToolTest {
         ToolResult result = tool.execute(input("echo hi").put("timeout_ms", -1), context());
         assertTrue(result.isError());
         assertTrue(result.errorMessage().contains("timeout_ms"));
+    }
+
+    @Test
+    void descriptionMentionsGitBashWhenDetected() throws Exception {
+        Path fakeBash = tempDir.resolve("bash.exe");
+        Files.createFile(fakeBash);
+        BashTool tool = new BashTool(new ShellDetector(List.of(fakeBash.toString())));
+        assertTrue(tool.description().contains("Git Bash"),
+                "检测到 Git Bash 时描述应声称 Unix 风格，实际：" + tool.description());
+    }
+
+    @Test
+    void cmdFallbackDescriptionDoesNotClaimGitBash() throws Exception {
+        BashTool tool = new BashTool(new ShellDetector(
+                List.of(tempDir.resolve("nope").resolve("bash.exe").toString())));
+        assertTrue(tool.description().contains("cmd"), "cmd 回退时描述应说明 cmd，实际：" + tool.description());
+        assertTrue(!tool.description().contains("Unix 风格"),
+                "cmd 回退时不应承诺 Unix 命令风格，实际：" + tool.description());
     }
 }

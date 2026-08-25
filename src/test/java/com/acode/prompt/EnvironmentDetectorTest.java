@@ -1,10 +1,13 @@
 package com.acode.prompt;
 
 import com.acode.prompt.EnvironmentDetector.EnvironmentSnapshot;
+import com.acode.tool.impl.ShellDetector;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -39,10 +42,22 @@ class EnvironmentDetectorTest {
     }
 
     @Test
-    void shellFallsBackToBashWhenEnvUnset() {
-        assertEquals("bash", EnvironmentDetector.resolveShell(null));
-        assertEquals("bash", EnvironmentDetector.resolveShell(""));
-        assertEquals("/bin/zsh", EnvironmentDetector.resolveShell("/bin/zsh"));
+    void shellMatchesShellDetectorResult() {
+        EnvironmentSnapshot env = EnvironmentDetector.detect("m", tempDir.toString());
+        assertEquals(new ShellDetector().shellName(), env.shell(),
+                "环境快照的 shell 必须与 ShellDetector 实际探测一致，不能凭空默认 bash");
+    }
+
+    @Test
+    void detectWithInjectedDetectorUsesItsShellName() throws Exception {
+        EnvironmentSnapshot cmdEnv = EnvironmentDetector.detect("m", tempDir.toString(),
+                new ShellDetector(List.of(tempDir.resolve("nope").resolve("bash.exe").toString())));
+        assertEquals("cmd", cmdEnv.shell(), "候选路径全部不存在时应回退 cmd");
+        Path fakeBash = tempDir.resolve("bash.exe");
+        Files.createFile(fakeBash);
+        EnvironmentSnapshot bashEnv = EnvironmentDetector.detect("m", tempDir.toString(),
+                new ShellDetector(List.of(fakeBash.toString())));
+        assertEquals("git-bash", bashEnv.shell(), "候选路径命中 bash.exe 时应报告 git-bash");
     }
 
     @Test

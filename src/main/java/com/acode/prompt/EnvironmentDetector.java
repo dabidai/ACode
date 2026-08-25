@@ -1,5 +1,7 @@
 package com.acode.prompt;
 
+import com.acode.tool.impl.ShellDetector;
+
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.time.LocalDate;
@@ -26,9 +28,14 @@ public final class EnvironmentDetector {
     }
 
     static EnvironmentSnapshot detect(String model, String workDir) {
+        return detect(model, workDir, new ShellDetector());
+    }
+
+    /** 探测重载：注入 ShellDetector 以获得确定性的 shell 探测结果（测试用） */
+    static EnvironmentSnapshot detect(String model, String workDir, ShellDetector shellDetector) {
         String os = System.getProperty("os.name", "unknown").toLowerCase(Locale.ROOT);
         String arch = System.getProperty("os.arch", "unknown");
-        String shell = resolveShell(System.getenv("SHELL"));
+        String shell = shellDetector.shellName();
 
         boolean isGitRepo = false;
         String gitBranch = "";
@@ -51,10 +58,6 @@ public final class EnvironmentDetector {
         }
         return new EnvironmentSnapshot(workDir, os, arch, shell, isGitRepo,
                 gitBranch, model, LocalDate.now().toString());
-    }
-
-    static String resolveShell(String shellEnv) {
-        return shellEnv == null || shellEnv.isEmpty() ? "bash" : shellEnv;
     }
 
     private static String runGit(String workDir, String... args) throws Exception {

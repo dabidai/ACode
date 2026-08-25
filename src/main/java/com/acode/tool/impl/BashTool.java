@@ -31,13 +31,19 @@ public class BashTool extends BaseTool {
     }
 
     public BashTool(ShellDetector detector) {
-        super("Bash",
-                "执行 shell 命令（Windows 优先 Git Bash，回退系统默认 shell）。"
-                        + "仅当没有专用工具覆盖时才用：读文件用 ReadFile、写文件用 WriteFile、改文件用 EditFile、"
-                        + "按名查找/列文件用 Glob、搜内容用 Grep。命令在 Git Bash 下以 Unix 风格运行；"
-                        + "非 0 退出码返回失败并附输出。缺省 60 秒超时可用 timeout_ms 调整，输出超 30000 字符截断。",
-                Permission.EXEC);
+        super("Bash", buildDescription(detector), Permission.EXEC);
         this.detector = detector;
+    }
+
+    /** 描述文案按实际探测到的 shell 动态拼装：cmd 回退时如实声明，避免模型误发 Unix 命令 */
+    private static String buildDescription(ShellDetector detector) {
+        String shellClause = "git-bash".equals(detector.shellName())
+                ? "命令在 Git Bash 下以 Unix 风格运行；"
+                : "命令在 cmd 下以 Windows 命令风格运行；";
+        return "执行 shell 命令（Windows 优先 Git Bash，回退系统默认 shell）。"
+                + "仅当没有专用工具覆盖时才用：读文件用 ReadFile、写文件用 WriteFile、改文件用 EditFile、"
+                + "按名查找/列文件用 Glob、搜内容用 Grep。" + shellClause
+                + "非 0 退出码返回失败并附输出。缺省 60 秒超时可用 timeout_ms 调整，输出超 30000 字符截断。";
     }
 
     public String shellName() {

@@ -1,6 +1,5 @@
 package com.acode.provider;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -23,7 +22,6 @@ class ChatListenerTest {
         };
     }
 
-    @Disabled("待修复：ChatListener 无参/带参 onComplete 双向 default 委托无终止条件，零覆写实现调用即 StackOverflowError")
     @Test
     void chatListenerDefaultMethodsDoNotRecurse() {
         ChatListener listener = zeroOverrideListener();

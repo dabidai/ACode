@@ -7,6 +7,7 @@ import com.acode.tool.ToolContext;
 import com.acode.tool.ToolResult;
 import com.fasterxml.jackson.databind.JsonNode;
 
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -45,23 +46,28 @@ public class ReadFileTool extends BaseTool {
         if (!Files.isRegularFile(file)) {
             return ToolResult.failure("文件不存在：" + file);
         }
-        try {
-            List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
             int start = Math.max(0, input.has("offset") ? input.get("offset").asInt() : 0);
             int limit = input.has("limit") ? input.get("limit").asInt() : MAX_LINES;
-            int end = (int) Math.min(lines.size(), (long) start + limit);
-            int showEnd = (int) Math.min(end, (long) start + MAX_LINES);
+            long collectTo = (long) start + Math.min(Math.max(limit, 0), MAX_LINES);
             StringBuilder sb = new StringBuilder();
-            for (int i = start; i < showEnd; i++) {
-                sb.append(lines.get(i)).append('\n');
+            String line;
+            long lineNo = 0;
+            long total = 0;
+            while ((line = reader.readLine()) != null) {
+                total++;
+                if (lineNo >= start && lineNo < collectTo) {
+                    sb.append(line).append('\n');
+                }
+                lineNo++;
             }
-            boolean truncated = lines.size() > MAX_LINES;
+            long shownEnd = Math.min(collectTo, total);
+            boolean truncated = total > MAX_LINES;
+            int returned = (int) Math.max(0, shownEnd - start);
             if (truncated) {
-                sb.append("\n…（已截断：共 ").append(lines.size())
-                        .append(" 行，返回 ").append(showEnd - start).append(" 行）");
+                sb.append("\n…（已截断：共 ").append(total).append(" 行，返回 ").append(returned).append(" 行）");
             }
-            int returned = Math.max(0, showEnd - start);
-            String summary = "返回 " + returned + " 行（L" + (start + 1) + "-" + showEnd + "）"
+            String summary = "返回 " + returned + " 行（L" + (start + 1) + "-" + shownEnd + "）"
                     + (truncated ? "（已截断）" : "");
             return ToolResult.success(sb.toString()).withDisplay(summary);
         } catch (IOException e) {

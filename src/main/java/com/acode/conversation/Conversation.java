@@ -10,7 +10,9 @@ import com.acode.tool.Tool;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 对话编排：维护完整消息历史，组装请求时按上下文窗口上限从最早消息开始丢弃。
@@ -128,16 +130,85 @@ public class Conversation {
 
     private List<ChatMessage> trim() {
         if (estimateTotal(messages) <= maxContextTokens) {
-            return messages;
+            return sanitize(messages);
         }
         List<ChatMessage> result = new ArrayList<>(messages);
         while (result.size() > 1 && estimateTotal(result) > maxContextTokens) {
-            result.remove(0);
+            removeTurnUnit(result);
         }
-        return result;
+        return sanitize(result);
     }
 
     private static int estimateTotal(List<ChatMessage> list) {
         return list.stream().mapToInt(Conversation::estimateTokens).sum();
+    }
+
+    /**
+     * 删除一个"轮次单元"：普通消息按单条删；若首条是 assistant 且含 tool_use，
+     * 连同其后紧邻的"全 tool_result 的 user 消息"一起删（Agent 同批结果合一为一条）。
+     * 避免拆散 tool_use/tool_result 配对导致孤儿 tool_result 触发 API 400。
+     */
+    private static void removeTurnUnit(List<ChatMessage> list) {
+        ChatMessage first = list.remove(0);
+        if (first.role() == ChatMessage.Role.ASSISTANT && containsToolUse(first) && !list.isEmpty()) {
+            ChatMessage next = list.get(0);
+            if (next.role() == ChatMessage.Role.USER && isAllToolResults(next)) {
+                list.remove(0);
+            }
+        }
+    }
+
+    /**
+     * 请求出口清洗：剔除无配对的 tool_use / tool_result 块，删空的消息整体丢弃。
+     * 覆盖脏会话恢复与 epoch 拦截遗留的悬空 tool_use；干净时返回原列表引用、不改历史。
+     */
+    private static List<ChatMessage> sanitize(List<ChatMessage> messages) {
+        Set<String> useIds = new HashSet<>();
+        Set<String> resultIds = new HashSet<>();
+        for (ChatMessage m : messages) {
+            for (ContentBlock b : m.blocks()) {
+                if (b instanceof ToolUseBlock tu) {
+                    useIds.add(tu.id());
+                } else if (b instanceof ToolResultBlock tr) {
+                    resultIds.add(tr.toolUseId());
+                }
+            }
+        }
+        List<ChatMessage> cleaned = new ArrayList<>(messages.size());
+        boolean dirty = false;
+        for (ChatMessage m : messages) {
+            List<ContentBlock> kept = new ArrayList<>(m.blocks().size());
+            boolean messageDirty = false;
+            for (ContentBlock b : m.blocks()) {
+                boolean keep = switch (b) {
+                    case ToolUseBlock tu -> resultIds.contains(tu.id());
+                    case ToolResultBlock tr -> useIds.contains(tr.toolUseId());
+                    case TextBlock ignored -> true;
+                };
+                if (keep) {
+                    kept.add(b);
+                } else {
+                    messageDirty = true;
+                }
+            }
+            if (messageDirty) {
+                dirty = true;
+                if (!kept.isEmpty()) {
+                    cleaned.add(new ChatMessage(m.role(), kept));
+                }
+            } else {
+                cleaned.add(m);
+            }
+        }
+        return dirty ? cleaned : messages;
+    }
+
+    private static boolean containsToolUse(ChatMessage message) {
+        return message.blocks().stream().anyMatch(b -> b instanceof ToolUseBlock);
+    }
+
+    private static boolean isAllToolResults(ChatMessage message) {
+        return !message.blocks().isEmpty()
+                && message.blocks().stream().allMatch(b -> b instanceof ToolResultBlock);
     }
 }

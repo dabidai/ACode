@@ -221,4 +221,136 @@ class ConversationTest {
         ChatRequest request = c.buildRequest(List.of(), null);
         assertEquals(1, request.messages().size());
     }
+
+    // ---- trim 按轮删除 + 请求出口 sanitize（修复 1） ----
+
+    private static ChatMessage assistantWithToolUse(String id, ObjectMapper json) {
+        return new ChatMessage(ASSISTANT, List.of(
+                new TextBlock("正在执行"),
+                new ToolUseBlock(id, "ReadFile",
+                        json.createObjectNode().put("file_path", "a.txt"))));
+    }
+
+    private static ChatMessage toolResultMessage(String id) {
+        return new ChatMessage(USER, List.of(new ToolResultBlock(id, "结果", false)));
+    }
+
+    /** 断言请求消息里 tool_use id 与 tool_result id 双向完全一致（无孤儿） */
+    private static void assertNoOrphans(List<ChatMessage> messages) {
+        java.util.Set<String> useIds = new java.util.HashSet<>();
+        java.util.Set<String> resultIds = new java.util.HashSet<>();
+        for (ChatMessage m : messages) {
+            for (ContentBlock b : m.blocks()) {
+                if (b instanceof ToolUseBlock tu) {
+                    useIds.add(tu.id());
+                } else if (b instanceof ToolResultBlock tr) {
+                    resultIds.add(tr.toolUseId());
+                }
+            }
+        }
+        assertEquals(useIds, resultIds, "tool_use 与 tool_result 必须一一配对，不能有孤儿");
+    }
+
+    @Test
+    void trimDropsToolUseAndResultTogetherWhenOverWindow() {
+        ObjectMapper json = new ObjectMapper();
+        Conversation c = conversation();
+        c.addMessage(user("读一下文件"));
+        c.addMessage(assistantWithToolUse("id-1", json));
+        c.addMessage(toolResultMessage("id-1"));
+        for (int i = 0; i < 10; i++) {
+            c.addMessage(user("h".repeat(1600))); // 每条 400 token，逼超窗
+        }
+        ChatRequest request = c.buildRequest();
+        assertNoOrphans(request.messages());
+        assertEquals(13, c.messageCount(), "完整历史不应被截断");
+        assertTrue(request.messages().stream().noneMatch(m ->
+                m.blocks().stream().anyMatch(b ->
+                        (b instanceof ToolUseBlock tu && tu.id().equals("id-1"))
+                                || (b instanceof ToolResultBlock tr && tr.toolUseId().equals("id-1")))),
+                "最早的整个工具轮（id-1 的 use+result）应被整轮删除，不留一半");
+    }
+
+    @Test
+    void trimRemovesWholeToolTurnsFromFrontWhenMultipleTurnsOverflow() {
+        ObjectMapper json = new ObjectMapper();
+        Conversation c = conversation();
+        c.addMessage(user("第一轮")); // 0 token（3 字符 /4）
+        c.addMessage(assistantWithToolUse("id-1", json)); // ≈ 8 token
+        c.addMessage(toolResultMessage("id-1")); // 0 token
+        c.addMessage(user("第二轮")); // 0 token
+        c.addMessage(assistantWithToolUse("id-2", json)); // ≈ 8 token
+        c.addMessage(toolResultMessage("id-2")); // 0 token
+        for (int i = 0; i < 3; i++) {
+            c.addMessage(user("h".repeat(1984))); // 496 token
+        }
+        c.addMessage(user("h".repeat(2000))); // 500 token
+        // 总 ≈ 0+8+0+0+8+0+1988 = 2004 > 2000；删掉第一轮后剩 1996 ≤ 2000，停在轮边界
+        ChatRequest request = c.buildRequest();
+        assertNoOrphans(request.messages());
+        assertTrue(request.messages().stream().noneMatch(m ->
+                        m.blocks().stream().anyMatch(b ->
+                                (b instanceof ToolUseBlock tu && tu.id().equals("id-1"))
+                                        || (b instanceof ToolResultBlock tr && tr.toolUseId().equals("id-1")))),
+                "最早的工具轮 id-1 应整轮消失");
+        assertTrue(request.messages().stream().anyMatch(m ->
+                        m.blocks().stream().anyMatch(b ->
+                                (b instanceof ToolUseBlock tu && tu.id().equals("id-2"))
+                                        || (b instanceof ToolResultBlock tr && tr.toolUseId().equals("id-2")))),
+                "较新的工具轮 id-2 应完整保留");
+    }
+
+    @Test
+    void trimKeepsLatestToolTurnWhenHistoryOverflows() {
+        ObjectMapper json = new ObjectMapper();
+        Conversation c = conversation();
+        c.addMessage(user("填充".repeat(3000))); // 750 token，最早填充
+        c.addMessage(user("最新轮")); // 0 token
+        c.addMessage(new ChatMessage(ASSISTANT, List.of(
+                new TextBlock("x".repeat(7600)), // 1900 token 大文本
+                new ToolUseBlock("id-last", "ReadFile",
+                        json.createObjectNode().put("file_path", "a.txt"))))); // ≈ 7 token
+        c.addMessage(toolResultMessage("id-last")); // 0 token
+        // 总 ≈ 750+0+1907+0 = 2657 > 2000；删掉填充后 ≈ 1907 ≤ 2000，停在轮边界
+        ChatRequest request = c.buildRequest();
+        assertNoOrphans(request.messages());
+        assertTrue(request.messages().stream().anyMatch(m ->
+                        m.blocks().stream().anyMatch(b ->
+                                (b instanceof ToolUseBlock tu && tu.id().equals("id-last"))
+                                        || (b instanceof ToolResultBlock tr && tr.toolUseId().equals("id-last")))),
+                "整体超窗时最新的工具轮应完整保留（不拆散）");
+    }
+
+    @Test
+    void buildRequestSanitizesOrphanToolResult() {
+        Conversation c = conversation();
+        c.addMessage(user("读一下"));
+        c.addMessage(new ChatMessage(ASSISTANT, List.of(
+                new ToolUseBlock("id-ok", "ReadFile",
+                        new ObjectMapper().createObjectNode().put("file_path", "a.txt")))));
+        c.addMessage(toolResultMessage("id-ok"));
+        c.addMessage(toolResultMessage("ghost")); // 无对应 tool_use 的孤儿结果
+        ChatRequest request = c.buildRequest();
+        assertNoOrphans(request.messages());
+        assertTrue(request.messages().stream().noneMatch(m ->
+                m.blocks().stream().anyMatch(b ->
+                        b instanceof ToolResultBlock tr && tr.toolUseId().equals("ghost"))),
+                "孤儿 tool_result（ghost）应从请求剔除，有效配对保留");
+    }
+
+    @Test
+    void buildRequestSanitizesDanglingToolUse() {
+        Conversation c = conversation();
+        c.addMessage(user("读一下"));
+        c.addMessage(new ChatMessage(ASSISTANT, List.of(
+                new ToolUseBlock("id-dangle", "ReadFile",
+                        new ObjectMapper().createObjectNode().put("file_path", "a.txt"))))); // 无结果
+        c.addMessage(user("继续"));
+        ChatRequest request = c.buildRequest();
+        assertNoOrphans(request.messages());
+        assertTrue(request.messages().stream().noneMatch(m ->
+                m.blocks().stream().anyMatch(b ->
+                        b instanceof ToolUseBlock tu && tu.id().equals("id-dangle"))),
+                "悬空 tool_use（id-dangle）应从请求剔除");
+    }
 }

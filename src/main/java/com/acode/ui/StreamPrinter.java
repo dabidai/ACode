@@ -4,6 +4,7 @@ import com.acode.provider.ChatListener;
 import com.acode.provider.ProviderException;
 import com.acode.provider.ToolUseBlock;
 import com.acode.tool.ToolResult;
+import com.acode.util.Strings;
 
 import java.io.IOException;
 import java.io.Writer;
@@ -142,7 +143,7 @@ public class StreamPrinter implements ChatListener {
         if (rendered.isEmpty() && !renderer.endsWithNewline()) {
             return; // 空轮次收尾不写多余空行
         }
-        List<String> colorized = splitLines(rendered);
+        List<String> colorized = Strings.splitLines(rendered);
         int complete = (textFinalized || renderer.endsWithNewline()) ? colorized.size() : colorized.size() - 1;
         for (int i = committedLines.size(); i < complete && i < colorized.size(); i++) {
             live.appendCommitted(writer, colorized.get(i) + "\n");
@@ -177,14 +178,5 @@ public class StreamPrinter implements ChatListener {
                 card.markAppended(lines.size());
             }
         }
-    }
-
-    private static List<String> splitLines(String text) {
-        String body = text.endsWith("\n") ? text.substring(0, text.length() - 1) : text;
-        List<String> lines = new ArrayList<>();
-        for (String line : body.split("\n", -1)) {
-            lines.add(line.replace("\r", ""));
-        }
-        return lines;
     }
 }

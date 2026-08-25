@@ -5,6 +5,7 @@ import com.acode.tool.ParamSpec;
 import com.acode.tool.Permission;
 import com.acode.tool.ToolContext;
 import com.acode.tool.ToolResult;
+import com.acode.util.Strings;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.io.IOException;
@@ -83,8 +84,8 @@ public class WriteFileTool extends BaseTool {
         } else if (oldReadFailed) {
             display.append("\n…（旧内容读取失败，省略对比）");
         } else {
-            List<String> oldLines = oldText == null ? List.of() : splitLines(oldText);
-            List<String> newLines = splitLines(content);
+            List<String> oldLines = oldText == null ? List.of() : Strings.splitLines(oldText);
+            List<String> newLines = Strings.splitLines(content);
             List<String> diff = LineDiff.diffLines(oldLines, newLines, MAX_DIFF_LINES);
             if (diff == null) {
                 display.append("\n…（变化过大，省略对比）");
@@ -95,21 +96,5 @@ public class WriteFileTool extends BaseTool {
             }
         }
         return display.toString();
-    }
-
-    /** 按行拆分：去掉末尾换行产生的空段，保留中间空行。 */
-    private static List<String> splitLines(String text) {
-        List<String> lines = new ArrayList<>();
-        int start = 0;
-        for (int i = 0; i < text.length(); i++) {
-            if (text.charAt(i) == '\n') {
-                lines.add(text.substring(start, i).replace("\r", ""));
-                start = i + 1;
-            }
-        }
-        if (start < text.length()) {
-            lines.add(text.substring(start));
-        }
-        return lines;
     }
 }

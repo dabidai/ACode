@@ -5,6 +5,7 @@ import com.acode.tool.ParamSpec;
 import com.acode.tool.Permission;
 import com.acode.tool.ToolContext;
 import com.acode.tool.ToolResult;
+import com.acode.util.Strings;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 
@@ -96,13 +97,13 @@ EditFileTool extends BaseTool {
         StringBuilder display = new StringBuilder(confirmation);
         int count = 0;
         for (JsonNode edit : edits) {
-            for (String line : splitLines(edit.get("old").asText())) {
+            for (String line : Strings.splitLines(edit.get("old").asText())) {
                 if (count < MAX_DIFF_LINES) {
                     display.append('\n').append("- ").append(line);
                 }
                 count++;
             }
-            for (String line : splitLines(edit.get("new").asText())) {
+            for (String line : Strings.splitLines(edit.get("new").asText())) {
                 if (count < MAX_DIFF_LINES) {
                     display.append('\n').append("+ ").append(line);
                 }
@@ -113,22 +114,6 @@ EditFileTool extends BaseTool {
             display.append("\n…（变化过大，省略对比）");
         }
         return display.toString();
-    }
-
-    /** 按行拆分：去掉末尾换行产生的空段，保留中间空行。 */
-    private static List<String> splitLines(String text) {
-        List<String> lines = new ArrayList<>();
-        int start = 0;
-        for (int i = 0; i < text.length(); i++) {
-            if (text.charAt(i) == '\n') {
-                lines.add(text.substring(start, i).replace("\r", ""));
-                start = i + 1;
-            }
-        }
-        if (start < text.length()) {
-            lines.add(text.substring(start));
-        }
-        return lines;
     }
 
     private static String summarize(String s) {

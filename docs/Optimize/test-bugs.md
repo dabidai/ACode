@@ -1,33 +1,33 @@
 # 测试补强发现的 Bug 清单
 
-> 由专项测试补强（2026-08-25）发现并记录。凡标记「待修复」的 bug 均有对应 `@Disabled` 测试钉住（JUnit 统计为 skipped，不影响全绿）；修复后应摘掉 `@Disabled` 并确认测试转绿。
+> 由专项测试补强（2026-08-25）发现并记录。B1–B4 已于同日修复（commit 见各条），原 `@Disabled` 已摘除转绿；「已确认覆盖」部分为按约定不做补测的备查项。
 
-## 已钉住（有 @Disabled 测试）
+## 已修复（原 @Disabled 已摘除转绿）
 
 ### B1. ChatListener 双向 default 委托零覆写即 StackOverflowError
 - **位置**：`src/main/java/com/acode/provider/ChatListener.java:18-31`
 - **现象**：`onComplete()`（无参）默认实现委托 `onComplete(null)`，带参默认实现又委托回 `onComplete()`。任何只实现抽象方法、不覆写任一 `onComplete` 的监听器，收到完成信号即无限递归爆栈。
 - **影响**：接口注释宣称「存量实现只覆写无参版仍能收到完成信号」，但零覆写场景（理论上合法）会崩溃。
-- **钉住测试**：`ChatListenerTest.chatListenerDefaultMethodsDoNotRecurse`（`@Disabled`）
-- **修复方向**：带参版默认实现改为空操作，无参版委托带参；或带参版 fallback 到无参版、无参版为空操作（二选一，避免环）。
+- **修复**（commit a5aa97e）：改为带参默认回落到无参、无参默认空操作；存量实现只覆写无参版仍收到信号，零覆写安全结束。
+- **回归测试**：`ChatListenerTest.chatListenerDefaultMethodsDoNotRecurse`
 
 ### B2. PlanModePrompt FULL 提醒提到未注册工具名 AskUserQuestion
 - **位置**：`src/main/java/com/acode/agent/PlanModePrompt.java:26`
 - **现象**：FULL 版 plan 提醒指示模型「ask the user with **AskUserQuestion**」，但实际注册名是 **AskUser**（`AskUserTool.java`）。模型按提示调用会命中「未注册工具」错误。
-- **钉住测试**：`PlanModePromptTest.fullReminderMentionsOnlyRegisteredToolNames`（`@Disabled`）
-- **修复方向**：把文案中 `AskUserQuestion` 改为 `AskUser`。
+- **修复**（commit 8dab489）：文案 `AskUserQuestion` 改为 `AskUser`。
+- **回归测试**：`PlanModePromptTest.fullReminderMentionsOnlyRegisteredToolNames`
 
 ### B3. BashTool timeout_ms 超过默认超时被 BaseTool 外壳静默截断
 - **位置**：`src/main/java/com/acode/tool/BaseTool.java:62` + `src/main/java/com/acode/tool/impl/BashTool.java:63-70`
 - **现象**：BashTool 描述承诺「缺省 60 秒超时可用 timeout_ms 调整」，但 `BaseTool.execute` 外壳固定用 `future.get(defaultTimeoutMillis())`（Bash 为 60s）掐表。传入 `timeout_ms > 60000` 时，命令在 60s 处被外壳杀死并报「执行超时（上限 60000 ms）」，长超时覆盖被静默吞掉。
-- **钉住测试**：`BashToolTest.timeoutShellHonorsToolOverrideBeyondDefault`（`@Disabled`，测试把外壳默认压到 400ms 加速复现）
-- **修复方向**：外壳超时应取 `max(defaultTimeoutMillis(), 参数 timeout_ms)`，或把超时读取下放到工具层、外壳只保留兜底上限。
+- **修复**（commit b7ae6b6）：外壳超时改用可覆盖的 `timeoutMillis(input)`，BashTool 覆盖为 `max(默认, timeout_ms)`。
+- **回归测试**：`BashToolTest.timeoutShellHonorsToolOverrideBeyondDefault`
 
 ### B4. GlobTool / GrepTool 不过滤 .git 与 target 目录
-- **位置**：`src/main/java/com/acode/tool/impl/GlobTool.java:63`、`GrepTool.java:70`（`Files.walk` 全量遍历）
+- **位置**：`src/main/java/com/acode/tool/impl/GlobTool.java`、`GrepTool.java`（`Files.walk` 全量遍历）
 - **现象**：搜索结果混入 `.git/config`、`target/classes` 等仓库元数据与构建产物；GrepTool 还会尝试读取 .git 内部二进制文件（解码失败被跳过，但浪费遍历）。
-- **钉住测试**：`GlobToolTest.globSkipsDotGitAndTargetDirectories`（`@Disabled`）
-- **修复方向**：遍历时跳过 `.git`、`target` 等内部目录（参考实现均过滤），Glob 与 Grep 同步修。
+- **修复**（commit ef3b480）：改用 `Files.walkFileTree`，`preVisitDirectory` 对 `.git`/`target` 返回 `SKIP_SUBTREE`。
+- **回归测试**：`GlobToolTest.globSkipsDotGitAndTargetDirectories`
 
 ## 已确认覆盖（无需改动，记录备查）
 

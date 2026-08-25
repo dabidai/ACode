@@ -1,6 +1,5 @@
 package com.acode.ui;
 
-import com.acode.provider.ChatListener;
 import com.acode.provider.ProviderException;
 import com.acode.provider.ToolUseBlock;
 import com.acode.tool.ToolResult;
@@ -19,11 +18,11 @@ import java.util.List;
  * 把流式 ChatListener 回调双写：内容模型（OutputPane，已提交内容快照）+ 追加式写屏。
  * 追加式：每个完成的渲染行（以换行结尾）经 appendCommitted 写屏一次，原生折行进回滚、
  * 可划选、永不再改——不发射任何光标操作序列，宽度失配/终端差异不可能造成错位。
- * 未完成尾行暂不显示，等换行到达（或 finishTurn/onComplete 定稿）再提交；
+ * 未完成尾行暂不显示，等换行到达（或 finishTurn 定稿）再提交；
  * onError 时丢弃（本就没写屏，无需清理）。工具卡片为静态多行：先「● 工具名(参数)」，
  * 结果到达后追加输出块（首行 ⎿ 着色 + 后续行缩进 + 耗时脚注）。内容模型行为不变（运行中卡片不进模型、终态卡片进模型）。
  */
-public class StreamPrinter implements ChatListener {
+public class StreamPrinter {
 
     private final OutputPane output;
     private final LiveRegionRenderer live;
@@ -45,7 +44,6 @@ public class StreamPrinter implements ChatListener {
         this.teeEnabled = teeEnabled;
     }
 
-    @Override
     public void onDelta(String delta) {
         diag("delta", delta);
         if (textFinalized) {
@@ -55,7 +53,6 @@ public class StreamPrinter implements ChatListener {
         replaceTail(renderer.render());
     }
 
-    @Override
     public void onToolUse(ToolUseBlock toolUse) {
         if (!textFinalized) {
             textFinalized = true;
@@ -87,17 +84,6 @@ public class StreamPrinter implements ChatListener {
         flushCards();
     }
 
-    @Override
-    public void onComplete() {
-        textFinalized = true;
-        flushCompletedLines();
-        renderer = new MarkdownRenderer();
-        responseLines = 0;
-        committedLines.clear();
-        textFinalized = false;
-    }
-
-    @Override
     public void onError(ProviderException error) {
         output.removeLast(responseLines);
         responseLines = 0;

@@ -58,7 +58,7 @@ class StreamPrinterTest {
         OutputPane pane = new OutputPane();
         StreamPrinter printer = printer(pane);
         printer.onDelta("done");
-        printer.onComplete();
+        printer.finishTurn();
         assertEquals(1, pane.lineCount());
         printer.onDelta("next");
         assertEquals(2, pane.lineCount());
@@ -167,16 +167,6 @@ class StreamPrinterTest {
                 JSON.createObjectNode().put("file_path", "a.txt")));
         printer.onDelta("不应出现的文本");
         assertEquals(0, pane.lineCount(), "tool_use 后的文本增量应被忽略，不覆盖卡片");
-    }
-
-    @Test
-    void completeDoesNotCommitRunningCard() {
-        OutputPane pane = new OutputPane();
-        StreamPrinter printer = printer(pane);
-        printer.onToolUse(new ToolUseBlock("id-1", "Bash",
-                JSON.createObjectNode().put("command", "echo hi")));
-        printer.onComplete();
-        assertEquals(0, pane.lineCount(), "未 updateToolCalls 的运行中卡片不进入内容模型");
     }
 
     /** 计数追加写屏次数的假渲染器（追加式路径）。 */

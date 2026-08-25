@@ -107,9 +107,7 @@ public class Agent {
         this.planContext = new ToolContext(context.workingDirectory(), true);
         this.maxIterations = maxIterations;
         this.epoch = conversation.currentEpoch();
-        if (registry.available(EXIT_PLAN_MODE) == null) {
-            registry.register(exitPlanMode);
-        }
+        // ExitPlanMode 由装配层（ConversationController）显式注册，构造器只读 registry
         conversation.setTools(registry.availableList());
     }
 

@@ -14,6 +14,7 @@ import com.acode.agent.AgentEvent.TurnComplete;
 import com.acode.agent.AgentEvent.UsageEvent;
 import com.acode.agent.AskUserTool;
 import com.acode.agent.EventConfirmationGate;
+import com.acode.agent.ExitPlanModeTool;
 import com.acode.config.AppConfig;
 import com.acode.config.ConfigException;
 import com.acode.config.ConfigLoader;
@@ -145,6 +146,7 @@ public class ConversationController {
                 config.getMaxContextTokens());
         this.toolRegistry = new ToolRegistry();
         DefaultToolset.registerAll(toolRegistry);
+        toolRegistry.register(new ExitPlanModeTool());
         toolRegistry.register(new AskUserTool());
         this.sessionStore = new SessionStore(SessionStore.defaultDir());
         this.resume = resume;

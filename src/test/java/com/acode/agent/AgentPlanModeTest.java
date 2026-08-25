@@ -109,6 +109,7 @@ class AgentPlanModeTest {
                 FakeProvider.toolUse("id-1", "ExitPlanMode", JSON.createObjectNode()),
                 FakeProvider.complete())));
         ToolRegistry registry = new ToolRegistry();
+        registry.register(new ExitPlanModeTool());
         Agent agent = start(provider, 20, registry);
         agent.setPlanMode(true);
         BlockingQueue<AgentEvent> events = agent.run();

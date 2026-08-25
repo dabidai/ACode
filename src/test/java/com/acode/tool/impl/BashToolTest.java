@@ -4,7 +4,6 @@ import com.acode.tool.ToolContext;
 import com.acode.tool.ToolResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -88,11 +87,9 @@ class BashToolTest {
 
     /**
      * 契约：timeout_ms 覆盖应生效（描述文案承诺「缺省 60 秒超时可用 timeout_ms 调整」，
-     * 即允许延长到 60s 以上）。当前 BaseTool 外壳固定用 defaultTimeoutMillis() 掐表，
-     * timeout_ms 超过默认值即被静默截断。测试把外壳默认压到 400ms 加速复现：
-     * timeout_ms=10000 + 约 2 秒的命令应成功，实际在 400ms 处被外壳超时杀死。
+     * 即允许延长到默认值以上）。测试把外壳默认压到 400ms 加速验证：
+     * timeout_ms=10000 + 约 2 秒的命令应成功，不被外壳超时杀死。
      */
-    @Disabled("待修复：BaseTool.execute 外壳固定用 defaultTimeoutMillis() 超时，BashTool timeout_ms 超过 60s 被静默截断")
     @Test
     void timeoutShellHonorsToolOverrideBeyondDefault() throws Exception {
         BashTool tool = new BashTool() {

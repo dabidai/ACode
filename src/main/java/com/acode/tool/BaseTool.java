@@ -57,12 +57,13 @@ public abstract class BaseTool implements Tool {
         if (validationError != null) {
             return ToolResult.failure(validationError);
         }
+        long timeout = timeoutMillis(input);
         Future<ToolResult> future = EXECUTOR.submit(() -> doExecute(input, context));
         try {
-            return future.get(defaultTimeoutMillis(), TimeUnit.MILLISECONDS);
+            return future.get(timeout, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             future.cancel(true);
-            return ToolResult.failure("执行超时（上限 " + defaultTimeoutMillis() + " ms）：" + name());
+            return ToolResult.failure("执行超时（上限 " + timeout + " ms）：" + name());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             future.cancel(true);
@@ -84,6 +85,11 @@ public abstract class BaseTool implements Tool {
     /** 超时上限（毫秒），子类可按需覆盖 */
     protected long defaultTimeoutMillis() {
         return DEFAULT_TIMEOUT_MILLIS;
+    }
+
+    /** 外壳超时上限（毫秒）：默认取 defaultTimeoutMillis()，子类可据请求参数扩展（如 Bash 读 timeout_ms） */
+    protected long timeoutMillis(JsonNode input) {
+        return defaultTimeoutMillis();
     }
 
     /** 由 paramSpecs 生成的默认参数 Schema；结构复杂的工具可覆盖此方法 */

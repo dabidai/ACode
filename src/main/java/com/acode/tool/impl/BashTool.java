@@ -64,6 +64,24 @@ public class BashTool extends BaseTool {
         return DEFAULT_TIMEOUT_MS;
     }
 
+    /** 外壳超时取 max(默认, timeout_ms)：允许参数延长到默认值以上，不被外壳静默截断 */
+    @Override
+    protected long timeoutMillis(JsonNode input) {
+        long requested = requestedTimeoutMillis(input);
+        return requested > 0 ? Math.max(defaultTimeoutMillis(), requested) : defaultTimeoutMillis();
+    }
+
+    /** 从请求参数提取 timeout_ms：正数时返回，否则 -1（无覆盖） */
+    private static long requestedTimeoutMillis(JsonNode input) {
+        if (input != null && input.has("timeout_ms") && input.get("timeout_ms").isIntegralNumber()) {
+            long t = input.get("timeout_ms").asLong();
+            if (t > 0) {
+                return t;
+            }
+        }
+        return -1;
+    }
+
     @Override
     protected ToolResult doExecute(JsonNode input, ToolContext context) {
         String command = input.get("command").asText();

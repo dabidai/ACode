@@ -353,4 +353,53 @@ class ConversationTest {
                         b instanceof ToolUseBlock tu && tu.id().equals("id-dangle"))),
                 "悬空 tool_use（id-dangle）应从请求剔除");
     }
+
+    // ---- epoch 代次 + COW 并发安全（修复 2） ----
+
+    @Test
+    void staleEpochAddMessageIsIgnored() {
+        Conversation c = conversation();
+        long stale = c.nextEpoch(); // epoch 1
+        c.nextEpoch(); // epoch 2
+        c.addMessage(stale, user("旧代次写入"));
+        c.addMessage(c.currentEpoch(), user("当前代次写入"));
+        assertEquals(1, c.messageCount(), "旧代次写入应被忽略");
+        assertEquals("当前代次写入", c.history().get(0).content());
+    }
+
+    @Test
+    void staleEpochAddToolResultsIsIgnored() {
+        Conversation c = conversation();
+        long stale = c.nextEpoch();
+        c.nextEpoch();
+        c.addToolResults(stale, List.of(new ToolResultBlock("ghost", "旧结果", false)));
+        assertEquals(0, c.messageCount(), "旧代次结果写入应被忽略");
+    }
+
+    @Test
+    void unconditionalAddsAlwaysAccepted() {
+        Conversation c = conversation();
+        c.nextEpoch();
+        c.nextEpoch();
+        c.addMessage(user("无条件写入"));
+        c.addToolResults(List.of(new ToolResultBlock("id-1", "无条件结果", false)));
+        assertEquals(2, c.messageCount(), "无条件版本不受代次限制");
+    }
+
+    @Test
+    void concurrentAddsDuringBuildRequestDoNotThrow() throws InterruptedException {
+        Conversation c = conversation();
+        c.addMessage(user("种子消息")); // 保证 buildRequest 永不读到空历史（ChatRequest 校验非空）
+        Thread writer = new Thread(() -> {
+            for (int i = 0; i < 500; i++) {
+                c.addMessage(user("w" + i));
+            }
+        });
+        writer.start();
+        for (int i = 0; i < 500; i++) {
+            c.buildRequest(); // COW 快照读，不应抛并发修改异常
+        }
+        writer.join();
+        assertEquals(501, c.messageCount());
+    }
 }

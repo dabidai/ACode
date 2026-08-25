@@ -13,6 +13,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * 对话编排：维护完整消息历史，组装请求时按上下文窗口上限从最早消息开始丢弃。
@@ -20,12 +21,15 @@ import java.util.Set;
  */
 public class Conversation {
 
-    private final List<ChatMessage> messages = new ArrayList<>();
+    private final List<ChatMessage> messages = new CopyOnWriteArrayList<>();
     private final List<Tool> tools = new ArrayList<>();
     private final String model;
     private final boolean thinking;
     private final int maxTokens;
     private final int maxContextTokens;
+
+    /** 历史代次：每次新 exchange 递增，旧 agent 线程的迟到写入被带代次校验忽略（防取消后并发写） */
+    private long epoch = 0;
 
     /** 会话级 system 提示词：会话启动构建一次，会话内字节稳定（可缓存）；不进历史 */
     private String systemPrompt;
@@ -45,9 +49,33 @@ public class Conversation {
         messages.add(message);
     }
 
+    /** 带代次校验的追加：仅当代次仍当前时写入（旧 agent 线程的迟到写入被忽略） */
+    public synchronized void addMessage(long epoch, ChatMessage message) {
+        if (epoch == this.epoch) {
+            messages.add(message);
+        }
+    }
+
     /** 把一批工具执行结果作为一条 user 消息追加进历史（Anthropic 要求同批 tool_result 放一条消息） */
     public void addToolResults(List<ToolResultBlock> results) {
         messages.add(new ChatMessage(ChatMessage.Role.USER, new ArrayList<>(results)));
+    }
+
+    /** 带代次校验的结果追加：与 addMessage(long, ...) 同理，防旧线程残留写入错乱历史 */
+    public synchronized void addToolResults(long epoch, List<ToolResultBlock> results) {
+        if (epoch == this.epoch) {
+            messages.add(new ChatMessage(ChatMessage.Role.USER, new ArrayList<>(results)));
+        }
+    }
+
+    /** 开启新的历史代次并返回其编号；与带代次写入同锁，杜绝"校验后、写入前被抢"的半写窗口 */
+    public synchronized long nextEpoch() {
+        return ++epoch;
+    }
+
+    /** 当前代次 */
+    public synchronized long currentEpoch() {
+        return epoch;
     }
 
     /** 设置请求携带的工具列表（ch03：单步闭环全程带工具；OpenAI 端忽略） */

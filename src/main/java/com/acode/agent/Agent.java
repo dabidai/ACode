@@ -5,6 +5,7 @@ import com.acode.agent.AgentEvent.LoopComplete;
 import com.acode.agent.AgentEvent.RetryEvent;
 import com.acode.agent.AgentEvent.TurnComplete;
 import com.acode.conversation.Conversation;
+import com.acode.permission.PermissionChecker;
 import com.acode.prompt.SystemReminder;
 import com.acode.provider.ChatMessage;
 import com.acode.provider.ChatProvider;
@@ -73,10 +74,20 @@ public class Agent {
     /** 工具确认门槛：默认放行；UI 装配时替换为事件握手实现 */
     private ConfirmationGate confirmationGate = ConfirmationGate.ALWAYS_ALLOW;
 
+    /** 构造时捕获的历史代次：循环内所有历史写入带此代次，被新 exchange 取代后迟到写入被忽略 */
+    private final long epoch;
+
+    /** 权限检查器：UI 装配时注入；null 时执行器走旧确认路径（存量测试兼容） */
+    private PermissionChecker permissionChecker;
+
     public void setConfirmationGate(ConfirmationGate gate) {
         if (gate != null) {
             this.confirmationGate = gate;
         }
+    }
+
+    public void setPermissionChecker(PermissionChecker permissionChecker) {
+        this.permissionChecker = permissionChecker;
     }
 
     private volatile boolean planMode = false;
@@ -95,6 +106,7 @@ public class Agent {
         this.context = context;
         this.planContext = new ToolContext(context.workingDirectory(), true);
         this.maxIterations = maxIterations;
+        this.epoch = conversation.currentEpoch();
         if (registry.available(EXIT_PLAN_MODE) == null) {
             registry.register(exitPlanMode);
         }
@@ -245,7 +257,7 @@ public class Agent {
                 if (cancelled.get()) {
                     return TurnOutcome.cancelled();
                 }
-                conversation.addMessage(ChatMessage.of(ChatMessage.Role.USER, TRUNCATION_CONTINUE_HINT));
+                conversation.addMessage(epoch, ChatMessage.of(ChatMessage.Role.USER, TRUNCATION_CONTINUE_HINT));
                 recoveryCount++;
                 return TurnOutcome.truncated();
             }
@@ -269,7 +281,7 @@ public class Agent {
             if (collector.toolUses().isEmpty()) {
                 // 自然收尾：无工具调用
                 if (!collector.text().isEmpty()) {
-                    conversation.addMessage(ChatMessage.of(ChatMessage.Role.ASSISTANT, collector.text()));
+                    conversation.addMessage(epoch, ChatMessage.of(ChatMessage.Role.ASSISTANT, collector.text()));
                 }
                 return TurnOutcome.normalEnd();
             }
@@ -341,7 +353,7 @@ public class Agent {
             blocks.add(new TextBlock(text));
         }
         blocks.addAll(toolUses);
-        conversation.addMessage(new ChatMessage(ChatMessage.Role.ASSISTANT, blocks));
+        conversation.addMessage(epoch, new ChatMessage(ChatMessage.Role.ASSISTANT, blocks));
     }
 
     /** 执行工具并把结果（按声明顺序、入历史前截断）回填为 user tool_result 消息 */
@@ -350,7 +362,7 @@ public class Agent {
             return;
         }
         StreamingToolExecutor executor =
-                new StreamingToolExecutor(registry, planMode ? planContext : context, confirmationGate);
+                new StreamingToolExecutor(registry, planMode ? planContext : context, permissionChecker, confirmationGate);
         List<ToolResult> results = executor.execute(toolUses, events, cancelled);
         List<ToolResultBlock> blocks = new ArrayList<>(results.size());
         for (int i = 0; i < toolUses.size(); i++) {
@@ -358,7 +370,7 @@ public class Agent {
             blocks.add(new ToolResultBlock(toolUses.get(i).id(),
                     truncateForHistory(result.content()), result.isError()));
         }
-        conversation.addToolResults(blocks);
+        conversation.addToolResults(epoch, blocks);
     }
 
     /** 取消时未执行的调用补「已取消」结果入历史（R5） */
@@ -367,7 +379,7 @@ public class Agent {
         for (ToolUseBlock use : toolUses) {
             blocks.add(new ToolResultBlock(use.id(), "已取消", true));
         }
-        conversation.addToolResults(blocks);
+        conversation.addToolResults(epoch, blocks);
     }
 
     /** 按 plan 模式组装请求：工具列表动态过滤 + 轮次级 system-reminder 提醒（尾插，仅进请求不进历史） */

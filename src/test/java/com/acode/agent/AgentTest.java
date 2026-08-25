@@ -349,6 +349,54 @@ class AgentTest {
         assertTrue(block.content().length() < 5000, "结果应被截断");
     }
 
+    @Test
+    void staleAgentCannotWriteIntoNextAgentTurn() throws Exception {
+        CountDownLatch toolStarted = new CountDownLatch(1);
+        CountDownLatch releaseTool = new CountDownLatch(1);
+        UnstoppableTool stuck = new UnstoppableTool("Stuck", toolStarted, releaseTool);
+
+        Conversation conversation = new Conversation("test", false, 4096, 8000);
+        conversation.addMessage(ChatMessage.of(ChatMessage.Role.USER, "初始任务"));
+        ToolContext ctx = new ToolContext(tempDir);
+
+        // agent1：工具调用卡在不可中断阻塞上（模拟第三方工具吞中断）
+        ToolRegistry registry1 = new ToolRegistry();
+        registry1.register(stuck);
+        FakeProvider provider1 = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.toolUse("id-1", "Stuck", JSON.createObjectNode()),
+                        FakeProvider.complete())));
+        Agent agent1 = new Agent(provider1, conversation, registry1, ctx, 20);
+        agent1.run();
+        assertTrue(toolStarted.await(2, TimeUnit.SECONDS), "agent1 的工具应已开始执行");
+
+        agent1.cancel(); // interrupt 被 UnstoppableTool 吞掉，agent1 滞留
+        conversation.nextEpoch(); // epoch 1：agent1 的残留写入此后被忽略
+        conversation.addMessage(ChatMessage.of(ChatMessage.Role.USER, "q2"));
+
+        // agent2：同会话新 exchange，正常跑完
+        FakeProvider provider2 = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.delta("新回合回答"), FakeProvider.complete())));
+        ToolRegistry registry2 = new ToolRegistry();
+        Agent agent2 = new Agent(provider2, conversation, registry2, ctx, 20);
+        BlockingQueue<AgentEvent> events2 = agent2.run();
+        untilLoop(events2, 5000);
+        assertEquals(Agent.Termination.NORMAL, agent2.termination());
+
+        releaseTool.countDown(); // 放行 agent1
+        awaitTermination(agent1, 3000);
+        assertEquals(Agent.Termination.CANCELED, agent1.termination());
+
+        // agent1 的 addToolResults(旧代次) 被忽略：历史只有 初始任务 + agent1 assistant + q2 + agent2 回答
+        assertEquals(4, conversation.messageCount(),
+                "旧 agent 的残留结果写入不应进入新 exchange 的历史");
+        List<ChatMessage> request = conversation.buildRequest().messages();
+        assertNoDanglingToolUses(request);
+        assertTrue(request.stream().anyMatch(m -> m.content().contains("q2")));
+        assertTrue(request.stream().noneMatch(m -> m.blocks().stream()
+                        .anyMatch(b -> b instanceof ToolUseBlock tu && tu.id().equals("id-1"))),
+                "agent1 悬空的 tool_use（id-1）应被 sanitize 从请求剔除");
+    }
+
     private static void assertNoDanglingToolUses(List<ChatMessage> history) {
         Set<String> issued = new HashSet<>();
         Set<String> resolved = new HashSet<>();
@@ -405,6 +453,53 @@ class AgentTest {
                 Thread.currentThread().interrupt();
             }
             return ToolResult.success("blocked-done");
+        }
+    }
+
+    /** 吞中断的阻塞桩工具：模拟不可中断的第三方工具导致 agent 线程滞留（不被 interrupt 打断） */
+    private static class UnstoppableTool implements Tool {
+        final String name;
+        final CountDownLatch started;
+        final CountDownLatch release;
+
+        UnstoppableTool(String name, CountDownLatch started, CountDownLatch release) {
+            this.name = name;
+            this.started = started;
+            this.release = release;
+        }
+
+        @Override
+        public String name() {
+            return name;
+        }
+
+        @Override
+        public String description() {
+            return "test unstoppable tool";
+        }
+
+        @Override
+        public Permission permission() {
+            return Permission.WRITE;
+        }
+
+        @Override
+        public JsonNode inputSchema() {
+            return JSON.createObjectNode();
+        }
+
+        @Override
+        public ToolResult execute(JsonNode input, ToolContext context) {
+            started.countDown();
+            while (true) {
+                try {
+                    release.await();
+                    break;
+                } catch (InterruptedException ignored) {
+                    // 吞掉中断，模拟不可中断阻塞
+                }
+            }
+            return ToolResult.success("unstoppable-done");
         }
     }
 }

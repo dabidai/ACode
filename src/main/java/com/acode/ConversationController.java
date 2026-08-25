@@ -19,6 +19,10 @@ import com.acode.config.ConfigException;
 import com.acode.config.ConfigLoader;
 import com.acode.config.ConfigValidator;
 import com.acode.conversation.Conversation;
+import com.acode.permission.PermissionChecker;
+import com.acode.permission.PermissionMode;
+import com.acode.permission.PermissionResponse;
+import com.acode.permission.RuleEngine;
 import com.acode.prompt.EnvironmentDetector;
 import com.acode.prompt.PromptBuilder;
 import com.acode.prompt.SystemReminder;
@@ -103,11 +107,17 @@ public class ConversationController {
     private LiveRegionRenderer live;
     private Writer screenWriter;
 
-    /** 确认应答器：收到 ConfirmationRequestEvent 后渲染提示并返回批准与否；测试可注入替身。 */
-    private Function<ConfirmationRequestEvent, Boolean> confirmAnswerer = this::answerConfirmationPrompt;
+    /** 确认应答器：收到 ConfirmationRequestEvent 后渲染提示并返回三选一；测试可注入替身。 */
+    private Function<ConfirmationRequestEvent, PermissionResponse> confirmAnswerer = this::answerConfirmationPrompt;
 
     /** 选择应答器：收到 ChoiceRequestEvent 后弹多选项菜单并返回选中项（取消返回 null）；测试可注入替身。 */
     private Function<ChoiceRequestEvent, String> choiceAnswerer = this::answerChoicePrompt;
+
+    /** 权限检查器：T9 在 handleExchange 装配注入；/permission-mode 命令即时切档用。 */
+    private PermissionChecker permissionChecker;
+
+    /** 权限沙箱根：生产为当前工作目录；测试可注入 @TempDir 避免文件路径被沙箱拦截。 */
+    private Path projectRoot = Path.of(System.getProperty("user.dir"));
 
     public static void run(boolean resume) {
         AppConfig config;
@@ -233,12 +243,50 @@ public class ConversationController {
                     output.appendLine("（已退出规划模式，开始执行）");
                     live.appendCommitted(writer, "（已退出规划模式，开始执行）");
                 }
+                case PERMISSION_MODE -> handlePermissionMode(line.trim().substring("/permission-mode".length()).trim(), live, writer);
                 case SKIP -> {
                     // 空白输入，忽略
                 }
                 case CHAT -> handleChat(line);
             }
         }
+    }
+
+    /**
+     * /permission-mode 切档：无参数输出当前模式；参数须为 4 合法值之一（大小写敏感、无多余参数）。
+     * 非法值输出错误、模式不变；合法切档只改内存 volatile mode，不写回 config.yaml。
+     * 包可见：测试直接调用断言切档行为。
+     */
+    void handlePermissionMode(String arg, LiveRegionRenderer live, Writer writer) {
+        String modeArg = arg == null ? "" : arg.trim();
+        if (modeArg.isEmpty()) {
+            String line = "当前权限模式：" + currentPermissionModeName();
+            output.appendLine(line);
+            live.appendCommitted(writer, line);
+            return;
+        }
+        PermissionMode mode = PermissionMode.fromConfig(modeArg);
+        if (mode == null) {
+            String line = "（非法权限模式：" + modeArg + "，可选：default/acceptEdits/plan/bypassPermissions）";
+            output.appendLine(line);
+            live.appendCommitted(writer, line);
+            return;
+        }
+        if (permissionChecker == null) {
+            permissionChecker = buildPermissionChecker();
+        }
+        permissionChecker.setMode(mode);
+        String line = "（已切换到权限模式：" + mode.configValue() + "）";
+        output.appendLine(line);
+        live.appendCommitted(writer, line);
+    }
+
+    private String currentPermissionModeName() {
+        if (permissionChecker != null) {
+            return permissionChecker.mode().configValue();
+        }
+        String configured = config.getPermissionMode();
+        return configured != null ? configured : "default";
     }
 
     /**
@@ -368,7 +416,7 @@ public class ConversationController {
     }
 
     /** 测试用：注入确认应答器（跳过真实终端读行）。 */
-    void setConfirmAnswerer(Function<ConfirmationRequestEvent, Boolean> answerer) {
+    void setConfirmAnswerer(Function<ConfirmationRequestEvent, PermissionResponse> answerer) {
         this.confirmAnswerer = answerer;
     }
 
@@ -377,10 +425,20 @@ public class ConversationController {
         this.choiceAnswerer = answerer;
     }
 
-    /** 默认确认应答：渲染「要执行 X …？」并弹 ↑↓ 选择菜单；无终端（纯测试环境）视为拒绝。 */
-    private boolean answerConfirmationPrompt(ConfirmationRequestEvent event) {
+    /** 测试用：注入权限检查器（供 /permission-mode 命令与执行器装配）。 */
+    void setPermissionChecker(PermissionChecker permissionChecker) {
+        this.permissionChecker = permissionChecker;
+    }
+
+    /** 测试用：注入权限沙箱根（避免 @TempDir 文件路径被 sandbox 拦截）。 */
+    void setProjectRoot(Path projectRoot) {
+        this.projectRoot = projectRoot;
+    }
+
+    /** 默认确认应答：渲染「要执行 X …？」并弹三选一菜单；无终端（纯测试环境）视为拒绝。 */
+    private PermissionResponse answerConfirmationPrompt(ConfirmationRequestEvent event) {
         if (tui == null) {
-            return false;
+            return PermissionResponse.DENY;
         }
         ConfirmationPrompt prompt = new ConfirmationPrompt(
                 new TerminalMenuKeySource(tui.terminal().reader()), liveRenderer(), screenWriter());
@@ -490,6 +548,7 @@ public class ConversationController {
      * repaint 为保留参数：渲染已全部经活跃区完成，测试沿用传 no-op 的签名。
      */
     void handleExchange(String input, BooleanSupplier ctrlC, Runnable repaint) {
+        conversation.nextEpoch(); // 先失效上一轮残留的 agent 线程写入，再开始本轮
         conversation.addMessage(ChatMessage.of(ChatMessage.Role.USER, input));
         output.append("● " + input + "\n");
         LiveRegionRenderer live = liveRenderer();
@@ -498,9 +557,13 @@ public class ConversationController {
         live.appendCommitted(writer, "● " + input);
 
         Agent agent = new Agent(provider, conversation, toolRegistry,
-                new ToolContext(Path.of(System.getProperty("user.dir"))), maxIterations());
+                new ToolContext(projectRoot), maxIterations());
         agent.setPlanMode(planMode);
         agent.setConfirmationGate(new EventConfirmationGate());
+        if (permissionChecker == null) {
+            permissionChecker = buildPermissionChecker();
+        }
+        agent.setPermissionChecker(permissionChecker);
         BlockingQueue<AgentEvent> events = agent.run();
 
         StreamPrinter printer = new StreamPrinter(output, live, writer, config.isTeeEnabled());
@@ -566,6 +629,19 @@ public class ConversationController {
         }
     }
 
+    /** 装配权限检查器：模式取 config（缺省 default），沙箱根为项目根，规则文件沿用 .acode/ 命名空间。 */
+    private PermissionChecker buildPermissionChecker() {
+        PermissionMode mode = PermissionMode.fromConfig(config.getPermissionMode());
+        if (mode == null) {
+            mode = PermissionMode.DEFAULT;
+        }
+        RuleEngine ruleEngine = new RuleEngine(
+                Path.of(System.getProperty("user.home")).resolve(".acode/permissions.yaml"),
+                projectRoot.resolve(".acode/permissions.yaml"),
+                projectRoot.resolve(".acode/permissions.local.yaml"));
+        return new PermissionChecker(mode, projectRoot, ruleEngine);
+    }
+
     /** 循环轮数上限：配置缺失时用默认值（与 ConfigValidator 一致） */
     private int maxIterations() {
         Integer configured = config.getMaxIterations();
@@ -593,9 +669,12 @@ public class ConversationController {
         }
     }
 
-    /** 取消后等循环线程收尾（上限 5 秒），避免与下一次 exchange 并发写历史 */
+    /** 取消后等循环线程收尾的上限（毫秒）；包可见非 final，测试可调小。超时后旧线程的
+     *  残留历史写入由 Conversation 的 epoch 校验忽略，仅记告警，UI 不挂死。 */
+    static long awaitLoopEndTimeoutMillis = 5000;
+
     private static void awaitLoopEnd(Agent agent) {
-        long deadline = System.currentTimeMillis() + 5000;
+        long deadline = System.currentTimeMillis() + awaitLoopEndTimeoutMillis;
         while (agent.isRunning() && System.currentTimeMillis() < deadline) {
             try {
                 Thread.sleep(20);
@@ -603,6 +682,10 @@ public class ConversationController {
                 Thread.currentThread().interrupt();
                 return;
             }
+        }
+        if (agent.isRunning()) {
+            log.warn("取消后 agent 线程未在 {}ms 内收尾；其残留历史写入将被 epoch 校验忽略",
+                    awaitLoopEndTimeoutMillis);
         }
     }
 

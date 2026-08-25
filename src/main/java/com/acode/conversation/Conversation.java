@@ -22,7 +22,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public class Conversation {
 
     private final List<ChatMessage> messages = new CopyOnWriteArrayList<>();
-    private final List<Tool> tools = new ArrayList<>();
     private final String model;
     private final boolean thinking;
     private final int maxTokens;
@@ -78,12 +77,6 @@ public class Conversation {
         return epoch;
     }
 
-    /** 设置请求携带的工具列表（ch03：单步闭环全程带工具；OpenAI 端忽略） */
-    public void setTools(List<Tool> tools) {
-        this.tools.clear();
-        this.tools.addAll(tools);
-    }
-
     public int messageCount() {
         return messages.size();
     }
@@ -123,11 +116,6 @@ public class Conversation {
             };
         }
         return sum;
-    }
-
-    /** 组装请求：携带完整历史与工具列表，超出窗口时从最早开始丢弃，直到总量放得下 */
-    public ChatRequest buildRequest() {
-        return buildRequest(tools, null);
     }
 
     /**

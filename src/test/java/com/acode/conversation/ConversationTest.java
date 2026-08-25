@@ -52,7 +52,7 @@ class ConversationTest {
             c.addMessage(user("h".repeat(400))); // 每条 100 token
         }
         c.addMessage(user("q")); // 1 token，合计 301 ≤ 2000
-        ChatRequest request = c.buildRequest();
+        ChatRequest request = c.buildRequest(List.of(), null);
         assertEquals(4, request.messages().size());
     }
 
@@ -64,7 +64,7 @@ class ConversationTest {
         }
         c.addMessage(user("q".repeat(4))); // 1 token，合计 3001 > 2000
 
-        ChatRequest request = c.buildRequest();
+        ChatRequest request = c.buildRequest(List.of(), null);
         int total = request.messages().stream()
                 .mapToInt(m -> Conversation.estimateTokens(m.content())).sum();
         assertTrue(total <= WINDOW, "组装后总量必须 ≤ 窗口，实际 " + total);
@@ -79,7 +79,7 @@ class ConversationTest {
         Conversation c = conversation();
         c.addMessage(user("h".repeat(4000))); // 1000 token
         c.addMessage(user("big".repeat(3000))); // 9000 字符 → 2250 token，单条即超窗口
-        ChatRequest request = c.buildRequest();
+        ChatRequest request = c.buildRequest(List.of(), null);
         assertEquals(1, request.messages().size(), "历史全部丢弃，只保留当前问题");
         assertEquals("big".repeat(3000), request.messages().get(0).content());
     }
@@ -101,7 +101,7 @@ class ConversationTest {
         c.clear();
         c.addMessage(user("new"));
         assertEquals(1, c.messageCount());
-        ChatRequest request = c.buildRequest();
+        ChatRequest request = c.buildRequest(List.of(), null);
         assertEquals(1, request.messages().size());
         assertEquals("new", request.messages().get(0).content());
     }
@@ -142,7 +142,7 @@ class ConversationTest {
                 new ToolResultBlock("id-1", "文件内容", false))));
         c.addMessage(user("继续"));
 
-        ChatRequest request = c.buildRequest();
+        ChatRequest request = c.buildRequest(List.of(), null);
         assertEquals(4, request.messages().size(), "窗口内应保留全部含工具块的消息");
     }
 
@@ -170,7 +170,7 @@ class ConversationTest {
         Conversation c = conversation();
         c.addMessage(user("hi"));
         c.setSystemPrompt("You are ACode.");
-        ChatRequest request = c.buildRequest();
+        ChatRequest request = c.buildRequest(List.of(), null);
         assertEquals(2, request.messages().size());
         assertEquals(SYSTEM, request.messages().get(0).role());
         assertEquals("You are ACode.", request.messages().get(0).content());
@@ -182,7 +182,7 @@ class ConversationTest {
         Conversation c = conversation();
         c.addMessage(user("hi"));
         c.setEnvironment(ChatMessage.of(USER, "<system-reminder>\n# Environment\n</system-reminder>"));
-        ChatRequest request = c.buildRequest();
+        ChatRequest request = c.buildRequest(List.of(), null);
         assertEquals(2, request.messages().size());
         assertEquals(USER, request.messages().get(0).role());
         assertTrue(request.messages().get(0).content().contains("# Environment"));
@@ -195,7 +195,7 @@ class ConversationTest {
         c.addMessage(user("hi"));
         c.setSystemPrompt("SYSTEM_PROMPT");
         c.setEnvironment(ChatMessage.of(USER, "<system-reminder>\nenv\n</system-reminder>"));
-        ChatRequest request = c.buildRequest();
+        ChatRequest request = c.buildRequest(List.of(), null);
         assertEquals(3, request.messages().size());
         assertEquals(SYSTEM, request.messages().get(0).role());
         assertEquals(USER, request.messages().get(1).role());
@@ -261,7 +261,7 @@ class ConversationTest {
         for (int i = 0; i < 10; i++) {
             c.addMessage(user("h".repeat(1600))); // 每条 400 token，逼超窗
         }
-        ChatRequest request = c.buildRequest();
+        ChatRequest request = c.buildRequest(List.of(), null);
         assertNoOrphans(request.messages());
         assertEquals(13, c.messageCount(), "完整历史不应被截断");
         assertTrue(request.messages().stream().noneMatch(m ->
@@ -286,7 +286,7 @@ class ConversationTest {
         }
         c.addMessage(user("h".repeat(2000))); // 500 token
         // 总 ≈ 0+8+0+0+8+0+1988 = 2004 > 2000；删掉第一轮后剩 1996 ≤ 2000，停在轮边界
-        ChatRequest request = c.buildRequest();
+        ChatRequest request = c.buildRequest(List.of(), null);
         assertNoOrphans(request.messages());
         assertTrue(request.messages().stream().noneMatch(m ->
                         m.blocks().stream().anyMatch(b ->
@@ -312,7 +312,7 @@ class ConversationTest {
                         json.createObjectNode().put("file_path", "a.txt"))))); // ≈ 7 token
         c.addMessage(toolResultMessage("id-last")); // 0 token
         // 总 ≈ 750+0+1907+0 = 2657 > 2000；删掉填充后 ≈ 1907 ≤ 2000，停在轮边界
-        ChatRequest request = c.buildRequest();
+        ChatRequest request = c.buildRequest(List.of(), null);
         assertNoOrphans(request.messages());
         assertTrue(request.messages().stream().anyMatch(m ->
                         m.blocks().stream().anyMatch(b ->
@@ -330,7 +330,7 @@ class ConversationTest {
                         new ObjectMapper().createObjectNode().put("file_path", "a.txt")))));
         c.addMessage(toolResultMessage("id-ok"));
         c.addMessage(toolResultMessage("ghost")); // 无对应 tool_use 的孤儿结果
-        ChatRequest request = c.buildRequest();
+        ChatRequest request = c.buildRequest(List.of(), null);
         assertNoOrphans(request.messages());
         assertTrue(request.messages().stream().noneMatch(m ->
                 m.blocks().stream().anyMatch(b ->
@@ -346,7 +346,7 @@ class ConversationTest {
                 new ToolUseBlock("id-dangle", "ReadFile",
                         new ObjectMapper().createObjectNode().put("file_path", "a.txt"))))); // 无结果
         c.addMessage(user("继续"));
-        ChatRequest request = c.buildRequest();
+        ChatRequest request = c.buildRequest(List.of(), null);
         assertNoOrphans(request.messages());
         assertTrue(request.messages().stream().noneMatch(m ->
                 m.blocks().stream().anyMatch(b ->
@@ -397,7 +397,7 @@ class ConversationTest {
         });
         writer.start();
         for (int i = 0; i < 500; i++) {
-            c.buildRequest(); // COW 快照读，不应抛并发修改异常
+            c.buildRequest(List.of(), null); // COW 快照读，不应抛并发修改异常
         }
         writer.join();
         assertEquals(501, c.messageCount());

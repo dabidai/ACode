@@ -86,7 +86,6 @@ class TurnCollectorTest {
                 FakeProvider.complete())));
         provider.streamChat(request(), collector);
 
-        assertEquals(usage, collector.usage());
         List<AgentEvent> list = drain(events);
         assertEquals(1, list.size());
         UsageEvent event = assertInstanceOf(UsageEvent.class, list.get(0));
@@ -108,7 +107,6 @@ class TurnCollectorTest {
         assertTrue(collector.toolUses().isEmpty());
         assertNull(collector.stopReason());
         assertNull(collector.error());
-        assertNull(collector.usage());
         assertTrue(drain(events).isEmpty(), "取消后不产生事件");
     }
 

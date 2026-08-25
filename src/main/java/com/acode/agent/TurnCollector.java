@@ -25,7 +25,6 @@ public class TurnCollector implements ChatListener {
     private final List<ToolUseBlock> toolUses = new ArrayList<>();
     private String stopReason;
     private ProviderException error;
-    private Usage usage;
 
     public TurnCollector(BlockingQueue<AgentEvent> events, AtomicBoolean cancelled) {
         this.events = events;
@@ -37,7 +36,6 @@ public class TurnCollector implements ChatListener {
         if (cancelled.get()) {
             return;
         }
-        this.usage = usage;
         AgentEvent.putSafe(events, new UsageEvent(usage));
     }
 
@@ -93,10 +91,5 @@ public class TurnCollector implements ChatListener {
     /** 本轮记录的流错误；无则 null */
     public ProviderException error() {
         return error;
-    }
-
-    /** 本轮 token 用量；解析器未上报时为 null */
-    public Usage usage() {
-        return usage;
     }
 }

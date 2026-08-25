@@ -442,7 +442,7 @@ class AgentTest {
         // agent1 的 addToolResults(旧代次) 被忽略：历史只有 初始任务 + agent1 assistant + q2 + agent2 回答
         assertEquals(4, conversation.messageCount(),
                 "旧 agent 的残留结果写入不应进入新 exchange 的历史");
-        List<ChatMessage> request = conversation.buildRequest().messages();
+        List<ChatMessage> request = conversation.buildRequest(List.of(), null).messages();
         assertNoDanglingToolUses(request);
         assertTrue(request.stream().anyMatch(m -> m.content().contains("q2")));
         assertTrue(request.stream().noneMatch(m -> m.blocks().stream()

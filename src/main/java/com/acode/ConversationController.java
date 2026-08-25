@@ -50,6 +50,7 @@ import com.acode.ui.HistoryRenderer;
 import com.acode.ui.InputPane;
 import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
+import com.acode.ui.RenderContext;
 import com.acode.ui.SelectionMenu;
 import com.acode.ui.StreamPrinter;
 import com.acode.ui.TerminalMenuKeySource;
@@ -106,8 +107,7 @@ public class ConversationController {
 
     private AcodeTerminal tui;
     private OutputPane output;
-    private LiveRegionRenderer live;
-    private Writer screenWriter;
+    private final RenderContext renderContext;
 
     /** 确认应答器：收到 ConfirmationRequestEvent 后渲染提示并返回三选一；测试可注入替身。 */
     private Function<ConfirmationRequestEvent, PermissionResponse> confirmAnswerer = this::answerConfirmationPrompt;
@@ -151,6 +151,7 @@ public class ConversationController {
         toolRegistry.register(new AskUserTool());
         this.sessionStore = new SessionStore(SessionStore.defaultDir());
         this.resume = resume;
+        this.renderContext = new RenderContext(config);
         initSessionState();
     }
 
@@ -175,6 +176,7 @@ public class ConversationController {
     private void start() {
         try (AcodeTerminal terminal = AcodeTerminal.open()) {
             this.tui = terminal;
+            this.renderContext.attachTui(terminal);
             this.output = new OutputPane();
             LiveRegionRenderer live = liveRenderer();
             Writer writer = screenWriter();
@@ -371,12 +373,12 @@ public class ConversationController {
 
     /** 测试用：注入活跃区渲染器（断言流式重绘；真实流程按终端尺寸新建） */
     void setLive(LiveRegionRenderer live) {
-        this.live = live;
+        renderContext.setLive(live);
     }
 
     /** 测试用：注入活跃区输出目标（真实流程用终端 writer） */
     void setScreenWriter(Writer writer) {
-        this.screenWriter = writer;
+        renderContext.setScreenWriter(writer);
     }
 
     /** 测试用：注入确认应答器（跳过真实终端读行）。 */
@@ -429,75 +431,14 @@ public class ConversationController {
         return picked;
     }
 
-    /** 活跃区渲染器：测试注入优先，否则按终端尺寸实时新建（窗口变化随读随取）。 */
+    /** 活跃区渲染器（委托 RenderContext：测试注入优先、否则按终端尺寸实时新建） */
     private LiveRegionRenderer liveRenderer() {
-        if (live != null) {
-            return live;
-        }
-        if (tui != null) {
-            return new LiveRegionRenderer(tui::width, tui::height);
-        }
-        return new LiveRegionRenderer(80, 24);
+        return renderContext.liveRenderer();
     }
 
-    /** 活跃区输出目标：测试注入优先，否则用终端 writer；无终端时丢弃到 StringWriter。 */
+    /** 活跃区输出目标（委托 RenderContext：测试注入优先、否则终端 writer、tee 诊断） */
     private Writer screenWriter() {
-        if (screenWriter != null) {
-            return screenWriter;
-        }
-        if (tui != null) {
-            Writer w = tui.terminal().writer();
-            if (!config.isTeeEnabled()) {
-                return w;
-            }
-            TeeWriter tw = new TeeWriter(w);
-            try {
-                tw.logOnly("\n== ACODE TEE w=" + tui.width() + " h=" + tui.height() + " ==\n");
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
-            }
-            return tw;
-        }
-        return new StringWriter();
-    }
-
-    /** 诊断用：把写进终端的每个字节按原样追加到日志文件（含 ANSI 与 \r\n），tee 开关控制。 */
-    private static final class TeeWriter extends Writer {
-        private final Writer target;
-        private final BufferedWriter log;
-
-        TeeWriter(Writer target) {
-            this.target = target;
-            try {
-                this.log = new BufferedWriter(new java.io.FileWriter("acode-terminal.log", true));
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
-            }
-        }
-
-        @Override
-        public void write(char[] cbuf, int off, int len) throws IOException {
-            target.write(cbuf, off, len);
-            log.write("[" + Thread.currentThread().getName() + "]");
-            log.write(cbuf, off, len);
-            log.flush();
-        }
-
-        /** 只写日志文件、不进终端（诊断头信息用）。 */
-        void logOnly(String s) throws IOException {
-            log.write(s);
-            log.flush();
-        }
-
-        @Override
-        public void flush() throws IOException {
-            target.flush();
-        }
-
-        @Override
-        public void close() throws IOException {
-            target.close();
-        }
+        return renderContext.screenWriter();
     }
 
     /** 测试用：访问对话历史 */

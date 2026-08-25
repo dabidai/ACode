@@ -302,7 +302,9 @@ public class Agent {
     }
 
     /**
-     * 流式请求一轮：worker 线程驱动 provider，循环线程 20ms 轮询取消信号。
+     * 流式请求一轮：worker 线程驱动 provider，循环线程 join 等待其结束。
+     * 取消时 cancel() 中断循环线程 → join 立即抛 InterruptedException，比 20ms 轮询更及时，
+     * 且消除「轮询被中断但 !cancelled 时返回 false、worker 仍在写 collector」的竞态。
      * 返回 true 表示流式过程中被取消。
      */
     private boolean stream(ChatRequest request, TurnCollector collector) {
@@ -317,13 +319,10 @@ public class Agent {
         }, "acode-provider");
         worker.setDaemon(true);
         worker.start();
-        while (worker.isAlive() && !cancelled.get()) {
-            try {
-                Thread.sleep(20);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
+        try {
+            worker.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
         if (cancelled.get()) {
             worker.interrupt();

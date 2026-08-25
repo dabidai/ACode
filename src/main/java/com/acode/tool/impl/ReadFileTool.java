@@ -32,6 +32,11 @@ public class ReadFileTool extends BaseTool {
     }
 
     @Override
+    public String contentField() {
+        return "file_path";
+    }
+
+    @Override
     protected List<ParamSpec> paramSpecs() {
         return List.of(
                 ParamSpec.required("file_path", ParamSpec.Type.STRING, "要读取的文件路径"),

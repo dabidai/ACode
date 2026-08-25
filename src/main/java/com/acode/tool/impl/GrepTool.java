@@ -41,6 +41,11 @@ public class GrepTool extends BaseTool {
     }
 
     @Override
+    public String contentField() {
+        return "pattern";
+    }
+
+    @Override
     protected List<ParamSpec> paramSpecs() {
         return List.of(
                 ParamSpec.required("pattern", ParamSpec.Type.STRING, "要匹配的正则表达式"),

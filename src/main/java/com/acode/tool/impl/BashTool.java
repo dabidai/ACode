@@ -51,6 +51,11 @@ public class BashTool extends BaseTool {
     }
 
     @Override
+    public String contentField() {
+        return "command";
+    }
+
+    @Override
     protected List<ParamSpec> paramSpecs() {
         return List.of(
                 ParamSpec.required("command", ParamSpec.Type.STRING,

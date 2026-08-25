@@ -35,6 +35,11 @@ public class GlobTool extends BaseTool {
     }
 
     @Override
+    public String contentField() {
+        return "pattern";
+    }
+
+    @Override
     protected List<ParamSpec> paramSpecs() {
         return List.of(
                 ParamSpec.required("pattern", ParamSpec.Type.STRING, "glob 模式，如 **/*.java"),

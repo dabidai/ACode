@@ -17,6 +17,14 @@ public interface Tool {
     /** 权限级别元信息（read/write/exec），本章仅标记不拦截 */
     Permission permission();
 
+    /**
+     * 权限检查用的内容字段名（Bash→command、文件工具→file_path、Glob/Grep→pattern）。
+     * 返回 null 表示无内容字段（此时权限检查按模式矩阵兜底，不参与黑名单/沙箱/规则内容层）。
+     */
+    default String contentField() {
+        return null;
+    }
+
     /** 参数定义（JSON Schema），供转换为 Anthropic tools 参数格式 */
     JsonNode inputSchema();
 

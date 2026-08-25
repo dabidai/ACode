@@ -80,6 +80,41 @@ class PermissionCheckerTest {
         };
     }
 
+    /** 带 contentField 声明的匿名工具：模拟新工具按权限分类而非名字硬编码 */
+    private Tool fieldTool(String name, Permission permission, String contentField) {
+        return new Tool() {
+            @Override
+            public String name() {
+                return name;
+            }
+
+            @Override
+            public String description() {
+                return name;
+            }
+
+            @Override
+            public Permission permission() {
+                return permission;
+            }
+
+            @Override
+            public JsonNode inputSchema() {
+                return mapper.createObjectNode();
+            }
+
+            @Override
+            public ToolResult execute(JsonNode input, ToolContext context) {
+                return ToolResult.success("");
+            }
+
+            @Override
+            public String contentField() {
+                return contentField;
+            }
+        };
+    }
+
     // ---- 内容提取 ----
 
     @Test
@@ -102,6 +137,37 @@ class PermissionCheckerTest {
     void extractContentUnregisteredToolReturnsNull() {
         assertNull(PermissionChecker.extractContent(tool("Foo", Permission.READ), args("file_path", "x")));
         assertNull(PermissionChecker.extractContent(tool("Bash", Permission.EXEC), mapper.createObjectNode()));
+    }
+
+    // ---- #8：权限分类按 permission/contentField，而非工具名字符串 ----
+
+    @Test
+    void nonBashNamedExecToolStillTriggersDangerousCommand() {
+        CheckResult r = checker(PermissionMode.BYPASS)
+                .check(fieldTool("Shell", Permission.EXEC, "command"), args("command", "rm -rf /"));
+        assertEquals(Decision.DENY, r.decision(), "不叫 Bash 的 EXEC 工具也应被危险命令黑名单硬拦截");
+        assertTrue(r.reason().contains("危险命令"));
+    }
+
+    @Test
+    void nonBashNamedExecToolSafeCommandAutoAllowed() {
+        CheckResult r = checker(PermissionMode.BYPASS)
+                .check(fieldTool("Shell", Permission.EXEC, "command"), args("command", "ls -la"));
+        assertEquals(Decision.ALLOW, r.decision(), "EXEC 工具的安全只读命令应自动放行");
+    }
+
+    @Test
+    void newWriteToolWithPathFieldEnforcedBySandbox() {
+        String outside = Path.of(System.getProperty("user.home")).resolve("secret.txt").toString();
+        CheckResult r = checker(PermissionMode.DEFAULT)
+                .check(fieldTool("MoveFile", Permission.WRITE, "file_path"), args("file_path", outside));
+        assertEquals(Decision.DENY, r.decision(), "新写工具声明 file_path 内容字段后应受路径沙箱约束（项目外拒绝）");
+    }
+
+    @Test
+    void writeToolWithoutContentFieldFallsToModeMatrixAsk() {
+        CheckResult r = checker(PermissionMode.DEFAULT).check(tool("MoveFile", Permission.WRITE), args("x", "y"));
+        assertEquals(Decision.ASK, r.decision(), "无内容字段的新写工具按模式矩阵 ASK（default 下写需确认）");
     }
 
     // ---- 决策链 ----

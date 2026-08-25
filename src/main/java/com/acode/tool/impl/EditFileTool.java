@@ -36,6 +36,11 @@ EditFileTool extends BaseTool {
     }
 
     @Override
+    public String contentField() {
+        return "file_path";
+    }
+
+    @Override
     protected List<ParamSpec> paramSpecs() {
         return List.of(
                 ParamSpec.required("file_path", ParamSpec.Type.STRING, "要编辑的文件路径"),

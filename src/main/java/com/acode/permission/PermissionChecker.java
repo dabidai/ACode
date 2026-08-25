@@ -2,6 +2,7 @@ package com.acode.permission;
 
 import com.acode.permission.DangerousCommandDetector.Detection;
 import com.acode.permission.PermissionMode.Decision;
+import com.acode.tool.Permission;
 import com.acode.tool.Tool;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.file.Path;
@@ -32,7 +33,7 @@ public class PermissionChecker {
         }
     }
 
-    /** 工具 → 内容字段（与六个工具的 ParamSpec 名一致） */
+    /** 工具 → 内容字段兜底（工具未覆写 contentField() 时用；匿名测试工具零改动） */
     static final Map<String, String> CONTENT_FIELDS = Map.of(
             "Bash", "command",
             "ReadFile", "file_path",
@@ -41,8 +42,6 @@ public class PermissionChecker {
             "Glob", "pattern",
             "Grep", "pattern"
     );
-
-    private static final Set<String> PATH_TOOLS = Set.of("ReadFile", "WriteFile", "EditFile");
 
     private final Path projectRoot;
     private final PathSandbox sandbox;
@@ -78,12 +77,21 @@ public class PermissionChecker {
 
     /** 内容提取：无对应字段返回 null（未注册工具跳过内容层，R6） */
     public static String extractContent(Tool tool, JsonNode args) {
-        String field = CONTENT_FIELDS.get(tool.name());
+        String field = fieldOf(tool);
         if (field == null || args == null || !args.isObject()) {
             return null;
         }
         JsonNode value = args.get(field);
         return value != null && value.isTextual() ? value.asText() : null;
+    }
+
+    /** 内容字段：工具声明的 contentField() 优先，CONTENT_FIELDS 兜底 */
+    private static String fieldOf(Tool tool) {
+        String declared = tool.contentField();
+        if (declared != null && !declared.isBlank()) {
+            return declared;
+        }
+        return CONTENT_FIELDS.get(tool.name());
     }
 
     public CheckResult check(Tool tool, JsonNode args) {
@@ -93,26 +101,26 @@ public class PermissionChecker {
         String toolName = tool.name();
         String content = extractContent(tool, args);
 
-        // ② 危险命令（仅 Bash）：硬拦截
-        if ("Bash".equals(toolName) && content != null) {
+        // ② 危险命令（EXEC 类）：硬拦截
+        if (tool.permission() == Permission.EXEC && content != null) {
             Detection d = detector.detect(content);
             if (d.dangerous()) {
                 return CheckResult.deny("危险命令：" + d.reason());
             }
-            // ③ 安全命令（仅 Bash）：不打扰
+            // ③ 安全命令（EXEC 类）：不打扰
             if (detector.isSafeCommand(content)) {
                 return CheckResult.allow();
             }
         }
 
-        // ④ 路径沙箱（仅文件工具）：硬边界
-        if (isPathTool(toolName) && content != null && !sandbox.check(content)) {
+        // ④ 路径沙箱（内容字段为 file_path 的工具）：硬边界
+        if ("file_path".equals(fieldOf(tool)) && content != null && !sandbox.check(content)) {
             return CheckResult.deny(sandbox.denyReason(content));
         }
 
-        // ⑤ plan 例外（仅 permission_mode=plan、写工具）：canonical 判断在沙箱之后，防逃逸
+        // ⑤ plan 例外（仅 permission_mode=plan、写类工具）：canonical 判断在沙箱之后，防逃逸
         if (mode == PermissionMode.PLAN
-                && (toolName.equals("WriteFile") || toolName.equals("EditFile"))
+                && tool.permission() == Permission.WRITE
                 && content != null
                 && inPlansDir(content)) {
             return CheckResult.allow();
@@ -139,10 +147,6 @@ public class PermissionChecker {
             case ASK -> CheckResult.ask();
             case DENY -> CheckResult.deny("权限模式拒绝");
         };
-    }
-
-    private static boolean isPathTool(String toolName) {
-        return PATH_TOOLS.contains(toolName);
     }
 
     private boolean inPlansDir(String path) {

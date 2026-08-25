@@ -15,6 +15,7 @@ import com.acode.provider.TextBlock;
 import com.acode.provider.ToolResultBlock;
 import com.acode.provider.ToolUseBlock;
 import com.acode.provider.Usage;
+import com.acode.ui.HistoryRenderer;
 import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
 import com.acode.ui.ToolCallDisplay;
@@ -314,18 +315,18 @@ class ConversationControllerTest {
                 new TextBlock("先看文件"),
                 new ToolUseBlock("id-1", "ReadFile",
                         JSON.createObjectNode().put("file_path", "a.txt"))));
-        String rendered = ConversationController.renderHistoryMessage(assistant);
+        String rendered = HistoryRenderer.renderHistoryMessage(assistant);
         assertTrue(rendered.contains("先看文件"));
         assertTrue(rendered.contains("[工具调用 ReadFile(file_path=\"a.txt\")]"));
 
         ChatMessage toolResult = new ChatMessage(ChatMessage.Role.USER, List.of(
                 new ToolResultBlock("id-1", "文件内容", false)));
-        String renderedResult = ConversationController.renderHistoryMessage(toolResult);
+        String renderedResult = HistoryRenderer.renderHistoryMessage(toolResult);
         assertTrue(renderedResult.contains("[工具结果 成功：文件内容]"));
 
         ChatMessage failure = new ChatMessage(ChatMessage.Role.USER, List.of(
                 new ToolResultBlock("id-2", "文件不存在", true)));
-        assertTrue(ConversationController.renderHistoryMessage(failure).contains("[工具结果 失败"));
+        assertTrue(HistoryRenderer.renderHistoryMessage(failure).contains("[工具结果 失败"));
     }
 
     @Test

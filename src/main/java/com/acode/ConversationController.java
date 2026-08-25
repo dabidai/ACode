@@ -46,6 +46,7 @@ import com.acode.tool.ToolResult;
 import com.acode.ui.AcodeTerminal;
 import com.acode.ui.CommandRouter;
 import com.acode.ui.ConfirmationPrompt;
+import com.acode.ui.HistoryRenderer;
 import com.acode.ui.InputPane;
 import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
@@ -346,7 +347,7 @@ public class ConversationController {
 
     /** 把一条历史消息渲染进回滚：内容模型 + 活跃区追加式写屏，工具块压缩为单行摘要。 */
     private void appendHistoryMessage(ChatMessage message, LiveRegionRenderer live, Writer writer) {
-        String rendered = renderHistoryMessage(message);
+        String rendered = HistoryRenderer.renderHistoryMessage(message);
         if (rendered.isEmpty()) {
             return;
         }
@@ -357,47 +358,6 @@ public class ConversationController {
             output.append(rendered);
             live.appendCommitted(writer, rendered);
         }
-    }
-
-    /** 消息渲染为文本：text 块原样拼接，tool_use / tool_result 压缩为单行摘要。 */
-    static String renderHistoryMessage(ChatMessage message) {
-        StringBuilder text = new StringBuilder();
-        List<String> extras = new ArrayList<>();
-        for (ContentBlock block : message.blocks()) {
-            switch (block) {
-                case TextBlock t -> text.append(t.text());
-                case ToolUseBlock tu -> {
-                    String params = ToolCallDisplay.summarizeParams(tu.input());
-                    extras.add("[工具调用 " + tu.name()
-                            + (params.isEmpty() ? "" : "(" + params + ")") + "]");
-                }
-                case ToolResultBlock tr -> {
-                    String summary = collapseOneLine(tr.content(), 80);
-                    extras.add("[工具结果 " + (tr.isError() ? "失败" : "成功")
-                            + (summary.isEmpty() ? "" : "：" + summary) + "]");
-                }
-            }
-        }
-        if (text.isEmpty() && extras.isEmpty()) {
-            return "";
-        }
-        String result = text.toString();
-        if (!extras.isEmpty()) {
-            if (!result.isEmpty()) {
-                result += "\n";
-            }
-            result += String.join("\n", extras);
-        }
-        return result;
-    }
-
-    /** 多行/超长文本压缩为单行摘要（恢复会话显示用）。 */
-    private static String collapseOneLine(String text, int max) {
-        if (text == null || text.isEmpty()) {
-            return "";
-        }
-        String oneLine = text.replace('\n', ' ').replace('\r', ' ').trim();
-        return oneLine.length() > max ? oneLine.substring(0, max) + "…" : oneLine;
     }
 
     private void handleChat(String input) {

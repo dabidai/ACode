@@ -12,6 +12,7 @@ dependency-reduced-pom.xml
 
 # 日志
 *.log
+acode-*.txt
 
 # 系统
 .DS_Store
@@ -19,3 +20,4 @@ Thumbs.db
 
 # 手测 fixture（M15 用）
 hello.cpp
+hello_dijkstra.exe

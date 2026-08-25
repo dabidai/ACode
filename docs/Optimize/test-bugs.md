@@ -1,6 +1,6 @@
 # 测试补强发现的 Bug 清单
 
-> 由专项测试补强（2026-08-25）发现并记录。B1–B4 已于同日修复（commit 见各条），原 `@Disabled` 已摘除转绿；「已确认覆盖」部分为按约定不做补测的备查项。
+> 由专项测试补强（2026-08-25）发现并记录。B1–B4 已修复（commit 见各条），原 `@Disabled` 已摘除转绿；「已确认覆盖」部分中的 3 项已知缺陷已随架构审查修复（#5/#9/#13/#16），仅保留 1 项纯覆盖说明。
 
 ## 已修复（原 @Disabled 已摘除转绿）
 
@@ -29,9 +29,10 @@
 - **修复**（commit ef3b480）：改用 `Files.walkFileTree`，`preVisitDirectory` 对 `.git`/`target` 返回 `SKIP_SUBTREE`。
 - **回归测试**：`GlobToolTest.globSkipsDotGitAndTargetDirectories`
 
-## 已确认覆盖（无需改动，记录备查）
+## 已确认覆盖（记录备查）
 
-- **awaitLoopEnd 超时后旧 agent 残留写入被 epoch 忽略**：控制器级无法编排滞留 agent（`ToolRegistry` 私有无注入点，无法注册吞中断桩工具；provider 阻塞也不滞留 agent 线程——`stream()` 20ms 轮询取消即退）。该行为已由 `AgentTest.staleAgentCannotWriteIntoNextAgentTurn` 确定性覆盖；控制器侧可测部分（超时预算收缩后取消路径快速返回、UI 不挂死、新 exchange 立即可用）由 `ConversationControllerTest.staleAgentResultIgnoredAfterAwaitLoopEndTimeout` 覆盖。
-- **Agent.stream() isAlive→join、双重重试预算（Agent MAX_RETRIES=2 vs RetryPolicy MAX_RETRIES=3）**：按任务约定不做补测，仅记录。
-- **ReadFileTool offset/limit 全量读**：`ReadFileToolTest:69` 已覆盖 offset/limit 行为，全量读属已知实现缺陷，按任务约定不钉测。
-- **PromptPipeline 等死代码**：按任务约定不动 `src/main/`，仅记录存在（`prompt/PromptPipeline.java` 未被主流程引用）。
+- **awaitLoopEnd 超时后旧 agent 残留写入被 epoch 忽略**：控制器级无法编排滞留 agent（`ToolRegistry` 私有无注入点，无法注册吞中断桩工具；provider 阻塞也不滞留 agent 线程）。该行为由 `AgentTest.staleAgentCannotWriteIntoNextAgentTurn` 确定性覆盖；控制器侧可测部分由 `ConversationControllerTest.staleAgentResultIgnoredAfterAwaitLoopEndTimeout` 覆盖。
+- **Agent.stream() isAlive→join**：已修复（commit 59d7119，#5），测试无需补。
+- **双重重试预算**：已修复（commit c066b69，#13，流式请求改 sendNoRetry），HTTP 层 `send()` 保留给非流式路径与 RetryPolicyTest。
+- **ReadFileTool offset/limit 全量读**：已修复（commit eb4e8c1，#9，单遍流式读），`ReadFileToolTest:69` 为回归防护。
+- **PromptPipeline 等死代码**：已修复（commit 02b9206，#16），`PromptPipeline` 及其测试已删除。

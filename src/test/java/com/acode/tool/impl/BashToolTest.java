@@ -4,6 +4,7 @@ import com.acode.tool.ToolContext;
 import com.acode.tool.ToolResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -83,6 +84,36 @@ class BashToolTest {
         ToolResult result = tool.execute(input("echo hi").put("timeout_ms", -1), context());
         assertTrue(result.isError());
         assertTrue(result.errorMessage().contains("timeout_ms"));
+    }
+
+    /**
+     * 契约：timeout_ms 覆盖应生效（描述文案承诺「缺省 60 秒超时可用 timeout_ms 调整」，
+     * 即允许延长到 60s 以上）。当前 BaseTool 外壳固定用 defaultTimeoutMillis() 掐表，
+     * timeout_ms 超过默认值即被静默截断。测试把外壳默认压到 400ms 加速复现：
+     * timeout_ms=10000 + 约 2 秒的命令应成功，实际在 400ms 处被外壳超时杀死。
+     */
+    @Disabled("待修复：BaseTool.execute 外壳固定用 defaultTimeoutMillis() 超时，BashTool timeout_ms 超过 60s 被静默截断")
+    @Test
+    void timeoutShellHonorsToolOverrideBeyondDefault() throws Exception {
+        BashTool tool = new BashTool() {
+            @Override
+            protected long defaultTimeoutMillis() {
+                return 400; // 测试加速：把外壳默认超时压到 400ms
+            }
+        };
+        // sleep 仅 Git Bash 有；cmd 用 ping 制造约 2 秒等待
+        String command = tool.shellName().equals("git-bash")
+                ? "sleep 2"
+                : "ping -n 3 127.0.0.1";
+        // 工作目录用系统临时目录而非 @TempDir：被强杀进程会短暂持有 CWD 句柄，阻碍清理
+        ToolContext ctx = new ToolContext(Path.of(System.getProperty("java.io.tmpdir")));
+        ObjectNode in = input(command).put("timeout_ms", 10000);
+        long start = System.currentTimeMillis();
+        ToolResult result = tool.execute(in, ctx);
+        long elapsed = System.currentTimeMillis() - start;
+        assertTrue(result.isSuccess(),
+                "timeout_ms=10000 应生效（命令约 2s 内完成），实际错误：" + result.errorMessage());
+        assertTrue(elapsed < 5000, "成功路径应远快于外壳默认超时，实际耗时 " + elapsed + " ms");
     }
 
     @Test

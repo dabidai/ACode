@@ -30,4 +30,14 @@ class ProviderHttpClientTest {
         ProviderException e = ProviderHttpClient.classify(500, "Internal Server Error");
         assertTrue(e.getMessage().contains("Internal Server Error"));
     }
+
+    @Test
+    void classifyMapsServerErrorsToServerException() {
+        assertInstanceOf(ServerException.class, ProviderHttpClient.classify(500, "boom"), "500 应为 ServerException");
+        assertInstanceOf(ServerException.class, ProviderHttpClient.classify(503, "unavailable"), "503 应为 ServerException");
+        assertInstanceOf(ServerException.class, ProviderHttpClient.classify(504, "gateway"), "504 应为 ServerException");
+        ProviderException e = ProviderHttpClient.classify(500, "{\"error\":{\"message\":\"server exploded\"}}");
+        assertTrue(e.getMessage().contains("server exploded"), "错误体 message 应透传");
+        assertTrue(e.getMessage().contains("500"), "错误文本应含状态码");
+    }
 }

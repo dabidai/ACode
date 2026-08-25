@@ -4,6 +4,7 @@ import com.acode.tool.ToolContext;
 import com.acode.tool.ToolResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -85,6 +86,25 @@ class GlobToolTest {
         ToolResult r = TOOL.execute(input("**/*.java"), new ToolContext(tempDir.resolve("nope")));
         assertTrue(r.isError());
         assertTrue(r.errorMessage().contains("nope"));
+    }
+
+    /**
+     * 契约：结果不应包含 .git / target 等内部目录下的路径（避免把仓库元数据与构建产物
+     * 混入搜索结果，参考实现均过滤这两类目录）。当前实现 Files.walk 全量遍历不过滤。
+     */
+    @Disabled("待修复：GlobTool 未过滤 .git 与 target 目录（GrepTool 同样未过滤）")
+    @Test
+    void globSkipsDotGitAndTargetDirectories() throws Exception {
+        Files.createDirectories(tempDir.resolve(".git"));
+        Files.writeString(tempDir.resolve(".git/config"), "repo", StandardCharsets.UTF_8);
+        Files.createDirectories(tempDir.resolve("target"));
+        Files.writeString(tempDir.resolve("target/classes.txt"), "x", StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve("src.txt"), "x", StandardCharsets.UTF_8);
+        ToolResult r = TOOL.execute(input("**/*"), context());
+        assertTrue(r.isSuccess());
+        assertFalse(r.output().contains(".git"), "结果不应含 .git 内部路径：" + r.output());
+        assertFalse(r.output().contains("target"), "结果不应含 target 内部路径：" + r.output());
+        assertTrue(r.output().contains("src.txt"), "正常文件仍应命中");
     }
 
     @Test

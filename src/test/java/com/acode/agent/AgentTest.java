@@ -37,6 +37,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AgentTest {
@@ -254,6 +255,58 @@ class AgentTest {
         assertTrue(history.stream().anyMatch(m -> m.content().contains("输出被截断，请从断点继续")),
                 "应注入继续提示");
         assertTrue(history.stream().anyMatch(m -> m.content().contains("继续的文本")));
+    }
+
+    @Test
+    void truncatedTurnWithToolUsesExecutesThenContinues() throws Exception {
+        Path file = tempDir.resolve("a.txt");
+        Files.writeString(file, "截断轮数据");
+        // 截断轮同时含 tool_use：先执行工具再注入续写提示（Agent.java 截断分支）
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.toolUse("id-1", "ReadFile",
+                                JSON.createObjectNode().put("file_path", file.toString())),
+                        FakeProvider.complete("max_tokens")),
+                List.of(FakeProvider.delta("继续完成"), FakeProvider.complete())));
+        ToolRegistry registry = new ToolRegistry();
+        DefaultToolset.registerAll(registry);
+        Agent agent = start(provider, 20, registry);
+        BlockingQueue<AgentEvent> events = agent.run();
+
+        untilLoop(events, 5000);
+        assertEquals(Agent.Termination.NORMAL, agent.termination());
+        assertEquals(2, provider.receivedRequests().size(), "截断恢复消耗下一轮请求");
+
+        List<ChatMessage> history = agent.conversation().history();
+        // 工具已执行：结果入历史（tool_use id-1 有配对 tool_result）
+        assertNoDanglingToolUses(history);
+        assertTrue(history.stream().anyMatch(m -> m.blocks().stream()
+                        .anyMatch(b -> b instanceof ToolResultBlock tr
+                                && tr.toolUseId().equals("id-1")
+                                && tr.content().contains("截断轮数据"))),
+                "截断轮的 tool_use 应先执行，结果入历史");
+        // 续写提示已注入 + 第二轮内容收尾
+        assertTrue(history.stream().anyMatch(m -> m.content().contains("输出被截断，请从断点继续")),
+                "应注入续写提示");
+        assertTrue(history.stream().anyMatch(m -> m.content().contains("继续完成")),
+                "续写轮内容应入历史");
+        // 第 2 轮请求历史应含 id-1 的 tool_result 回传
+        List<ChatMessage> round2 = provider.receivedRequests().get(1).messages();
+        assertTrue(round2.stream().anyMatch(m -> m.blocks().stream()
+                        .anyMatch(b -> b instanceof ToolResultBlock tr && tr.toolUseId().equals("id-1"))),
+                "第 2 轮请求应携带截断轮的工具结果");
+    }
+
+    @Test
+    void constructorRejectsNonPositiveMaxIterations() {
+        Conversation conversation = new Conversation("test", false, 4096, 8000);
+        ToolContext ctx = new ToolContext(tempDir);
+        ToolRegistry registry = new ToolRegistry();
+        assertThrows(IllegalArgumentException.class,
+                () -> new Agent(FakeProvider.scripted(List.of()), conversation, registry, ctx, 0),
+                "maxIterations=0 应被拒绝");
+        assertThrows(IllegalArgumentException.class,
+                () -> new Agent(FakeProvider.scripted(List.of()), conversation, registry, ctx, -1),
+                "maxIterations 为负应被拒绝");
     }
 
     @Test

@@ -5,6 +5,7 @@ import com.acode.provider.ChatRequest;
 import com.acode.provider.ToolResultBlock;
 import com.acode.provider.ToolUseBlock;
 import com.acode.tool.ToolRegistry;
+import com.acode.tool.impl.BashTool;
 import com.acode.tool.impl.ReadFileTool;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -172,5 +173,23 @@ class OpenAiProviderTest {
                 .build();
         String raw = provider.buildBody(request);
         assertFalse(raw.contains("cache_control"), "OpenAI 端不应输出 cache_control（缓存自动生效）");
+    }
+
+    @Test
+    void toOpenAiToolsEmitsFunctionSchema() {
+        ToolRegistry registry = new ToolRegistry();
+        registry.register(new ReadFileTool());
+        registry.register(new BashTool());
+        JsonNode array = OpenAiProvider.toOpenAiTools(registry.list());
+        assertEquals(2, array.size(), "每个工具应生成一个数组元素");
+        for (JsonNode entry : array) {
+            assertEquals("function", entry.path("type").asText(), "OpenAI 工具 type 为 function");
+            assertTrue(entry.path("function").hasNonNull("name"), "应含 function.name");
+            assertTrue(entry.path("function").hasNonNull("description"), "应含 function.description");
+            assertEquals("object", entry.path("function").path("parameters").path("type").asText(),
+                    "应含 function.parameters（type=object 的 input_schema）");
+        }
+        assertEquals("ReadFile", array.get(0).path("function").path("name").asText());
+        assertEquals("Bash", array.get(1).path("function").path("name").asText());
     }
 }

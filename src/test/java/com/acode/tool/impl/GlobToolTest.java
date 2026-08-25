@@ -4,7 +4,6 @@ import com.acode.tool.ToolContext;
 import com.acode.tool.ToolResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -90,9 +89,8 @@ class GlobToolTest {
 
     /**
      * 契约：结果不应包含 .git / target 等内部目录下的路径（避免把仓库元数据与构建产物
-     * 混入搜索结果，参考实现均过滤这两类目录）。当前实现 Files.walk 全量遍历不过滤。
+     * 混入搜索结果，参考实现均过滤这两类目录）。
      */
-    @Disabled("待修复：GlobTool 未过滤 .git 与 target 目录（GrepTool 同样未过滤）")
     @Test
     void globSkipsDotGitAndTargetDirectories() throws Exception {
         Files.createDirectories(tempDir.resolve(".git"));

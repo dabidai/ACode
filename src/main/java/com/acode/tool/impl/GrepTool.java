@@ -10,9 +10,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystems;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -66,36 +69,44 @@ public class GrepTool extends BaseTool {
                 : null;
 
         List<String> hits = new ArrayList<>();
-        boolean truncated = false;
-        try (Stream<Path> stream = Files.walk(base)) {
-            Iterator<Path> it = stream.iterator();
-            while (it.hasNext()) {
-                Path file = it.next();
-                if (!Files.isRegularFile(file)) {
-                    continue;
+        boolean[] truncated = {false};
+        try {
+            Files.walkFileTree(base, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                    return shouldSkipDir(base, dir)
+                            ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
                 }
-                if (nameMatcher != null && !nameMatcher.matches(file.getFileName())) {
-                    continue;
+
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                    if (!Files.isRegularFile(file)) {
+                        return FileVisitResult.CONTINUE;
+                    }
+                    if (nameMatcher != null && !nameMatcher.matches(file.getFileName())) {
+                        return FileVisitResult.CONTINUE;
+                    }
+                    if (hits.size() >= MAX_HITS) {
+                        truncated[0] = true;
+                        return FileVisitResult.TERMINATE;
+                    }
+                    collectHits(file, pattern, hits, MAX_HITS);
+                    if (hits.size() >= MAX_HITS) {
+                        truncated[0] = true;
+                    }
+                    return FileVisitResult.CONTINUE;
                 }
-                if (hits.size() >= MAX_HITS) {
-                    truncated = true;
-                    break;
-                }
-                collectHits(file, pattern, hits, MAX_HITS);
-                if (hits.size() >= MAX_HITS) {
-                    truncated = true;
-                }
-            }
+            });
         } catch (IOException e) {
             return ToolResult.failure("遍历目录失败：" + base + "：" + e.getMessage());
         }
 
         String body = String.join("\n", hits);
-        if (truncated) {
+        if (truncated[0]) {
             body += "\n…（命中过多，已截断，仅显示前 " + MAX_HITS + " 条）";
         }
         return ToolResult.success(body).withDisplay(
-                "返回 " + hits.size() + " 条命中" + (truncated ? "（已截断）" : ""));
+                "返回 " + hits.size() + " 条命中" + (truncated[0] ? "（已截断）" : ""));
     }
 
     private static void collectHits(Path file, Pattern pattern, List<String> hits, int max) {
@@ -112,5 +123,12 @@ public class GrepTool extends BaseTool {
         } catch (IOException | RuntimeException e) {
             // 跳过无法读取或解码的文件，不影响整体结果
         }
+    }
+
+    /** 跳过 .git 与 target 等内部目录：避免把仓库元数据与构建产物混入搜索 */
+    private static boolean shouldSkipDir(Path base, Path dir) {
+        return !dir.equals(base)
+                && (".git".equals(dir.getFileName().toString())
+                || "target".equals(dir.getFileName().toString()));
     }
 }

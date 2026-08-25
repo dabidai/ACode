@@ -9,13 +9,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 
 import java.io.IOException;
 import java.nio.file.FileSystems;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
-import java.util.stream.Stream;
 
 /**
  * 按 glob 模式递归匹配文件路径（支持 **），返回匹配的路径列表。
@@ -59,30 +60,38 @@ public class GlobTool extends BaseTool {
         }
 
         List<String> results = new ArrayList<>();
-        boolean truncated = false;
-        try (Stream<Path> stream = Files.walk(base)) {
-            Iterator<Path> it = stream.iterator();
-            while (it.hasNext()) {
-                Path rel = base.relativize(it.next());
-                if (rel.toString().isEmpty() || !matchesAny(rel, matchers)) {
-                    continue;
+        boolean[] truncated = {false};
+        try {
+            Files.walkFileTree(base, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                    return shouldSkipDir(base, dir)
+                            ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
                 }
-                if (results.size() >= MAX_RESULTS) {
-                    truncated = true;
-                    break;
+
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                    Path rel = base.relativize(file);
+                    if (!rel.toString().isEmpty() && matchesAny(rel, matchers)) {
+                        if (results.size() >= MAX_RESULTS) {
+                            truncated[0] = true;
+                            return FileVisitResult.TERMINATE;
+                        }
+                        results.add(base.resolve(rel).toString());
+                    }
+                    return FileVisitResult.CONTINUE;
                 }
-                results.add(base.resolve(rel).toString());
-            }
+            });
         } catch (IOException e) {
             return ToolResult.failure("遍历目录失败：" + base + "：" + e.getMessage());
         }
 
         String body = String.join("\n", results);
-        if (truncated) {
+        if (truncated[0]) {
             body += "\n…（结果过多，已截断，仅显示前 " + MAX_RESULTS + " 条）";
         }
         return ToolResult.success(body).withDisplay(
-                "返回 " + results.size() + " 个匹配" + (truncated ? "（已截断）" : ""));
+                "返回 " + results.size() + " 个匹配" + (truncated[0] ? "（已截断）" : ""));
     }
 
     private static boolean matchesAny(Path rel, List<PathMatcher> matchers) {
@@ -92,5 +101,12 @@ public class GlobTool extends BaseTool {
             }
         }
         return false;
+    }
+
+    /** 跳过 .git 与 target 等内部目录：避免把仓库元数据与构建产物混入搜索结果 */
+    private static boolean shouldSkipDir(Path base, Path dir) {
+        return !dir.equals(base)
+                && (".git".equals(dir.getFileName().toString())
+                || "target".equals(dir.getFileName().toString()));
     }
 }

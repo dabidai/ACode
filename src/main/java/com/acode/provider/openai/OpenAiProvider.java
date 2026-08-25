@@ -54,7 +54,7 @@ public class OpenAiProvider implements ChatProvider {
     public void streamChat(ChatRequest request, ChatListener listener) {
         try {
             String body = buildBody(request);
-            ProviderHttpClient.Result result = ProviderHttpClient.send(
+            ProviderHttpClient.Result result = ProviderHttpClient.sendNoRetry(
                     baseUrl + ENDPOINT, body,
                     Map.of("Authorization", "Bearer " + apiKey));
             try (InputStream in = result.body()) {

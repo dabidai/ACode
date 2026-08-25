@@ -41,7 +41,7 @@ public class AnthropicProvider implements ChatProvider {
     public void streamChat(ChatRequest request, ChatListener listener) {
         try {
             String body = buildBody(request);
-            ProviderHttpClient.Result result = ProviderHttpClient.send(
+            ProviderHttpClient.Result result = ProviderHttpClient.sendNoRetry(
                     baseUrl + ENDPOINT, body,
                     Map.of("x-api-key", apiKey, "anthropic-version", ANTHROPIC_VERSION));
             try (InputStream in = result.body()) {

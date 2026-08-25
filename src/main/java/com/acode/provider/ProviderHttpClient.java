@@ -33,6 +33,11 @@ public final class ProviderHttpClient {
     public record Result(int status, InputStream body) {
     }
 
+    /**
+     * 带重试发送：仅重试请求头返回前的 RateLimit/Server/Network 失败。
+     * 供非流式路径与 RetryPolicyTest 使用；流式请求请用 sendNoRetry——流中错误的重试
+     * 统一归 Agent 层，避免双层重试叠加（单轮最多 12 次请求）。
+     */
     public static Result send(String url, String json, Map<String, String> headers) {
         for (int attempt = 1; ; attempt++) {
             try {
@@ -44,6 +49,11 @@ public final class ProviderHttpClient {
                 sleep(RetryPolicy.backoffMs(attempt));
             }
         }
+    }
+
+    /** 单次发送、不重试：流式请求专用，头前失败直接抛、流中失败由 Agent 层重试。 */
+    public static Result sendNoRetry(String url, String json, Map<String, String> headers) {
+        return doSend(url, json, headers);
     }
 
     /** 单次请求：200 返回响应体输入流，非 200 按状态码分类抛异常 */

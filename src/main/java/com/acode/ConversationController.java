@@ -163,7 +163,7 @@ public class ConversationController {
 
     private static ChatProvider buildProvider(AppConfig config) {
         return switch (config.getProtocol()) {
-            case "anthropic" -> new AnthropicProvider(config.getBaseUrl(), config.getApiKey());
+            case "anthropic" -> new AnthropicProvider(config.getBaseUrl(), config.getApiKey(), config.isTeeEnabled());
             case "openai" -> new OpenAiProvider(config.getBaseUrl(), config.getApiKey(), config.isTeeEnabled());
             default -> throw new ConfigException("不支持的 protocol：" + config.getProtocol());
         };

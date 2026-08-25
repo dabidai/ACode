@@ -17,6 +17,10 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Map;
 
 /**
@@ -31,10 +35,17 @@ public class AnthropicProvider implements ChatProvider {
 
     private final String baseUrl;
     private final String apiKey;
+    private final boolean teeEnabled;
 
+    /** 兼容二参构造（存量测试）：默认关闭 tee */
     public AnthropicProvider(String baseUrl, String apiKey) {
+        this(baseUrl, apiKey, false);
+    }
+
+    public AnthropicProvider(String baseUrl, String apiKey, boolean teeEnabled) {
         this.baseUrl = baseUrl;
         this.apiKey = apiKey;
+        this.teeEnabled = teeEnabled;
     }
 
     @Override
@@ -46,12 +57,29 @@ public class AnthropicProvider implements ChatProvider {
                     Map.of("x-api-key", apiKey, "anthropic-version", ANTHROPIC_VERSION));
             try (InputStream in = result.body()) {
                 AnthropicSseParser parser = new AnthropicSseParser();
-                SseParser.parse(in, (eventType, data) -> parser.handle(data, listener));
+                SseParser.parse(in, (eventType, data) -> {
+                    sseDiag(data);
+                    parser.handle(data, listener);
+                });
             }
         } catch (ProviderException e) {
             listener.onError(e);
         } catch (IOException e) {
             listener.onError(new NetworkException("读取响应流失败：" + e.getMessage(), e));
+        }
+    }
+
+    /** 诊断：tee 开启时把每条原始 SSE data 行写入独立日志（定位 API 内容 vs 解析层）。 */
+    private void sseDiag(String data) {
+        try {
+            if (!teeEnabled) {
+                return;
+            }
+            String line = "sse :: " + data.replace("\r", "\\r").replace("\n", "\\n") + "\n";
+            Files.write(Path.of("acode-sse.log"), line.getBytes(StandardCharsets.UTF_8),
+                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (IOException ignored) {
+            // 诊断日志失败不影响主流程
         }
     }
 

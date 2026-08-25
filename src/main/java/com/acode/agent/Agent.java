@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * ReAct 循环本体：一轮 = 请求模型 → 流式收集 → 有工具调用则执行回填 → 下一轮；
- * 无工具调用则结束。五种终止条件：自然收尾 / 轮数上限 / 用户取消 / 计划交付（T8）/
+ * 无工具调用则结束。五种终止条件：自然收尾 / 轮数上限 / 用户取消 / 计划交付 /
  * 流错误。run() 在虚拟线程跑循环并返回事件队列，UI 订阅事件渲染。
  */
 public class Agent {
@@ -51,7 +51,7 @@ public class Agent {
 
     static final String TRUNCATION_CONTINUE_HINT = "输出被截断，请从断点继续，不要重复已输出内容";
 
-    /** 计划交付工具名称（T8） */
+    /** 计划交付工具名称 */
     static final String EXIT_PLAN_MODE = "ExitPlanMode";
 
     private final ChatProvider provider;

@@ -11,7 +11,7 @@ public interface ChatListener {
 
     /** 收到一个完整的工具调用（input_json_delta 碎片拼接解析后触发） */
     default void onToolUse(ToolUseBlock toolUse) {
-        // 默认忽略，兼容阶段一无工具场景
+        // 默认忽略，兼容早期无工具场景
     }
 
     /** 正常结束（无流结束原因，兼容旧实现） */

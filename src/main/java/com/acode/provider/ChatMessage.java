@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * 一条对话消息：角色 + 结构化内容块列表（text / tool_use / tool_result）。
  * <p>
- * blocks() 暴露完整结构化内容；content() 返回文本块拼接（阶段一代码兼容，
+ * blocks() 暴露完整结构化内容；content() 返回文本块拼接（早期代码兼容，
  * 不含工具块）。JSON 字段名保持 content，反序列化兼容旧版纯文本字符串。
  */
 public class ChatMessage {
@@ -36,7 +36,7 @@ public class ChatMessage {
         return new ChatMessage(role, content);
     }
 
-    /** 纯文本消息工厂：内部包成单个 TextBlock，保证阶段一调用零改动 */
+    /** 纯文本消息工厂：内部包成单个 TextBlock，保证早期调用零改动 */
     public static ChatMessage of(Role role, String content) {
         return new ChatMessage(role, List.of(new TextBlock(content)));
     }
@@ -51,7 +51,7 @@ public class ChatMessage {
         return blocks;
     }
 
-    /** 纯文本内容（拼接所有 text 块，工具块不参与）；阶段一代码兼容 */
+    /** 纯文本内容（拼接所有 text 块，工具块不参与）；早期代码兼容 */
     @JsonIgnore
     public String content() {
         StringBuilder sb = new StringBuilder();

@@ -16,7 +16,7 @@ import java.util.Map;
 
 /**
  * 统一 HTTP 发送与错误分类。200 返回响应体输入流（调用方解析 SSE）；
- * 非 200 按状态码分类抛 ProviderException。重试逻辑见 T6。
+ * 非 200 按状态码分类抛 ProviderException。重试逻辑见 RetryPolicy。
  */
 public final class ProviderHttpClient {
 

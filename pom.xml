@@ -19,7 +19,7 @@
     </properties>
 
     <dependencies>
-        <!-- T9 TUI：行编辑与终端控制 -->
+        <!-- TUI：行编辑与终端控制 -->
         <dependency>
             <groupId>org.jline</groupId>
             <artifactId>jline</artifactId>
@@ -32,14 +32,14 @@
             <version>5.14.0</version>
         </dependency>
 
-        <!-- T2 配置：YAML 解析 -->
+        <!-- 配置：YAML 解析 -->
         <dependency>
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
             <version>2.3</version>
         </dependency>
 
-        <!-- T2/T8 配置与会话：JSON 序列化 -->
+        <!-- 配置与会话：JSON 序列化 -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>

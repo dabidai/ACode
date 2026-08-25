@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 工具分区执行器：按权限分区——读类并发（虚拟线程）、写类与命令类串行且保持声明顺序，
  * 全部读类先执行。结果 List 按输入 index 落位（回传顺序 = 声明顺序）。每完成一个调用
  * 发一条 ToolResultEvent；cancelled 置位时未执行/未完成的调用补「已取消」结果。
- * 阶段五：执行前插入权限检查——DENY 返回「权限拒绝」错误结果、ASK 走确认门槛、
+ * 执行前插入权限检查——DENY 返回「权限拒绝」错误结果、ASK 走确认门槛、
  * ALLOW 直接执行；「始终允许」记会话 + 持久化本地规则（写盘失败仅警告，不阻断）。
  */
 public class StreamingToolExecutor {

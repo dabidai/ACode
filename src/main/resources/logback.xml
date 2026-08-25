@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-    <!-- 日志只写文件，不输出到终端：T9 起全屏 TUI 会被 console 日志污染 -->
+    <!-- 日志只写文件，不输出到终端：全屏 TUI 会被 console 日志污染 -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${user.home}/.acode/logs/acode.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">

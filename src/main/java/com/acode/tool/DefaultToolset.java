@@ -8,7 +8,7 @@ import com.acode.tool.impl.ReadFileTool;
 import com.acode.tool.impl.WriteFileTool;
 
 /**
- * 六个内置工具的组装入口。工具实现随 T4~T7 逐个就位后在此注册。
+ * 六个内置工具的组装入口。
  */
 public final class DefaultToolset {
 

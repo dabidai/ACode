@@ -9,7 +9,7 @@ public final class CommandRouter {
     /** 命令动作。 */
     public enum Action { QUIT, CLEAR, HELP, RESUME, PLAN, DO, PERMISSION_MODE, CHAT, SKIP }
 
-    /** /help 展示的命令说明；T11 补齐 /clear 文案时同步更新。 */
+    /** /help 展示的命令说明；补齐 /clear 文案时同步更新。 */
     public static final String HELP_TEXT = """
             /quit   退出程序
             /clear  清空界面与对话上下文

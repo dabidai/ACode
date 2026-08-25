@@ -74,7 +74,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
 /**
- * T12 主循环与装配：配置 → Provider → 会话 → TUI 串成完整对话。
+ * 主循环与装配：配置 → Provider → 会话 → TUI 串成完整对话。
  * Provider 在后台 daemon 线程流式生成，主线程负责重绘与 Ctrl+C 中断检测；
  * 退出时把完整消息历史存为独立会话文件。
  */
@@ -114,7 +114,7 @@ public class ConversationController {
     /** 选择应答器：收到 ChoiceRequestEvent 后弹多选项菜单并返回选中项（取消返回 null）；测试可注入替身。 */
     private Function<ChoiceRequestEvent, String> choiceAnswerer = this::answerChoicePrompt;
 
-    /** 权限检查器：T9 在 handleExchange 装配注入；/permission-mode 命令即时切档用。 */
+    /** 权限检查器：在 handleExchange 装配注入；/permission-mode 命令即时切档用。 */
     private PermissionChecker permissionChecker;
 
     /** 权限沙箱根：生产为当前工作目录；测试可注入 @TempDir 避免文件路径被沙箱拦截。 */

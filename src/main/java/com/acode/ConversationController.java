@@ -125,6 +125,8 @@ public class ConversationController {
     /** 权限检查器：在 handleExchange 装配注入；/permission-mode 命令即时切档用。 */
     private PermissionChecker permissionChecker;
 
+    private ExchangeRunner exchangeRunner;
+
     /** 权限沙箱根：生产为当前工作目录；测试可注入 @TempDir 避免文件路径被沙箱拦截。 */
     private Path projectRoot = Path.of(System.getProperty("user.dir"));
 
@@ -370,91 +372,28 @@ public class ConversationController {
     }
 
     /**
-     * 单次输入触发 Agent 循环：追加 user 消息 → new Agent(...).run() 在虚拟线程跑 ReAct 循环 →
-     * 主线程订阅事件队列逐条渲染（流式文本 / 工具卡片 / 轮次收尾 / 重试 / 错误 / 循环结束提示）。
-     * ctrlC 注入中断源（真实终端为 Ctrl+C），便于用 FakeProvider 单测编排。
-     * repaint 为保留参数：渲染已全部经活跃区完成，测试沿用传 no-op 的签名。
+     * 单次输入触发 Agent 循环（委托 ExchangeRunner）。ctrlC 注入中断源（真实终端为 Ctrl+C），
+     * 便于用 FakeProvider 单测编排。repaint 为保留参数（渲染已全部经活跃区完成）。
      */
     void handleExchange(String input, BooleanSupplier ctrlC, Runnable repaint) {
-        conversation.nextEpoch(); // 先失效上一轮残留的 agent 线程写入，再开始本轮
-        conversation.addMessage(ChatMessage.of(ChatMessage.Role.USER, input));
-        output.append("● " + input + "\n");
-        LiveRegionRenderer live = liveRenderer();
-        Writer writer = screenWriter();
-        live.commitRegion(); // 上一轮活跃区已留在屏上作历史，本轮菜单重绘状态归零
-        live.appendCommitted(writer, "● " + input);
+        exchangeRunner().run(input, ctrlC, repaint, planMode);
+    }
 
-        Agent agent = new Agent(provider, conversation, toolRegistry,
-                new ToolContext(projectRoot), maxIterations());
-        agent.setPlanMode(planMode);
-        agent.setConfirmationGate(new EventConfirmationGate());
+    /** 交换执行器：惰性构造，必须晚于全部测试 setter（捕获当时的 output/RenderContext/应答器）。 */
+    private ExchangeRunner exchangeRunner() {
+        if (exchangeRunner == null) {
+            exchangeRunner = new ExchangeRunner(provider, config, conversation, toolRegistry,
+                    output, renderContext, confirmAnswerer, choiceAnswerer, projectRoot, this::permissionChecker);
+        }
+        return exchangeRunner;
+    }
+
+    /** 权限检查器：懒构建（与 /permission-mode 共用，经 Supplier 传入 ExchangeRunner）。 */
+    private PermissionChecker permissionChecker() {
         if (permissionChecker == null) {
             permissionChecker = buildPermissionChecker();
         }
-        agent.setPermissionChecker(permissionChecker);
-        BlockingQueue<AgentEvent> events = agent.run();
-
-        StreamPrinter printer = new StreamPrinter(output, live, writer, config.isTeeEnabled());
-        List<ToolResult> turnResults = new ArrayList<>();
-        List<Long> elapsedList = new ArrayList<>();
-        Usage lastUsage = null;
-        while (true) {
-            if (ctrlC.getAsBoolean()) {
-                agent.cancel();
-                printer.finishTurn(); // 半截 footer 先转正进回滚，中断提示再追加
-                output.appendLine("（已中断）");
-                live.appendCommitted(writer, "（已中断）");
-                awaitLoopEnd(agent); // 取消不吐 LoopComplete：等循环线程收尾（补「已取消」）再返回
-                break;
-            }
-            AgentEvent event = pollEvent(events);
-            if (event == null) {
-                if (!agent.isRunning() && events.isEmpty()) {
-                    break; // 取消等无 LoopComplete 收尾：循环线程结束且事件耗尽即结束
-                }
-                continue;
-            }
-            if (event instanceof LoopComplete) {
-                if (lastUsage != null) {
-                    printUsageFootnote(lastUsage, live, writer);
-                    lastUsage = null;
-                }
-                printer.updateToolCalls(turnResults, elapsedList);
-                printer.finishTurn();
-                completeLoop(agent, live, writer);
-                break;
-            } else if (event instanceof StreamText streamText) {
-                printer.onDelta(streamText.text());
-            } else if (event instanceof ToolUseEvent toolUse) {
-                printer.onToolUse(new ToolUseBlock(toolUse.toolId(), toolUse.toolName(), toolUse.args()));
-            } else if (event instanceof ToolResultEvent toolResult) {
-                turnResults.add(toolResult.isError()
-                        ? ToolResult.failure(toolResult.output())
-                        : ToolResult.success(toolResult.output()).withDisplay(toolResult.display()));
-                elapsedList.add(toolResult.elapsedMs());
-            } else if (event instanceof TurnComplete) {
-                if (lastUsage != null) {
-                    printUsageFootnote(lastUsage, live, writer);
-                    lastUsage = null;
-                }
-                printer.updateToolCalls(turnResults, elapsedList);
-                printer.finishTurn(); // 本轮文本与卡片转正进回滚，下一轮从下方开始
-                turnResults = new ArrayList<>();
-                elapsedList = new ArrayList<>();
-                printer = new StreamPrinter(output, live, writer, config.isTeeEnabled());
-            } else if (event instanceof UsageEvent usageEvent) {
-                lastUsage = usageEvent.usage();
-            } else if (event instanceof RetryEvent retry) {
-                output.appendLine("（重试中：" + retry.reason() + "）");
-                live.appendCommitted(writer, "（重试中：" + retry.reason() + "）");
-            } else if (event instanceof ErrorEvent error) {
-                printer.onError(new ProviderException(error.message()));
-            } else if (event instanceof ConfirmationRequestEvent confirm) {
-                confirm.response().answer(confirmAnswerer.apply(confirm));
-            } else if (event instanceof ChoiceRequestEvent choice) {
-                choice.response().answer(choiceAnswerer.apply(choice));
-            }
-        }
+        return permissionChecker;
     }
 
     /** 装配权限检查器：模式取 config（缺省 default），沙箱根为项目根，规则文件沿用 .acode/ 命名空间。 */
@@ -468,85 +407,6 @@ public class ConversationController {
                 projectRoot.resolve(".acode/permissions.yaml"),
                 projectRoot.resolve(".acode/permissions.local.yaml"));
         return new PermissionChecker(mode, projectRoot, ruleEngine);
-    }
-
-    /** 循环轮数上限：配置缺失时用默认值（与 ConfigValidator 一致） */
-    private int maxIterations() {
-        Integer configured = config.getMaxIterations();
-        return configured != null && configured > 0 ? configured : ConfigValidator.DEFAULT_MAX_ITERATIONS;
-    }
-
-    /** 每轮 TurnComplete 输出 usage 脚注行（终端 + 文件日志），供缓存命中观察 */
-    private void printUsageFootnote(Usage usage, LiveRegionRenderer live, Writer writer) {
-        String line = "usage: in " + usage.inputTokens()
-                + " · cache_read " + usage.cacheReadTokens()
-                + " · cache_write " + usage.cacheCreationTokens()
-                + " · out " + usage.outputTokens();
-        output.appendLine(line);
-        live.appendCommitted(writer, line);
-        log.info("{}", line);
-    }
-
-    /** 事件轮询：20ms 超时；中断恢复中断位并返回 null */
-    private static AgentEvent pollEvent(BlockingQueue<AgentEvent> events) {
-        try {
-            return events.poll(20, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return null;
-        }
-    }
-
-    /** 取消后等循环线程收尾的上限（毫秒）；包可见非 final，测试可调小。超时后旧线程的
-     *  残留历史写入由 Conversation 的 epoch 校验忽略，仅记告警，UI 不挂死。 */
-    static long awaitLoopEndTimeoutMillis = 5000;
-
-    private static void awaitLoopEnd(Agent agent) {
-        long deadline = System.currentTimeMillis() + awaitLoopEndTimeoutMillis;
-        while (agent.isRunning() && System.currentTimeMillis() < deadline) {
-            try {
-                Thread.sleep(20);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-        }
-        if (agent.isRunning()) {
-            log.warn("取消后 agent 线程未在 {}ms 内收尾；其残留历史写入将被 epoch 校验忽略",
-                    awaitLoopEndTimeoutMillis);
-        }
-    }
-
-    /** 循环收尾：按终止原因补提示（MAX_ITERATIONS / PLAN_DELIVERED / CANCELED / ERROR） */
-    private void completeLoop(Agent agent, LiveRegionRenderer live, Writer writer) {
-        switch (agent.termination()) {
-            case MAX_ITERATIONS -> {
-                output.appendLine("（达到最大轮数，已停止执行）");
-                live.appendCommitted(writer, "（达到最大轮数，已停止执行）");
-            }
-            case PLAN_DELIVERED -> {
-                output.appendLine("（计划已交付）");
-                live.appendCommitted(writer, "（计划已交付）");
-                Path plan = agent.planPath();
-                if (plan != null) {
-                    try {
-                        String content = Files.readString(plan);
-                        output.append(content);
-                        live.appendCommitted(writer, content);
-                    } catch (IOException e) {
-                        log.warn("读取计划文件失败：{}", e.getMessage());
-                    }
-                }
-                output.appendLine("输入 /do 退出 plan 模式开始执行");
-                live.appendCommitted(writer, "输入 /do 退出 plan 模式开始执行");
-            }
-            case CANCELED -> {
-                output.appendLine("（已中断）");
-                live.appendCommitted(writer, "（已中断）");
-            }
-            case ERROR -> { /* ErrorEvent 已输出错误行，无需重复 */ }
-            case NORMAL -> { /* 自然收尾，无提示 */ }
-        }
     }
 
     /** raw 模式下检测 Ctrl+C（0x03 字节）；命中则消费该字节。 */

@@ -692,9 +692,9 @@ class ConversationControllerTest {
      */
     @Test
     void staleAgentResultIgnoredAfterAwaitLoopEndTimeout() throws Exception {
-        long saved = ConversationController.awaitLoopEndTimeoutMillis;
+        long saved = ExchangeRunner.awaitLoopEndTimeoutMillis;
         try {
-            ConversationController.awaitLoopEndTimeoutMillis = 0;
+            ExchangeRunner.awaitLoopEndTimeoutMillis = 0;
             CountDownLatch streamStarted = new CountDownLatch(1);
             AtomicBoolean pressCtrlC = new AtomicBoolean(false);
             FakeProvider provider = FakeProvider.scripted(List.of(
@@ -737,7 +737,7 @@ class ConversationControllerTest {
             assertTrue(String.join("\n", output.lines()).contains("新回合回答"),
                     "新 exchange 应正常生成");
         } finally {
-            ConversationController.awaitLoopEndTimeoutMillis = saved;
+            ExchangeRunner.awaitLoopEndTimeoutMillis = saved;
         }
     }
 

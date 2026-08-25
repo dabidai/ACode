@@ -11,10 +11,10 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 权限决策检查器：一次工具调用的五层防线决策链。
- * ① 内容提取 → ② 危险命令 → ③ 安全命令 → ④ 路径沙箱 →
- * ⑤ plan 例外（canonical 判断、在沙箱之后）→ ⑥ 规则 →
- * ⑦ 会话级「始终允许」→ ⑧ 权限模式矩阵。任一判定 ALLOW/DENY 即返回，只有 ASK 才打扰用户。
+ * 权限决策检查器：一次工具调用的八步决策链（① 内容提取 → ② 危险命令 → ③ 安全命令 →
+ * ④ 路径沙箱 → ⑤ plan 例外 → ⑥ 规则 → ⑦ 会话级「始终允许」→ ⑧ 权限模式矩阵），
+ * 串联五层防线：危险命令检测、路径沙箱、规则引擎、模式矩阵四层组件 + UI 层 HITL 确认。
+ * 任一判定 ALLOW/DENY 即返回，只有 ASK 才打扰用户。
  */
 public class PermissionChecker {
 

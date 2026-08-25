@@ -203,4 +203,37 @@ class ConfigLoaderTest {
                 () -> ConfigLoader.load(globalFile(), projectDir()));
         assertTrue(e.getMessage().contains("tee 必须是 true/false"));
     }
+
+    @Test
+    void permissionModeReadFromConfig() throws IOException {
+        write(globalFile(), """
+                protocol: openai
+                model: deepseek-v4-flash
+                base_url: https://api.deepseek.com/v1
+                api_key: global-key
+                permission_mode: acceptEdits
+                """);
+        AppConfig config = ConfigLoader.load(globalFile(), projectDir());
+        assertEquals("acceptEdits", config.getPermissionMode());
+    }
+
+    @Test
+    void permissionModeTypeErrorRejected() throws IOException {
+        write(globalFile(), """
+                protocol: openai
+                model: deepseek-v4-flash
+                base_url: https://api.deepseek.com/v1
+                api_key: global-key
+                permission_mode: 123
+                """);
+        ConfigException e = assertThrows(ConfigException.class,
+                () -> ConfigLoader.load(globalFile(), projectDir()));
+        assertTrue(e.getMessage().contains("permission_mode 必须是字符串"));
+    }
+
+    @Test
+    void permissionModeAbsentDefaultsToNull() throws IOException {
+        AppConfig config = validGlobal();
+        assertEquals(null, config.getPermissionMode());
+    }
 }

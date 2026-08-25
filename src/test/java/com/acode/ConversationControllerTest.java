@@ -1,10 +1,16 @@
 package com.acode;
 
 import com.acode.config.AppConfig;
+import com.acode.permission.PermissionChecker;
+import com.acode.permission.PermissionMode;
+import com.acode.permission.PermissionResponse;
+import com.acode.permission.RuleEngine;
 import com.acode.prompt.PromptBuilder;
 import com.acode.provider.ChatMessage;
 import com.acode.provider.ChatRequest;
 import com.acode.provider.FakeProvider;
+import com.acode.provider.InvalidRequestException;
+import com.acode.provider.RateLimitException;
 import com.acode.provider.TextBlock;
 import com.acode.provider.ToolResultBlock;
 import com.acode.provider.ToolUseBlock;
@@ -19,6 +25,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.StringWriter;
 import java.io.Writer;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -26,9 +34,11 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ConversationControllerTest {
@@ -57,6 +67,7 @@ class ConversationControllerTest {
                         FakeProvider.complete()),
                 List.of(FakeProvider.delta("文件内容是：你好世界"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
         StringWriter sw = new StringWriter();
@@ -96,6 +107,7 @@ class ConversationControllerTest {
                         FakeProvider.complete()),
                 List.of(FakeProvider.delta("文件不存在，请检查路径"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
         controller.handleExchange("读 nope.txt", () -> false, () -> { });
@@ -127,6 +139,7 @@ class ConversationControllerTest {
                         FakeProvider.complete()),
                 List.of(FakeProvider.delta("处理完成"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
         controller.handleExchange("读文件并处理", () -> false, () -> { });
@@ -175,6 +188,7 @@ class ConversationControllerTest {
                         }),
                 List.of(FakeProvider.delta("第二次回答"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
 
@@ -222,6 +236,7 @@ class ConversationControllerTest {
                                 JSON.createObjectNode().put("file_path", file.toString())),
                         FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config, false);
+        controller.setProjectRoot(tempDir);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
         controller.handleExchange("多步任务", () -> false, () -> { });
@@ -246,6 +261,7 @@ class ConversationControllerTest {
                         FakeProvider.complete()),
                 List.of(FakeProvider.delta("读完了"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
         controller.handleExchange("读大文件", () -> false, () -> { });
@@ -262,6 +278,7 @@ class ConversationControllerTest {
         FakeProvider provider = FakeProvider.scripted(List.of(
                 List.of(FakeProvider.delta("普通回答"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
         controller.handleExchange("你好", () -> false, () -> { });
@@ -276,6 +293,7 @@ class ConversationControllerTest {
         FakeProvider provider = FakeProvider.scripted(List.of(
                 List.of(FakeProvider.delta("第一段"), FakeProvider.delta("第二段"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
         CountingLive live = new CountingLive(80, 24);
@@ -320,10 +338,11 @@ class ConversationControllerTest {
                         FakeProvider.complete()),
                 List.of(FakeProvider.delta("好的，我不覆盖文件"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         controller.setConfirmAnswerer(event -> {
             asks.incrementAndGet();
             assertEquals("WriteFile", event.toolName());
-            return false;
+            return PermissionResponse.DENY;
         });
         OutputPane output = new OutputPane();
         controller.setOutput(output);
@@ -349,9 +368,10 @@ class ConversationControllerTest {
                         FakeProvider.complete()),
                 List.of(FakeProvider.delta("已写入"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         controller.setConfirmAnswerer(event -> {
             asks.incrementAndGet();
-            return true;
+            return PermissionResponse.ALLOW;
         });
         OutputPane output = new OutputPane();
         controller.setOutput(output);
@@ -373,6 +393,7 @@ class ConversationControllerTest {
                 List.of(FakeProvider.toolUse("id-1", "AskUser", args), FakeProvider.complete()),
                 List.of(FakeProvider.delta("好的，先做 B"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         controller.setChoiceAnswerer(event -> {
             assertEquals(List.of("A", "B"), event.options());
             assertEquals("先做哪个？", event.question());
@@ -408,6 +429,7 @@ class ConversationControllerTest {
                 List.of(FakeProvider.toolUse("id-1", "AskUser", args), FakeProvider.complete()),
                 List.of(FakeProvider.delta("那我自己决定"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         controller.setChoiceAnswerer(event -> null); // 用户取消
         OutputPane output = new OutputPane();
         controller.setOutput(output);
@@ -429,6 +451,7 @@ class ConversationControllerTest {
         FakeProvider provider = FakeProvider.scripted(List.of(
                 List.of(FakeProvider.delta("普通回答"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
         controller.handleExchange("你好", () -> false, () -> { });
@@ -451,6 +474,7 @@ class ConversationControllerTest {
                 List.of(FakeProvider.delta("第一次"), FakeProvider.complete()),
                 List.of(FakeProvider.delta("第二次"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
         controller.handleExchange("你好", () -> false, () -> { });
@@ -468,6 +492,7 @@ class ConversationControllerTest {
                 FakeProvider.usage(new Usage(100, 20, 80, 5)),
                 FakeProvider.delta("回答"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
         StringWriter sw = new StringWriter();
@@ -505,6 +530,7 @@ class ConversationControllerTest {
                         FakeProvider.complete()),
                 List.of(FakeProvider.delta("文件读好了"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
         StringWriter sw = new StringWriter();
@@ -533,7 +559,8 @@ class ConversationControllerTest {
                         FakeProvider.complete()),
                 List.of(FakeProvider.delta("写入完成"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
-        controller.setConfirmAnswerer(event -> true);
+        controller.setProjectRoot(tempDir);
+        controller.setConfirmAnswerer(event -> PermissionResponse.ALLOW);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
         StringWriter sw = new StringWriter();
@@ -556,6 +583,7 @@ class ConversationControllerTest {
                         FakeProvider.complete()),
                 List.of(FakeProvider.delta("文件不存在，请检查"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
         OutputPane output = new OutputPane();
         controller.setOutput(output);
         StringWriter sw = new StringWriter();
@@ -565,5 +593,276 @@ class ConversationControllerTest {
         String joined = String.join("\n", output.lines());
         assertTrue(joined.contains(ToolCallDisplay.STYLE_ERR), "失败仍显示红色：" + joined);
         assertTrue(joined.contains("文件不存在"), "失败正文应显示");
+    }
+
+    // ---- T8 /permission-mode 运行时切档 ----
+
+    private static PermissionChecker injectChecker(ConversationController controller, Path projectRoot) {
+        RuleEngine rules = new RuleEngine(
+                projectRoot.resolve("u.yaml"), projectRoot.resolve("p.yaml"), projectRoot.resolve("l.yaml"));
+        PermissionChecker checker = new PermissionChecker(PermissionMode.DEFAULT, projectRoot, rules);
+        controller.setPermissionChecker(checker);
+        return checker;
+    }
+
+    @Test
+    void permissionModeCommandSwitchesCheckerMode() {
+        ConversationController controller = new ConversationController(FakeProvider.scripted(List.of()), config(), false);
+        PermissionChecker checker = injectChecker(controller, tempDir);
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        StringWriter sw = new StringWriter();
+        controller.setScreenWriter(sw);
+
+        controller.handlePermissionMode("acceptEdits", new LiveRegionRenderer(80, 24), sw);
+        assertEquals(PermissionMode.ACCEPT_EDITS, checker.mode());
+        assertTrue(sw.toString().contains("已切换到权限模式：acceptEdits"));
+    }
+
+    @Test
+    void permissionModeTrailingWhitespaceIsTrimmed() {
+        ConversationController controller = new ConversationController(FakeProvider.scripted(List.of()), config(), false);
+        PermissionChecker checker = injectChecker(controller, tempDir);
+        controller.setOutput(new OutputPane());
+        controller.handlePermissionMode("acceptEdits  ", new LiveRegionRenderer(80, 24), new StringWriter());
+        assertEquals(PermissionMode.ACCEPT_EDITS, checker.mode());
+    }
+
+    @Test
+    void permissionModeCaseSensitiveRejectsUppercase() {
+        ConversationController controller = new ConversationController(FakeProvider.scripted(List.of()), config(), false);
+        PermissionChecker checker = injectChecker(controller, tempDir);
+        controller.setOutput(new OutputPane());
+        controller.handlePermissionMode("ACCEPT_EDITS", new LiveRegionRenderer(80, 24), new StringWriter());
+        assertEquals(PermissionMode.DEFAULT, checker.mode(), "大小写敏感：非法值模式不变");
+    }
+
+    @Test
+    void permissionModeExtraArgRejected() {
+        ConversationController controller = new ConversationController(FakeProvider.scripted(List.of()), config(), false);
+        PermissionChecker checker = injectChecker(controller, tempDir);
+        controller.setOutput(new OutputPane());
+        controller.handlePermissionMode("acceptEdits extra", new LiveRegionRenderer(80, 24), new StringWriter());
+        assertEquals(PermissionMode.DEFAULT, checker.mode(), "多余参数非法、模式不变");
+    }
+
+    @Test
+    void permissionModeInvalidValueKeepsModeAndPrintsError() {
+        ConversationController controller = new ConversationController(FakeProvider.scripted(List.of()), config(), false);
+        PermissionChecker checker = injectChecker(controller, tempDir);
+        controller.setOutput(new OutputPane());
+        StringWriter sw = new StringWriter();
+        controller.setScreenWriter(sw);
+        controller.handlePermissionMode("yolo", new LiveRegionRenderer(80, 24), sw);
+        assertEquals(PermissionMode.DEFAULT, checker.mode());
+        assertTrue(sw.toString().contains("非法权限模式"));
+    }
+
+    @Test
+    void permissionModeNoArgPrintsCurrentMode() {
+        ConversationController controller = new ConversationController(FakeProvider.scripted(List.of()), config(), false);
+        injectChecker(controller, tempDir);
+        controller.setOutput(new OutputPane());
+        StringWriter sw = new StringWriter();
+        controller.setScreenWriter(sw);
+        controller.handlePermissionMode("", new LiveRegionRenderer(80, 24), sw);
+        assertTrue(sw.toString().contains("当前权限模式：default"));
+    }
+
+    @Test
+    void permissionModeSwitchDoesNotPersistToConfig() {
+        AppConfig config = config();
+        ConversationController controller = new ConversationController(FakeProvider.scripted(List.of()), config, false);
+        injectChecker(controller, tempDir);
+        controller.setOutput(new OutputPane());
+        controller.handlePermissionMode("acceptEdits", new LiveRegionRenderer(80, 24), new StringWriter());
+        assertNull(config.getPermissionMode(), "运行时切档不应写回 config");
+    }
+
+    // ---- P0-1 awaitLoopEnd 超时路径（控制器级） ----
+
+    /**
+     * 取舍说明：控制器级无法编排滞留 agent——ToolRegistry 为私有字段无注入点，注册不了
+     * 吞中断的桩工具（AgentTest.UnstoppableTool 那样）；provider 阻塞也不滞留 agent 线程
+     * （stream() 20ms 轮询取消即退）。「旧 agent 残留写入被 epoch 忽略」已由
+     * AgentTest.staleAgentCannotWriteIntoNextAgentTurn 确定性覆盖。
+     * 本测试验证可测部分：awaitLoopEnd 超时预算压到 0 时取消路径仍快速返回（UI 不挂死、
+     * 不等 5 秒），且随后新 exchange 立即可用。
+     */
+    @Test
+    void staleAgentResultIgnoredAfterAwaitLoopEndTimeout() throws Exception {
+        long saved = ConversationController.awaitLoopEndTimeoutMillis;
+        try {
+            ConversationController.awaitLoopEndTimeoutMillis = 0;
+            CountDownLatch streamStarted = new CountDownLatch(1);
+            AtomicBoolean pressCtrlC = new AtomicBoolean(false);
+            FakeProvider provider = FakeProvider.scripted(List.of(
+                    List.of(listener -> {
+                        streamStarted.countDown();
+                        try {
+                            Thread.sleep(100_000);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        listener.onComplete();
+                    }),
+                    List.of(FakeProvider.delta("新回合回答"), FakeProvider.complete())));
+            ConversationController controller = new ConversationController(provider, config(), false);
+            controller.setProjectRoot(tempDir);
+            OutputPane output = new OutputPane();
+            controller.setOutput(output);
+
+            Thread canceler = new Thread(() -> {
+                try {
+                    streamStarted.await(2, TimeUnit.SECONDS);
+                    pressCtrlC.set(true);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }, "test-canceler");
+            canceler.start();
+            long startMs = System.currentTimeMillis();
+            controller.handleExchange("滞留任务", () -> pressCtrlC.get(), () -> { });
+            long elapsed = System.currentTimeMillis() - startMs;
+            canceler.join();
+
+            assertTrue(elapsed < 3000,
+                    "awaitLoopEnd 预算为 0 时取消路径应快速返回（UI 不挂死），实际 " + elapsed + " ms");
+            assertTrue(String.join("\n", output.lines()).contains("已中断"), "应输出「已中断」");
+
+            // 取消后新 exchange 立即可用：走下一 epoch，旧 agent 残留被忽略
+            controller.handleExchange("再次询问", () -> false, () -> { });
+            assertEquals(2, provider.receivedRequests().size(), "取消后应可继续新对话");
+            assertTrue(String.join("\n", output.lines()).contains("新回合回答"),
+                    "新 exchange 应正常生成");
+        } finally {
+            ConversationController.awaitLoopEndTimeoutMillis = saved;
+        }
+    }
+
+    // ---- P1-8 会话保存与 plan 交付渲染 ----
+
+    /** saveSession 为私有且仅 mainLoop 调用（无终端不可达），测试经反射调用 */
+    @Test
+    void saveSessionSkipsEmptyConversation() throws Exception {
+        String originalHome = System.getProperty("user.home");
+        Path fakeHome = tempDir.resolve("fake-home");
+        Files.createDirectories(fakeHome);
+        System.setProperty("user.home", fakeHome.toString());
+        try {
+            ConversationController controller =
+                    new ConversationController(FakeProvider.scripted(List.of()), config(), false);
+            controller.setOutput(new OutputPane());
+            Method saveSession = ConversationController.class.getDeclaredMethod("saveSession");
+            saveSession.setAccessible(true);
+
+            saveSession.invoke(controller); // 空会话：应直接跳过
+            assertFalse(Files.exists(fakeHome.resolve(".acode/sessions")),
+                    "空会话退出不应创建任何会话文件");
+
+            controller.handleExchange("你好", () -> false, () -> { });
+            saveSession.invoke(controller); // 正对照：非空会话应保存
+            assertTrue(Files.exists(fakeHome.resolve(".acode/sessions")), "非空会话应创建会话目录");
+            try (Stream<Path> files = Files.list(fakeHome.resolve(".acode/sessions"))) {
+                assertTrue(files.count() >= 1, "非空会话应产生会话文件");
+            }
+        } finally {
+            System.setProperty("user.home", originalHome);
+        }
+    }
+
+    /** planMode 仅由 mainLoop 的 /plan 命令置位（无终端不可达），测试经反射置位 */
+    @Test
+    void planDeliveredLoopCompletionPrintsPlanBody() throws Exception {
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.delta("计划：重构 X"),
+                        FakeProvider.toolUse("id-1", "ExitPlanMode", JSON.createObjectNode()),
+                        FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        Field planMode = ConversationController.class.getDeclaredField("planMode");
+        planMode.setAccessible(true);
+        planMode.setBoolean(controller, true);
+
+        controller.handleExchange("做个计划", () -> false, () -> { });
+
+        String joined = String.join("\n", output.lines());
+        assertTrue(joined.contains("（计划已交付）"), "应输出计划交付提示：" + joined);
+        assertTrue(joined.contains("计划：重构 X"), "计划正文应打印进回滚：" + joined);
+        assertTrue(joined.contains("输入 /do 退出 plan 模式开始执行"), "应提示退出 plan 模式");
+        try (Stream<Path> files = Files.list(tempDir.resolve(".acode/plans"))) {
+            assertTrue(files.anyMatch(p -> p.getFileName().toString().startsWith("plan-")),
+                    "计划应落盘到 .acode/plans/");
+        }
+    }
+
+    // ---- P2-14 RetryEvent / ErrorEvent 渲染 ----
+
+    @Test
+    void retryAndErrorEventsRenderInOutput() throws Exception {
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.error(new RateLimitException("限流了"))),
+                List.of(FakeProvider.error(new InvalidRequestException("参数错误")))));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        StringWriter sw = new StringWriter();
+        controller.setScreenWriter(sw);
+        controller.handleExchange("触发重试", () -> false, () -> { });
+
+        String joined = String.join("\n", output.lines());
+        assertTrue(joined.contains("（重试中：限流了）"), "RetryEvent 应渲染重试行：" + joined);
+        assertTrue(joined.contains("（错误：参数错误）"), "ErrorEvent 应渲染错误行：" + joined);
+        assertTrue(sw.toString().contains("（重试中：限流了）"), "重试行应经活跃区写屏：" + sw);
+    }
+
+    // ---- P2-15 permissionChecker 懒构建与 config 初始模式 ----
+
+    @Test
+    void permissionModeLazilyBuildsChecker() {
+        // 不注入 checker：切档应触发懒构建（buildPermissionChecker），而非依赖测试替身
+        ConversationController controller =
+                new ConversationController(FakeProvider.scripted(List.of()), config(), false);
+        controller.setProjectRoot(tempDir);
+        controller.setOutput(new OutputPane());
+        StringWriter sw = new StringWriter();
+        controller.setScreenWriter(sw);
+
+        controller.handlePermissionMode("acceptEdits", new LiveRegionRenderer(80, 24), sw);
+        assertTrue(sw.toString().contains("已切换到权限模式：acceptEdits"),
+                "未注入 checker 时应懒构建并切档：" + sw);
+
+        StringWriter query = new StringWriter();
+        controller.handlePermissionMode("", new LiveRegionRenderer(80, 24), query);
+        assertTrue(query.toString().contains("当前权限模式：acceptEdits"),
+                "切档后查询应反映真实 checker 模式：" + query);
+    }
+
+    @Test
+    void configuredPermissionModeAppliesToChecker() throws Exception {
+        AppConfig config = config();
+        config.setPermissionMode("acceptEdits"); // config 初始模式应继承到懒构建的 checker
+        Path target = tempDir.resolve("out.txt");
+        AtomicInteger asks = new AtomicInteger();
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.toolUse("id-1", "WriteFile",
+                                JSON.createObjectNode().put("file_path", target.toString()).put("content", "hi")),
+                        FakeProvider.complete()),
+                List.of(FakeProvider.delta("已写入"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config, false);
+        controller.setProjectRoot(tempDir);
+        controller.setConfirmAnswerer(event -> {
+            asks.incrementAndGet();
+            return PermissionResponse.DENY;
+        });
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        controller.handleExchange("写 out.txt", () -> false, () -> { });
+
+        assertEquals(0, asks.get(), "acceptEdits 模式下写文件不应弹确认");
+        assertEquals("hi", Files.readString(target), "acceptEdits 模式应直接放行写入");
     }
 }

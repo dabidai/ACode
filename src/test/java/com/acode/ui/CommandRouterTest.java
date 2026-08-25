@@ -6,6 +6,7 @@ import static com.acode.ui.CommandRouter.Action.CHAT;
 import static com.acode.ui.CommandRouter.Action.CLEAR;
 import static com.acode.ui.CommandRouter.Action.DO;
 import static com.acode.ui.CommandRouter.Action.HELP;
+import static com.acode.ui.CommandRouter.Action.PERMISSION_MODE;
 import static com.acode.ui.CommandRouter.Action.PLAN;
 import static com.acode.ui.CommandRouter.Action.QUIT;
 import static com.acode.ui.CommandRouter.Action.RESUME;
@@ -43,6 +44,17 @@ class CommandRouterTest {
     @Test
     void doCommandRoutesToDo() {
         assertEquals(DO, CommandRouter.route("/do"));
+    }
+
+    @Test
+    void permissionModeRoutesToPermissionMode() {
+        assertEquals(PERMISSION_MODE, CommandRouter.route("/permission-mode"));
+    }
+
+    @Test
+    void permissionModeWithArgRoutesToPermissionMode() {
+        assertEquals(PERMISSION_MODE, CommandRouter.route("/permission-mode default"));
+        assertEquals(PERMISSION_MODE, CommandRouter.route("/permission-mode acceptEdits "));
     }
 
     @Test
@@ -93,6 +105,7 @@ class CommandRouterTest {
         assertTrue(CommandRouter.HELP_TEXT.contains("/resume"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/plan"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/do"));
+        assertTrue(CommandRouter.HELP_TEXT.contains("/permission-mode"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/help"));
     }
 }

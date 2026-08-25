@@ -1,14 +1,13 @@
 package com.acode.ui;
 
-import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.acode.permission.PermissionResponse;
 import java.io.StringWriter;
 import java.io.Writer;
 import java.util.ArrayDeque;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Test;
 
 class ConfirmationPromptTest {
 
@@ -31,34 +30,44 @@ class ConfirmationPromptTest {
         }
     }
 
-    private static boolean ask(StringWriter writer, int... keys) {
+    private static PermissionResponse ask(StringWriter writer, int... keys) {
         return new ConfirmationPrompt(new ScriptedKeys(keys), new LiveRegionRenderer(80, 24), writer)
                 .ask("WriteFile", "{\"file_path\":\"a.txt\"}");
     }
 
     @Test
-    void defaultYesSelectionApproves() {
+    void defaultSelectionEnterApproves() {
         StringWriter writer = new StringWriter();
-        assertTrue(ask(writer, MenuKeySource.KEY_ENTER), "默认选中「是」，Enter 应批准");
+        assertEquals(PermissionResponse.ALLOW, ask(writer, MenuKeySource.KEY_ENTER), "默认选中「放行」，Enter 应放行");
         assertTrue(writer.toString().contains("（已批准执行「WriteFile」）"));
     }
 
     @Test
-    void movingToNoThenEnterRejects() {
+    void movingToAlwaysAllowThenEnterRecordsAlways() {
         StringWriter writer = new StringWriter();
-        assertFalse(ask(writer, MenuKeySource.KEY_DOWN, MenuKeySource.KEY_ENTER), "↓ 后 Enter 应拒绝");
+        assertEquals(PermissionResponse.ALLOW_ALWAYS,
+                ask(writer, MenuKeySource.KEY_DOWN, MenuKeySource.KEY_ENTER), "↓ 后 Enter 应「始终允许」");
+        assertTrue(writer.toString().contains("（已记录「始终允许」"));
+    }
+
+    @Test
+    void movingToRejectThenEnterRejects() {
+        StringWriter writer = new StringWriter();
+        assertEquals(PermissionResponse.DENY,
+                ask(writer, MenuKeySource.KEY_DOWN, MenuKeySource.KEY_DOWN, MenuKeySource.KEY_ENTER),
+                "↓↓ 后 Enter 应拒绝");
         assertTrue(writer.toString().contains("（已拒绝执行「WriteFile」）"));
     }
 
     @Test
     void escCancelsAsRejection() {
         StringWriter writer = new StringWriter();
-        assertFalse(ask(writer, MenuKeySource.KEY_CANCEL), "Esc 应取消=拒绝");
+        assertEquals(PermissionResponse.DENY, ask(writer, MenuKeySource.KEY_CANCEL), "Esc 应取消=拒绝");
         assertTrue(writer.toString().contains("（已取消）"));
     }
 
     @Test
-    void promptLineOmitsYnpromptAndKeepsArgs() {
+    void promptLineOmitsArgsWhenEmpty() {
         assertEquals("要执行「WriteFile（{\"file_path\":\"a.txt\"}）」？", ConfirmationPrompt.promptLine("WriteFile", "{\"file_path\":\"a.txt\"}"));
         assertEquals("要执行「WriteFile」？", ConfirmationPrompt.promptLine("WriteFile", ""));
         assertEquals("要执行「WriteFile」？", ConfirmationPrompt.promptLine("WriteFile", null));
@@ -66,11 +75,12 @@ class ConfirmationPromptTest {
     }
 
     @Test
-    void menuRenderedWithSelectedYesAndOptionNo() {
+    void menuRenderedWithThreeOptions() {
         StringWriter writer = new StringWriter();
         ask(writer, MenuKeySource.KEY_ENTER);
-        assertTrue(writer.toString().contains("\033[7m> 是\033[0m"), "默认选中「是」应反显：" + writer);
-        assertTrue(writer.toString().contains("  否"), "未选中「否」两空格前缀：" + writer);
+        assertTrue(writer.toString().contains("\033[7m> 放行\033[0m"), "默认选中「放行」应反显：" + writer);
+        assertTrue(writer.toString().contains("始终允许"), "菜单应含「始终允许」：" + writer);
+        assertTrue(writer.toString().contains("拒绝"), "菜单应含「拒绝」：" + writer);
     }
 
     @Test

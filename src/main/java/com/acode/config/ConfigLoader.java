@@ -26,7 +26,7 @@ public class ConfigLoader {
     private static final String BUILTIN_RESOURCE = "config.yaml";
     private static final List<String> KNOWN_KEYS =
             List.of("protocol", "model", "base_url", "api_key",
-                    "max_context_tokens", "max_iterations", "tee");
+                    "max_context_tokens", "max_iterations", "tee", "permission_mode");
 
     /** 生产入口：全局配置在用户主目录，项目级配置在当前工作目录 */
     public static AppConfig loadDefault() {
@@ -134,6 +134,9 @@ public class ConfigLoader {
                 throw new ConfigException(source + ": tee 必须是 true/false，当前值 " + value);
             }
             config.setTee(teeValue);
+        }
+        if (map.containsKey("permission_mode")) {
+            config.setPermissionMode(stringValue(map, "permission_mode", source));
         }
     }
 

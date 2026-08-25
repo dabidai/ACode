@@ -13,6 +13,7 @@ public class AppConfig {
     private Integer maxContextTokens;
     private Integer maxIterations;
     private Boolean tee;
+    private String permissionMode;
 
     public String getProtocol() {
         return protocol;
@@ -73,5 +74,14 @@ public class AppConfig {
 
     public void setTee(Boolean tee) {
         this.tee = tee;
+    }
+
+    /** 启动默认权限模式；null 由装配层按 default 处理。 */
+    public String getPermissionMode() {
+        return permissionMode;
+    }
+
+    public void setPermissionMode(String permissionMode) {
+        this.permissionMode = permissionMode;
     }
 }

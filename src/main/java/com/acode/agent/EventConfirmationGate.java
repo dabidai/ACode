@@ -1,6 +1,7 @@
 package com.acode.agent;
 
 import com.acode.agent.AgentEvent.ConfirmationRequestEvent;
+import com.acode.permission.PermissionResponse;
 import com.acode.provider.ToolUseBlock;
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -10,14 +11,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * 事件握手式确认门槛：先把 ConfirmationRequestEvent 入队（答复通道随事件携带），
  * 再阻塞等待 UI 主线程应答。agent 线程在 await 期间可被取消；队列满时 putSafe
- * 背压阻塞，由主线程消费腾位后放行，不会死锁。
+ * 背压阻塞，由主线程消费腾位后放行，不会死锁。三选一答复原样透传。
  */
 public final class EventConfirmationGate implements ConfirmationGate {
 
     static final int SUMMARY_MAX_CHARS = 160;
 
     @Override
-    public boolean confirm(ToolUseBlock call, BlockingQueue<AgentEvent> events, AtomicBoolean cancelled) {
+    public PermissionResponse confirm(ToolUseBlock call, BlockingQueue<AgentEvent> events, AtomicBoolean cancelled) {
         Confirmation response = new Confirmation();
         AgentEvent.putSafe(events,
                 new ConfirmationRequestEvent(call.id(), call.name(), summarize(call.input()), response));

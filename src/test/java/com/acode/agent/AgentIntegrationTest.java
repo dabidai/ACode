@@ -6,6 +6,9 @@ import com.acode.agent.AgentEvent.ToolResultEvent;
 import com.acode.agent.AgentEvent.ToolUseEvent;
 import com.acode.agent.AgentEvent.TurnComplete;
 import com.acode.conversation.Conversation;
+import com.acode.permission.PermissionChecker;
+import com.acode.permission.PermissionMode;
+import com.acode.permission.RuleEngine;
 import com.acode.provider.ChatMessage;
 import com.acode.provider.ChatRequest;
 import com.acode.provider.ContentBlock;
@@ -247,6 +250,44 @@ class AgentIntegrationTest {
                 "退出 plan 后不应再发 ExitPlanMode");
         assertTrue(tools2.stream().anyMatch(t -> "WriteFile".equals(t.name())),
                 "写工具应恢复下发");
+    }
+
+    /** 权限拒绝不终止循环：黑名单命令被拒 → 模型换替代工具 → 两轮都执行、循环正常结束 */
+    @Test
+    void deniedDangerousCommandKeepsLoopAliveWithAlternativeTool() throws Exception {
+        Path file = tempDir.resolve("a.txt");
+        Files.writeString(file, "数据");
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.toolUse("id-1", "Bash",
+                                JSON.createObjectNode().put("command", "rm -rf /")),
+                        FakeProvider.complete()),
+                List.of(FakeProvider.toolUse("id-2", "ReadFile",
+                                JSON.createObjectNode().put("file_path", file.toString())),
+                        FakeProvider.complete()),
+                List.of(FakeProvider.delta("完成"), FakeProvider.complete())));
+        ToolRegistry registry = new ToolRegistry();
+        DefaultToolset.registerAll(registry);
+        Agent agent = start(provider, 20, registry);
+        agent.setPermissionChecker(new PermissionChecker(PermissionMode.DEFAULT, tempDir,
+                new RuleEngine(tempDir.resolve("u.yaml"), tempDir.resolve("p.yaml"),
+                        tempDir.resolve("l.yaml"))));
+        BlockingQueue<AgentEvent> events = agent.run();
+
+        untilLoop(events, 15000);
+        assertEquals(Agent.Termination.NORMAL, agent.termination());
+        assertEquals(3, provider.receivedRequests().size(), "三轮都应发起（含被拒轮）");
+
+        List<ChatMessage> history = agent.conversation().history();
+        assertNoDanglingToolUses(history);
+        assertTrue(history.stream().anyMatch(m -> m.blocks().stream()
+                        .anyMatch(b -> b instanceof ToolResultBlock tr
+                                && tr.toolUseId().equals("id-1") && tr.isError()
+                                && tr.content().contains("权限拒绝"))),
+                "黑名单命令应被拒绝并带「权限拒绝」错误结果");
+        assertTrue(history.stream().anyMatch(m -> m.blocks().stream()
+                        .anyMatch(b -> b instanceof ToolResultBlock tr
+                                && tr.toolUseId().equals("id-2") && !tr.isError())),
+                "替代工具应正常执行，循环继续");
     }
 
     private static void assertType(List<AgentEvent> list, int index, Class<?> type) {

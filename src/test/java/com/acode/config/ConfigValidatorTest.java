@@ -102,4 +102,31 @@ class ConfigValidatorTest {
                 () -> ConfigValidator.validate(config, "test.yaml"));
         assertTrue(e.getMessage().contains("max_iterations"));
     }
+
+    @Test
+    void permissionModeAllValidValuesPass() {
+        for (String mode : new String[]{"default", "acceptEdits", "plan", "bypassPermissions"}) {
+            AppConfig config = valid();
+            config.setPermissionMode(mode);
+            ConfigValidator.validate(config, "test.yaml");
+        }
+    }
+
+    @Test
+    void permissionModeIllegalValueThrows() {
+        AppConfig config = valid();
+        config.setPermissionMode("yolo");
+        ConfigException e = assertThrows(ConfigException.class,
+                () -> ConfigValidator.validate(config, "test.yaml"));
+        assertTrue(e.getMessage().contains("permission_mode"));
+        assertTrue(e.getMessage().contains("yolo"));
+        assertTrue(e.getMessage().contains("test.yaml"), "错误应带文件路径定位");
+    }
+
+    @Test
+    void permissionModeNullIsAccepted() {
+        AppConfig config = valid();
+        config.setPermissionMode(null);
+        ConfigValidator.validate(config, "test.yaml");
+    }
 }

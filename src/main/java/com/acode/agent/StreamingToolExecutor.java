@@ -1,6 +1,9 @@
 package com.acode.agent;
 
 import com.acode.agent.AgentEvent.ToolResultEvent;
+import com.acode.permission.PermissionChecker;
+import com.acode.permission.PermissionChecker.CheckResult;
+import com.acode.permission.PermissionResponse;
 import com.acode.provider.ToolUseBlock;
 import com.acode.tool.Permission;
 import com.acode.tool.Tool;
@@ -8,6 +11,8 @@ import com.acode.tool.ToolContext;
 import com.acode.tool.ToolExecutor;
 import com.acode.tool.ToolRegistry;
 import com.acode.tool.ToolResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -21,22 +26,37 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 工具分区执行器：按权限分区——读类并发（虚拟线程）、写类与命令类串行且保持声明顺序，
  * 全部读类先执行。结果 List 按输入 index 落位（回传顺序 = 声明顺序）。每完成一个调用
  * 发一条 ToolResultEvent；cancelled 置位时未执行/未完成的调用补「已取消」结果。
+ * 阶段五：执行前插入权限检查——DENY 返回「权限拒绝」错误结果、ASK 走确认门槛、
+ * ALLOW 直接执行；「始终允许」记会话 + 持久化本地规则（写盘失败仅警告，不阻断）。
  */
 public class StreamingToolExecutor {
+
+    private static final Logger log = LoggerFactory.getLogger(StreamingToolExecutor.class);
 
     private final ToolRegistry registry;
     private final ToolContext context;
     private final ToolExecutor executor;
     private final ConfirmationGate confirmationGate;
+    private final PermissionChecker permissionChecker;
 
+    /** @deprecated 仅保留给存量测试（无权限检查）；生产装配路径请用带 checker 的构造器。 */
+    @Deprecated
     public StreamingToolExecutor(ToolRegistry registry, ToolContext context) {
-        this(registry, context, ConfirmationGate.ALWAYS_ALLOW);
+        this(registry, context, null, ConfirmationGate.ALWAYS_ALLOW);
     }
 
+    /** @deprecated 仅保留给存量测试（无权限检查）；生产装配路径请用带 checker 的构造器。 */
+    @Deprecated
     public StreamingToolExecutor(ToolRegistry registry, ToolContext context, ConfirmationGate confirmationGate) {
+        this(registry, context, null, confirmationGate);
+    }
+
+    public StreamingToolExecutor(ToolRegistry registry, ToolContext context,
+                                 PermissionChecker permissionChecker, ConfirmationGate confirmationGate) {
         this.registry = registry;
         this.context = context;
         this.executor = new ToolExecutor(registry, context);
+        this.permissionChecker = permissionChecker;
         this.confirmationGate = confirmationGate;
     }
 
@@ -111,12 +131,29 @@ public class StreamingToolExecutor {
         }
         ToolUseBlock call = calls.get(index);
         Tool tool = registry.available(call.name());
-        if (tool != null && tool.permission() != Permission.READ
-                && !confirmationGate.confirm(call, events, cancelled)) {
-            results[index] = ToolResult.failure("用户拒绝执行「" + call.name() + "」");
-            // 拒绝路径耗时记 0：不含用户确认思考时间
-            AgentEvent.putSafe(events, new ToolResultEvent(call.id(), call.name(),
-                    results[index].content(), true, 0, results[index].display()));
+        if (tool != null && permissionChecker != null) {
+            CheckResult decision = permissionChecker.check(tool, call.input());
+            switch (decision.decision()) {
+                case DENY -> {
+                    failAndEmit(call, results, index, events, "权限拒绝：" + decision.reason());
+                    return;
+                }
+                case ASK -> {
+                    PermissionResponse response = confirmationGate.confirm(call, events, cancelled);
+                    if (response == PermissionResponse.DENY) {
+                        failAndEmit(call, results, index, events, "用户拒绝执行「" + call.name() + "」");
+                        return;
+                    }
+                    if (response == PermissionResponse.ALLOW_ALWAYS) {
+                        rememberAlwaysAllow(tool, call);
+                    }
+                }
+                case ALLOW -> { /* 直接执行 */ }
+            }
+        } else if (tool != null && tool.permission() != Permission.READ
+                && confirmationGate.confirm(call, events, cancelled) == PermissionResponse.DENY) {
+            // 兼容旧行为：无 checker 时非 READ 工具走确认门槛
+            failAndEmit(call, results, index, events, "用户拒绝执行「" + call.name() + "」");
             return;
         }
         if (tool instanceof InteractiveTool interactive) {
@@ -139,6 +176,26 @@ public class StreamingToolExecutor {
         results[index] = result;
         AgentEvent.putSafe(events, new ToolResultEvent(call.id(), call.name(),
                 result.content(), result.isError(), elapsedMs, result.display()));
+    }
+
+    /** 拒绝路径：写错误结果 + 发事件（耗时记 0，不含用户确认思考时间）。 */
+    private void failAndEmit(ToolUseBlock call, ToolResult[] results, int index,
+                             BlockingQueue<AgentEvent> events, String message) {
+        results[index] = ToolResult.failure(message);
+        AgentEvent.putSafe(events, new ToolResultEvent(call.id(), call.name(),
+                results[index].content(), true, 0, results[index].display()));
+    }
+
+    /** 「始终允许」：会话级即时生效 + 本地规则文件持久化（R9：写回失败仅警告，不阻断执行）。 */
+    private void rememberAlwaysAllow(Tool tool, ToolUseBlock call) {
+        String content = PermissionChecker.extractContent(tool, call.input());
+        if (content == null) {
+            return;
+        }
+        permissionChecker.addAllowAlwaysRule(tool.name(), content);
+        if (!permissionChecker.appendLocalRule(tool.name(), content)) {
+            log.warn("「始终允许」持久化失败，仅会话内生效：{} {}", tool.name(), content);
+        }
     }
 
     private static List<ToolResult> fillCancelled(ToolResult[] results) {

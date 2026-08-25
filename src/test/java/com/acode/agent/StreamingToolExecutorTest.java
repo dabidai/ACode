@@ -1,6 +1,10 @@
 package com.acode.agent;
 
 import com.acode.agent.AgentEvent.ToolResultEvent;
+import com.acode.permission.PermissionChecker;
+import com.acode.permission.PermissionMode;
+import com.acode.permission.PermissionResponse;
+import com.acode.permission.RuleEngine;
 import com.acode.provider.ToolUseBlock;
 import com.acode.tool.Permission;
 import com.acode.tool.Tool;
@@ -10,7 +14,10 @@ import com.acode.tool.ToolResult;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -26,6 +33,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class StreamingToolExecutorTest {
 
+    @TempDir
+    Path tempDir;
+
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private static BlockingQueue<AgentEvent> queue() {
@@ -34,6 +44,10 @@ class StreamingToolExecutorTest {
 
     private static ToolUseBlock call(String id, String name) {
         return new ToolUseBlock(id, name, JSON.createObjectNode());
+    }
+
+    private static ToolUseBlock call(String id, String name, JsonNode args) {
+        return new ToolUseBlock(id, name, args);
     }
 
     /** 记录开始/结束时序的桩工具：进入时记 start、countDown entered；可选阻塞等待 release 后再记 done。 */
@@ -115,8 +129,13 @@ class StreamingToolExecutorTest {
         return new StreamingToolExecutor(registry, new ToolContext(java.nio.file.Path.of(".")), gate);
     }
 
-    private static final ConfirmationGate APPROVE = (call, events, cancelled) -> true;
-    private static final ConfirmationGate DENY = (call, events, cancelled) -> false;
+    private static final ConfirmationGate APPROVE = (call, events, cancelled) -> PermissionResponse.ALLOW;
+    private static final ConfirmationGate DENY = (call, events, cancelled) -> PermissionResponse.DENY;
+
+    private PermissionChecker checker(PermissionMode mode) {
+        return new PermissionChecker(mode, tempDir, new RuleEngine(
+                tempDir.resolve("u.yaml"), tempDir.resolve("p.yaml"), tempDir.resolve("l.yaml")));
+    }
 
     @Test
     void mixedBatchRunsReadsBeforeWriteAndKeepsSerialOrder() throws Exception {
@@ -304,7 +323,7 @@ class StreamingToolExecutorTest {
         AtomicBoolean gateCalled = new AtomicBoolean(false);
         ConfirmationGate trackingGate = (call, events, cancelled) -> {
             gateCalled.set(true);
-            return false;
+            return PermissionResponse.DENY;
         };
         Tool read = new RecordingTool("Read", Permission.READ, new ArrayList<>());
         BlockingQueue<AgentEvent> events = queue();
@@ -328,10 +347,10 @@ class StreamingToolExecutorTest {
                     Thread.sleep(10);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    return false;
+                    return PermissionResponse.DENY;
                 }
             }
-            return false;
+            return PermissionResponse.DENY;
         };
         BlockingQueue<AgentEvent> events = queue();
         StreamingToolExecutor executor = executor(registry(write), cancelAwareGate);
@@ -476,7 +495,7 @@ class StreamingToolExecutorTest {
         AtomicBoolean gateCalled = new AtomicBoolean(false);
         ConfirmationGate trackingGate = (call, events, cancelled) -> {
             gateCalled.set(true);
-            return false;
+            return PermissionResponse.DENY;
         };
         List<String> log = new ArrayList<>();
         Tool tool = new InteractiveStub("AskUser", log);
@@ -509,5 +528,97 @@ class StreamingToolExecutorTest {
         List<AgentEvent> list = new ArrayList<>();
         events.drainTo(list);
         assertTrue(list.isEmpty(), "取消的交互调用不应发 ToolResultEvent");
+    }
+
+    // ---- 阶段五：权限检查接入（T9） ----
+
+    @Test
+    void blacklistedCommandDeniedEvenInBypassModeWithUniquePrefix() {
+        Tool bash = new RecordingTool("Bash", Permission.EXEC, new ArrayList<>());
+        BlockingQueue<AgentEvent> events = queue();
+        StreamingToolExecutor executor = new StreamingToolExecutor(registry(bash),
+                new ToolContext(tempDir), checker(PermissionMode.BYPASS), ConfirmationGate.ALWAYS_ALLOW);
+        List<ToolResult> results = executor.execute(
+                List.of(call("id1", "Bash", JSON.createObjectNode().put("command", "rm -rf /"))),
+                events, new AtomicBoolean(false));
+
+        assertTrue(results.get(0).isError());
+        assertTrue(results.get(0).content().startsWith("权限拒绝：危险命令："),
+                "前缀应唯一：" + results.get(0).content());
+        assertTrue(!results.get(0).content().contains("权限拒绝：权限拒绝"),
+                "不得出现重复前缀");
+    }
+
+    @Test
+    void askDeniedReturnsUserRejectionFailure() {
+        Tool write = new RecordingTool("WriteFile", Permission.WRITE, new ArrayList<>());
+        BlockingQueue<AgentEvent> events = queue();
+        StreamingToolExecutor executor = new StreamingToolExecutor(registry(write),
+                new ToolContext(tempDir), checker(PermissionMode.DEFAULT), DENY);
+        List<ToolResult> results = executor.execute(
+                List.of(call("id1", "WriteFile",
+                        JSON.createObjectNode().put("file_path", tempDir.resolve("a.txt").toString()))),
+                events, new AtomicBoolean(false));
+
+        assertTrue(results.get(0).isError());
+        assertTrue(results.get(0).content().contains("用户拒绝执行"));
+    }
+
+    @Test
+    void askAllowExecutesTool() {
+        List<String> log = new ArrayList<>();
+        Tool write = new RecordingTool("WriteFile", Permission.WRITE, log);
+        BlockingQueue<AgentEvent> events = queue();
+        StreamingToolExecutor executor = new StreamingToolExecutor(registry(write),
+                new ToolContext(tempDir), checker(PermissionMode.DEFAULT), APPROVE);
+        List<ToolResult> results = executor.execute(
+                List.of(call("id1", "WriteFile",
+                        JSON.createObjectNode().put("file_path", tempDir.resolve("a.txt").toString()))),
+                events, new AtomicBoolean(false));
+
+        assertFalse(results.get(0).isError());
+        assertTrue(log.contains("WriteFile_start"), "批准后工具应执行");
+    }
+
+    @Test
+    void allowAlwaysPersistsAndSkipsGateOnSecondCall() throws Exception {
+        List<String> log = new ArrayList<>();
+        Tool write = new RecordingTool("WriteFile", Permission.WRITE, log);
+        AtomicBoolean gateCalled = new AtomicBoolean(false);
+        ConfirmationGate alwaysGate = (call, events, cancelled) -> {
+            gateCalled.set(true);
+            return PermissionResponse.ALLOW_ALWAYS;
+        };
+        BlockingQueue<AgentEvent> events = queue();
+        StreamingToolExecutor executor = new StreamingToolExecutor(registry(write),
+                new ToolContext(tempDir), checker(PermissionMode.DEFAULT), alwaysGate);
+        JsonNode args = JSON.createObjectNode().put("file_path", tempDir.resolve("a.txt").toString());
+
+        executor.execute(List.of(call("id1", "WriteFile", args)), events, new AtomicBoolean(false));
+        assertTrue(log.contains("WriteFile_start"), "始终允许后应执行");
+        assertTrue(gateCalled.get());
+
+        // 第二次同参数：会话「始终允许」命中，不再弹确认
+        gateCalled.set(false);
+        executor.execute(List.of(call("id2", "WriteFile", args)), events, new AtomicBoolean(false));
+        assertFalse(gateCalled.get(), "第二次应走会话「始终允许」直接放行");
+        assertTrue(Files.exists(tempDir.resolve("l.yaml")), "「始终允许」应持久化到本地规则文件");
+        assertTrue(Files.readString(tempDir.resolve("l.yaml")).contains("effect: allow"));
+    }
+
+    @Test
+    void readToolOutsideSandboxDenied() {
+        Tool read = new RecordingTool("ReadFile", Permission.READ, new ArrayList<>());
+        BlockingQueue<AgentEvent> events = queue();
+        StreamingToolExecutor executor = new StreamingToolExecutor(registry(read),
+                new ToolContext(tempDir), checker(PermissionMode.DEFAULT), ConfirmationGate.ALWAYS_ALLOW);
+        String outside = Path.of(System.getProperty("user.home")).resolve("secret.txt").toString();
+        List<ToolResult> results = executor.execute(
+                List.of(call("id1", "ReadFile", JSON.createObjectNode().put("file_path", outside))),
+                events, new AtomicBoolean(false));
+
+        assertTrue(results.get(0).isError());
+        assertTrue(results.get(0).content().startsWith("权限拒绝：路径"));
+        assertTrue(results.get(0).content().contains("超出沙箱范围"));
     }
 }

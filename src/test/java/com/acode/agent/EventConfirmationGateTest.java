@@ -1,18 +1,18 @@
 package com.acode.agent;
 
-import com.acode.agent.AgentEvent.ConfirmationRequestEvent;
-import com.acode.provider.ToolUseBlock;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.Test;
-
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.acode.agent.AgentEvent.ConfirmationRequestEvent;
+import com.acode.permission.PermissionResponse;
+import com.acode.provider.ToolUseBlock;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.junit.jupiter.api.Test;
 
 class EventConfirmationGateTest {
 
@@ -27,7 +27,7 @@ class EventConfirmationGateTest {
     }
 
     @Test
-    void confirmEmitsEventThenReturnsTrueWhenApproved() throws Exception {
+    void confirmEmitsEventThenReturnsAllowWhenApproved() throws Exception {
         BlockingQueue<AgentEvent> events = queue();
         JsonNode args = JSON.createObjectNode().put("file_path", "a.txt");
         AtomicBoolean cancelled = new AtomicBoolean(false);
@@ -35,13 +35,13 @@ class EventConfirmationGateTest {
         Thread responder = Thread.ofVirtual().start(() -> {
             try {
                 captured[0] = (ConfirmationRequestEvent) events.take();
-                captured[0].response().answer(true);
+                captured[0].response().answer(PermissionResponse.ALLOW);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
         });
         EventConfirmationGate gate = new EventConfirmationGate();
-        assertTrue(gate.confirm(call("WriteFile", args), events, cancelled));
+        assertEquals(PermissionResponse.ALLOW, gate.confirm(call("WriteFile", args), events, cancelled));
         responder.join(1000);
 
         assertEquals("toolu_1", captured[0].toolId());
@@ -50,27 +50,45 @@ class EventConfirmationGateTest {
     }
 
     @Test
-    void confirmReturnsFalseWhenRejected() throws Exception {
+    void confirmReturnsDenyWhenRejected() throws Exception {
         BlockingQueue<AgentEvent> events = queue();
         AtomicBoolean cancelled = new AtomicBoolean(false);
         Thread responder = Thread.ofVirtual().start(() -> {
             try {
-                ((ConfirmationRequestEvent) events.take()).response().answer(false);
+                ((ConfirmationRequestEvent) events.take()).response().answer(PermissionResponse.DENY);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
         });
         EventConfirmationGate gate = new EventConfirmationGate();
-        assertFalse(gate.confirm(call("Bash", JSON.createObjectNode()), events, cancelled));
+        assertEquals(PermissionResponse.DENY, gate.confirm(call("Bash", JSON.createObjectNode()), events, cancelled));
         responder.join(1000);
     }
 
     @Test
-    void confirmReturnsFalseWhenCancelled() {
+    void confirmReturnsAllowAlwaysWhenChosen() throws Exception {
+        BlockingQueue<AgentEvent> events = queue();
+        AtomicBoolean cancelled = new AtomicBoolean(false);
+        Thread responder = Thread.ofVirtual().start(() -> {
+            try {
+                ((ConfirmationRequestEvent) events.take()).response().answer(PermissionResponse.ALLOW_ALWAYS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        EventConfirmationGate gate = new EventConfirmationGate();
+        assertEquals(PermissionResponse.ALLOW_ALWAYS,
+                gate.confirm(call("WriteFile", JSON.createObjectNode()), events, cancelled));
+        responder.join(1000);
+    }
+
+    @Test
+    void confirmReturnsDenyWhenCancelled() {
         BlockingQueue<AgentEvent> events = queue();
         AtomicBoolean cancelled = new AtomicBoolean(true);
         EventConfirmationGate gate = new EventConfirmationGate();
-        assertFalse(gate.confirm(call("WriteFile", JSON.createObjectNode()), events, cancelled));
+        assertEquals(PermissionResponse.DENY,
+                gate.confirm(call("WriteFile", JSON.createObjectNode()), events, cancelled));
     }
 
     @Test

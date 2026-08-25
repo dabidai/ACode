@@ -324,3 +324,67 @@
 
 1. 按 docs/ch05/eval-scenarios.md 的 5 个场景逐一执行，逐条对照「输入示例 / 期望行为 / 对照判据」。
 2. 每次场景后看脚注 `cache_read`，记录缓存命中情况（eval-scenarios.md 附录）。
+
+# ACode 阶段五：权限系统 — 手动验收步骤
+
+## 前置
+
+- 构建：`mvn -DskipTests package`（构建环境 `JAVA_HOME=D:\java\jdk21`），运行 `java -jar target/acode.jar`。
+- 默认权限模式来自 `.acode/config.yaml` 的 `permission_mode`；未配置时按 default。
+- 每次切档用 `/permission-mode <模式>`（即时生效、不写回 config）。
+
+## PERM1 default 模式：读不弹、写/命令弹三选一
+
+1. 进入会话后先 `ReadFile` 一个项目内文件（或让它读 `.acode/config.yaml`）。
+2. 预期：`ReadFile`/`Glob`/`Grep` 直接执行、**无确认弹窗**。
+3. 再触发一次 `WriteFile` 或 `Bash`（例如问「把 hello.txt 内容追加一行」）。
+4. 预期：弹出 **「放行 / 始终允许 / 拒绝」三选一**菜单；选「放行」执行、选「拒绝」模型收到失败结果并换策略继续。
+
+## PERM2 危险命令硬拦截（黑名单最高优先）
+
+1. 让模型执行 `rm -rf /`（可直接在消息里写「执行 rm -rf /」）。
+2. 预期：即使 default 下 Bash 会弹窗，`rm -rf /` 也**不弹窗、直接拒绝**；工具结果显示「权限拒绝：危险命令：…」，Agent 换策略继续，会话正常结束、不崩溃。
+
+## PERM3 acceptEdits：写不弹、命令弹
+
+1. `/permission-mode acceptEdits`。
+2. 触发 `WriteFile`/`EditFile`：预期**无弹窗**直接执行。
+3. 触发 `Bash`：预期**仍弹三选一**。
+
+## PERM4 plan 模式：只读 + 计划文件放行
+
+1. `/permission-mode plan`。
+2. `ReadFile` 正常；写非计划文件（如改 `src/` 下文件）被确认/拒绝。
+3. `/plan` 进入规划并交付：写入 `{工作目录}/.acode/plans/` 的计划文件**自动放行、无弹窗**。
+
+## PERM5 bypassPermissions：全放行但黑名单仍生效
+
+1. `/permission-mode bypassPermissions`。
+2. 触发 `WriteFile`/`Bash`：预期**全程无弹窗**。
+3. 仍执行 `rm -rf /`：预期**仍被拦截**、结果显示「权限拒绝」。
+
+## PERM6 规则拦截敏感文件
+
+1. 在 `{工作目录}/.acode/permissions.yaml` 写：
+   ```yaml
+   rules:
+     - rule: ReadFile(*.env*)
+       effect: deny
+   ```
+   重启 ACode（规则文件改动需重启生效）。
+2. 让模型读项目根下的 `.env`：预期被拒，deny 原因返回模型（「权限拒绝：规则拒绝」）。
+
+## PERM7 「始终允许」持久化
+
+1. default 模式下确认一个 `WriteFile` 时选 **「始终允许」**。
+2. 预期：本次执行成功；`{工作目录}/.acode/permissions.local.yaml` 出现对应 `rule: WriteFile(...)` + `effect: allow`。
+3. 同一操作第二次调用：**不再弹窗**、直接执行。
+4. 退出重启 ACode：规则仍在，同类操作仍自动放行（持久化生效）。
+
+## PERM8 /permission-mode 切档即时生效
+
+1. `/permission-mode`（无参数）→ 输出当前模式。
+2. `/permission-mode acceptEdits` → 输出已切换；`WriteFile` 不再弹窗。
+3. `/permission-mode ACCEPT_EDITS` / `yolo` / `acceptEdits extra` → 输出非法提示、模式不变。
+4. 检查 `.acode/config.yaml` 内容不变；重启后按 config 值恢复。
+

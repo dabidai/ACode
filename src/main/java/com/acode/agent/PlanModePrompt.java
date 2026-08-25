@@ -23,7 +23,7 @@ public class PlanModePrompt {
                     + "the .acode/plans/ directory for later execution.\n"
                     + "\n"
                     + "When requirements are unclear or there are multiple reasonable approaches, "
-                    + "ask the user with AskUserQuestion before finalizing. Do not call ExitPlanMode "
+                    + "ask the user with AskUser before finalizing. Do not call ExitPlanMode "
                     + "until the plan is complete and can be executed as written.";
 
     private static final String SPARSE =

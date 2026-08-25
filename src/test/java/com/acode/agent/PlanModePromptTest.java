@@ -2,7 +2,6 @@ package com.acode.agent;
 
 import com.acode.tool.DefaultToolset;
 import com.acode.tool.ToolRegistry;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashSet;
@@ -29,7 +28,6 @@ class PlanModePromptTest {
         return new HashSet<>(registry.names());
     }
 
-    @Disabled("待修复：PlanModePrompt FULL 提醒提到未注册工具名 AskUserQuestion（实际注册名为 AskUser，见 AskUserTool）")
     @Test
     void fullReminderMentionsOnlyRegisteredToolNames() {
         String full = PlanModePrompt.buildReminder(1);

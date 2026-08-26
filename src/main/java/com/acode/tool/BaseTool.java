@@ -1,5 +1,6 @@
 package com.acode.tool;
 
+import com.acode.util.VirtualThreads;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -7,8 +8,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.util.List;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -23,7 +22,6 @@ import java.util.concurrent.TimeoutException;
 public abstract class BaseTool implements Tool {
 
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final ExecutorService EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
     private static final long DEFAULT_TIMEOUT_MILLIS = 10_000;
 
     private final String name;
@@ -58,7 +56,7 @@ public abstract class BaseTool implements Tool {
             return ToolResult.failure(validationError);
         }
         long timeout = timeoutMillis(input);
-        Future<ToolResult> future = EXECUTOR.submit(() -> doExecute(input, context));
+        Future<ToolResult> future = VirtualThreads.POOL.submit(() -> doExecute(input, context));
         try {
             return future.get(timeout, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {

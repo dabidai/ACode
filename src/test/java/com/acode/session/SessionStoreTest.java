@@ -141,6 +141,72 @@ class SessionStoreTest {
         assertFalse(result.isError());
     }
 
+    @Test
+    void legacySessionWithoutRoleFieldRestoresInferredRoles() throws IOException {
+        String legacyJson = """
+                {"id":"legacy1","createdAtEpochMillis":1,"messages":[
+                  {"content":[{"type":"text","text":"旧提问"}]},
+                  {"content":[{"type":"text","text":"旧回答"},{"type":"tool_use","id":"u1","name":"ReadFile","input":{"file_path":"a.txt"}}]},
+                  {"content":[{"type":"tool_result","tool_use_id":"u1","content":"文件内容","is_error":false}]},
+                  {"content":[{"type":"text","text":"继续回答"}]}
+                ]}""";
+        Files.writeString(tempDir.resolve("legacy1.json"), legacyJson);
+
+        Session loaded = store().load("legacy1").orElseThrow();
+
+        assertEquals(List.of(USER, ASSISTANT, USER, ASSISTANT),
+                loaded.getMessages().stream().map(ChatMessage::role).toList(),
+                "无 role 字段的旧版消息应按 tool 块信号与首条 USER 交替规则推断角色");
+        ChatMessage toolUse = loaded.getMessages().get(1);
+        assertEquals("旧回答", toolUse.content(), "修复应保留文本内容");
+        assertEquals("ReadFile",
+                ((ToolUseBlock) toolUse.blocks().get(1)).name(), "修复应保留工具块");
+    }
+
+    @Test
+    void legacyTextOnlySessionAlternatesRolesFromUser() throws IOException {
+        String legacyJson = """
+                {"id":"legacy2","createdAtEpochMillis":1,"messages":[
+                  {"content":[{"type":"text","text":"一"}]},
+                  {"content":[{"type":"text","text":"二"}]},
+                  {"content":[{"type":"text","text":"三"}]}
+                ]}""";
+        Files.writeString(tempDir.resolve("legacy2.json"), legacyJson);
+
+        Session loaded = store().load("legacy2").orElseThrow();
+
+        assertEquals(List.of(USER, ASSISTANT, USER),
+                loaded.getMessages().stream().map(ChatMessage::role).toList(),
+                "纯文本旧版消息应从首条 USER 开始交替推断角色");
+    }
+
+    @Test
+    void legacySessionWithRoleFieldUnaffected() throws IOException {
+        String legacyJson = """
+                {"id":"old1","createdAtEpochMillis":1,"messages":[
+                  {"role":"USER","content":"旧版文本"},
+                  {"role":"ASSISTANT","content":"旧版回答"}
+                ]}""";
+        Files.writeString(tempDir.resolve("old1.json"), legacyJson);
+
+        Session loaded = store().load("old1").orElseThrow();
+
+        assertEquals(List.of(USER, ASSISTANT),
+                loaded.getMessages().stream().map(ChatMessage::role).toList(),
+                "带 role 字段的会话加载后角色应原样保留");
+        assertEquals("旧版文本", loaded.getMessages().get(0).content(),
+                "record 时代纯字符串 content 应兼容解析");
+    }
+
+    @Test
+    void savedSessionContainsRoleField() throws IOException {
+        store().save(session(null, List.of(user("你好"), assistant("世界"))));
+
+        String raw = Files.readString(onlyJsonFile());
+        assertTrue(raw.contains("\"role\":\"USER\""), "保存的会话 JSON 应含 USER 角色字段");
+        assertTrue(raw.contains("\"role\":\"ASSISTANT\""), "保存的会话 JSON 应含 ASSISTANT 角色字段");
+    }
+
     private int countJsonFiles() {
         try (var stream = Files.list(tempDir)) {
             return (int) stream.filter(p -> p.getFileName().toString().endsWith(".json")).count();

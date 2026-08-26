@@ -29,6 +29,17 @@
 - **修复**（commit ef3b480）：改用 `Files.walkFileTree`，`preVisitDirectory` 对 `.git`/`target` 返回 `SKIP_SUBTREE`。
 - **回归测试**：`GlobToolTest.globSkipsDotGitAndTargetDirectories`
 
+## 已修复（阶段二遗留，本次专项修复）
+
+### ChatMessage.role() 序列化缺陷（会话恢复丢角色）
+
+- **位置**：`src/main/java/com/acode/provider/ChatMessage.java`（`role()` 访问器）、`src/main/java/com/acode/session/SessionStore.java`（存量修复）
+- **现象**：`role()` 是普通类上的 record 风格 getter（无 `get` 前缀）且无 `@JsonProperty`，Jackson 对非 record 类只自动识别 `getX()/isX()` 命名，序列化时静默丢弃 role 字段（`blocks()` 因有 `@JsonProperty("content")` 未受影响）。
+- **影响**：会话恢复后所有消息角色为 null——渲染丢 `● ` 前缀、user/assistant 显示混淆；`AnthropicProvider.buildBody` 的 `switch(message.role())` 与 `OpenAiProvider` 纯文本路径 `role().name()` 直接 NPE，恢复的会话发不出任何请求。ch03 改 class 后用户本机 21 个会话文件全部缺 role（ch02 record 时代正常）。
+- **修复**（commit 9b4c436）：`role()` 补 `@JsonProperty("role")`，序列化恢复写出 role。回归测试：`ChatMessageTest.roleRoundTripsForAllRoles` + 既有 3 个往返测试补 role 断言（原测试漏掉 role 断言正是缺陷漏网原因）；`SessionManagerTest.restoreIfResumeTrueRestoresMessagesAndBanner` 恢复渲染断言改为修复后正确行为（用户消息带 ● 前缀）。
+- **存量数据修复**（commit 6390310）：`SessionStore.read()` 汇聚处一次性推断角色——已带 role 原样保留、含 tool_use 块→ASSISTANT、含 tool_result 块→USER、纯文本按首条 USER 交替推断。**只在内存中修复，不改写任何会话文件**；下次 `/resume` 自动生效，重新保存后落盘新格式。回归测试：`SessionStoreTest.legacySessionWithoutRoleFieldRestoresInferredRoles` / `legacyTextOnlySessionAlternatesRolesFromUser` / `legacySessionWithRoleFieldUnaffected` / `savedSessionContainsRoleField`。
+- **已知轻微边缘**：紧跟 tool_result 的截断续写提示（真实角色 USER）会被交替规则判成 ASSISTANT；Anthropic 合并相邻同角色消息，影响仅为该提示渲染无 ● 前缀，且仅存在于已缺 role 的存量文件，新保存文件不受影响。
+
 ## 已确认覆盖（记录备查）
 
 - **awaitLoopEnd 超时后旧 agent 残留写入被 epoch 忽略**：控制器级无法编排滞留 agent（`ToolRegistry` 私有无注入点，无法注册吞中断桩工具；provider 阻塞也不滞留 agent 线程）。该行为由 `AgentTest.staleAgentCannotWriteIntoNextAgentTurn` 确定性覆盖；控制器侧可测部分由 `ConversationControllerTest.staleAgentResultIgnoredAfterAwaitLoopEndTimeout` 覆盖。

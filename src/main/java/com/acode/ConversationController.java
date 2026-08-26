@@ -126,6 +126,7 @@ public class ConversationController {
     private PermissionChecker permissionChecker;
 
     private ExchangeRunner exchangeRunner;
+    private CommandProcessor commandProcessor;
 
     /** 权限沙箱根：生产为当前工作目录；测试可注入 @TempDir 避免文件路径被沙箱拦截。 */
     private Path projectRoot = Path.of(System.getProperty("user.dir"));
@@ -194,7 +195,7 @@ public class ConversationController {
             output.appendLine("输入 /help 查看命令，/quit 退出");
             live.appendCommitted(writer, "输入 /help 查看命令，/quit 退出");
             restoreIfResume();
-            mainLoop();
+            commandProcessor().mainLoop();
         } catch (IllegalStateException e) {
             System.err.println(e.getMessage());
         }
@@ -213,88 +214,19 @@ public class ConversationController {
         sessionManager().restoreIfResume(resume);
     }
 
-    private void mainLoop() {
-        InputPane input = new InputPane(tui.terminal(), "> ");
-        LiveRegionRenderer live = liveRenderer();
-        Writer writer = screenWriter();
-        while (true) {
-            String line;
-            try {
-                line = input.readLine();
-            } catch (UserInterruptException | EndOfFileException e) {
-                saveSession();
-                return;
-            }
-            switch (CommandRouter.route(line)) {
-                case QUIT -> {
-                    saveSession();
-                    return;
-                }
-                case CLEAR -> {
-                    conversation.clear();
-                    output.clear();
-                    output.appendLine("（已清空）");
-                    live.appendCommitted(writer, "（已清空）");
-                }
-                case HELP -> {
-                    output.append(CommandRouter.HELP_TEXT);
-                    live.appendCommitted(writer, CommandRouter.HELP_TEXT);
-                }
-                case RESUME -> selectSession();
-                case PLAN -> {
-                    planMode = true;
-                    output.appendLine("（已进入规划模式：只读探索，计划落盘到 .acode/plans/）");
-                    live.appendCommitted(writer, "（已进入规划模式：只读探索，计划落盘到 .acode/plans/）");
-                }
-                case DO -> {
-                    planMode = false;
-                    output.appendLine("（已退出规划模式，开始执行）");
-                    live.appendCommitted(writer, "（已退出规划模式，开始执行）");
-                }
-                case PERMISSION_MODE -> handlePermissionMode(line.trim().substring("/permission-mode".length()).trim(), live, writer);
-                case SKIP -> {
-                    // 空白输入，忽略
-                }
-                case CHAT -> handleChat(line);
-            }
+    /** 主循环命令分发：惰性构造（首次使用时以当前 tui/output/应答器装配）。 */
+    private CommandProcessor commandProcessor() {
+        if (commandProcessor == null) {
+            commandProcessor = new CommandProcessor(tui, output, renderContext, conversation,
+                    sessionManager(), this::permissionChecker, this::handleChat,
+                    planMode -> this.planMode = planMode);
         }
+        return commandProcessor;
     }
 
-    /**
-     * /permission-mode 切档：无参数输出当前模式；参数须为 4 合法值之一（大小写敏感、无多余参数）。
-     * 非法值输出错误、模式不变；合法切档只改内存 volatile mode，不写回 config.yaml。
-     * 包可见：测试直接调用断言切档行为。
-     */
+    /** /permission-mode 切档（委托 CommandProcessor；测试直接调用）。 */
     void handlePermissionMode(String arg, LiveRegionRenderer live, Writer writer) {
-        String modeArg = arg == null ? "" : arg.trim();
-        if (modeArg.isEmpty()) {
-            String line = "当前权限模式：" + currentPermissionModeName();
-            output.appendLine(line);
-            live.appendCommitted(writer, line);
-            return;
-        }
-        PermissionMode mode = PermissionMode.fromConfig(modeArg);
-        if (mode == null) {
-            String line = "（非法权限模式：" + modeArg + "，可选：default/acceptEdits/plan/bypassPermissions）";
-            output.appendLine(line);
-            live.appendCommitted(writer, line);
-            return;
-        }
-        if (permissionChecker == null) {
-            permissionChecker = buildPermissionChecker();
-        }
-        permissionChecker.setMode(mode);
-        String line = "（已切换到权限模式：" + mode.configValue() + "）";
-        output.appendLine(line);
-        live.appendCommitted(writer, line);
-    }
-
-    private String currentPermissionModeName() {
-        if (permissionChecker != null) {
-            return permissionChecker.mode().configValue();
-        }
-        String configured = config.getPermissionMode();
-        return configured != null ? configured : "default";
+        commandProcessor().handlePermissionMode(arg, live, writer);
     }
 
     /**

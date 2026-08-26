@@ -11,14 +11,13 @@ import com.acode.tool.ToolContext;
 import com.acode.tool.ToolExecutor;
 import com.acode.tool.ToolRegistry;
 import com.acode.tool.ToolResult;
+import com.acode.util.VirtualThreads;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -108,16 +107,19 @@ public class StreamingToolExecutor {
     private void runConcurrently(List<Integer> indexes, List<ToolUseBlock> calls,
                                  ToolResult[] results, BlockingQueue<AgentEvent> events,
                                  AtomicBoolean cancelled) {
-        try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
-            List<Future<?>> futures = new ArrayList<>();
-            for (int index : indexes) {
-                futures.add(pool.submit(() -> runCall(index, calls, results, events, cancelled)));
-            }
+        List<Future<?>> futures = new ArrayList<>();
+        for (int index : indexes) {
+            futures.add(VirtualThreads.POOL.submit(() -> runCall(index, calls, results, events, cancelled)));
+        }
+        try {
             for (Future<?> future : futures) {
                 future.get();
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            for (Future<?> future : futures) {
+                future.cancel(true); // 等价原 try-with-resources close() 的 shutdownNow：取消未完成任务
+            }
         } catch (java.util.concurrent.ExecutionException e) {
             // runCall 不抛异常，理论上不可达；防御性捕获避免吞掉虚拟线程异常
             throw new IllegalStateException("工具执行线程异常", e.getCause());

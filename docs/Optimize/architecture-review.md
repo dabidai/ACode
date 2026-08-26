@@ -1,6 +1,6 @@
 # ACode 架构审查报告
 
-> 修复状态（2026-08-25）：22/24 条已修复（严重 1-3、中等 4/8/9/10/11/12/13、轻微 14/15/16/17/18/19/20/21/22/23，commit 见 git log 各修复条目）。剩余：#7 ConversationController 上帝类拆分、#24 线程模型统一，记录待办未做。
+> 修复状态（2026-08-25）：24/24 条已修复。三条严重 + 14 条中小改动先期完成；#7 ConversationController 上帝类拆分（抽 6 类：HistoryRenderer/RenderContext/SessionManager/PromptAnswerer/ExchangeRunner/CommandProcessor，controller 749→361 行）与 #24 线程模型统一（应用级 VirtualThreads.POOL 共享虚拟线程池）同日完成，commit 见 git log 各 refactor 条目。各新类均有配套单元测试，全量 610 测试全绿。
 
 - 审查日期：2026-08-25
 - 审查范围：

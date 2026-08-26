@@ -28,6 +28,9 @@ public final class SessionManager {
     private RenderContext renderContext;
     private AcodeTerminal tui;
 
+    /** 最近一次加载/恢复的会话消息对象（对象同一性比较：resume 后未新增消息则退出不重复存档）。 */
+    private List<ChatMessage> loadedMessages;
+
     public SessionManager(SessionStore sessionStore, Conversation conversation) {
         this.sessionStore = sessionStore;
         this.conversation = conversation;
@@ -51,6 +54,7 @@ public final class SessionManager {
             return;
         }
         Session session = latest.get();
+        loadedMessages = session.getMessages();
         LiveRegionRenderer live = renderContext.liveRenderer();
         Writer writer = renderContext.screenWriter();
         for (ChatMessage message : session.getMessages()) {
@@ -99,11 +103,14 @@ public final class SessionManager {
         return "（无用户消息）";
     }
 
-    /** 用某个会话的历史替换当前对话：回滚为 append-only，历史经追加式渲染进回滚（不重复打印 banner）。 */
+    /** 加载会话即替换当前视图：先清屏（滚动缓冲保留）+ 重置输出模型，历史再追加式渲染进回滚。 */
     public void loadSession(Session session) {
         conversation.clear();
+        loadedMessages = session.getMessages();
         LiveRegionRenderer live = renderContext.liveRenderer();
         Writer writer = renderContext.screenWriter();
+        live.clearScreen(writer);
+        output.clear();
         output.appendLine("（已加载会话 " + session.getId() + "，共 " + session.getMessages().size() + " 条消息）");
         live.appendCommitted(writer, "（已加载会话 " + session.getId() + "，共 " + session.getMessages().size() + " 条消息）");
         for (ChatMessage message : session.getMessages()) {
@@ -127,9 +134,12 @@ public final class SessionManager {
         }
     }
 
-    /** 退出时把完整历史存为新会话文件；空会话不存。 */
+    /** 退出时把完整历史存为新会话文件；空会话不存；resume 后未新增消息的原样会话也不重复存档。 */
     public void saveSession() {
         if (conversation.messageCount() == 0) {
+            return;
+        }
+        if (isUnchangedReload()) {
             return;
         }
         try {
@@ -137,5 +147,22 @@ public final class SessionManager {
         } catch (RuntimeException e) {
             log.warn("保存会话失败：{}", e.getMessage());
         }
+    }
+
+    /** conversation 是否仍是某次加载/恢复的原样内容（同一批消息对象、数量未增也未清空重来）。 */
+    private boolean isUnchangedReload() {
+        if (loadedMessages == null) {
+            return false;
+        }
+        List<ChatMessage> history = conversation.history();
+        if (history.size() != loadedMessages.size()) {
+            return false;
+        }
+        for (int i = 0; i < history.size(); i++) {
+            if (history.get(i) != loadedMessages.get(i)) {
+                return false;
+            }
+        }
+        return true;
     }
 }

@@ -62,6 +62,7 @@ public class CommandProcessor {
                 }
                 case CLEAR -> {
                     conversation.clear();
+                    live.clearScreen(writer);
                     output.clear();
                     output.appendLine("（已清空）");
                     live.appendCommitted(writer, "（已清空）");

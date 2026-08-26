@@ -143,6 +143,15 @@ public class LiveRegionRenderer {
     }
 
     /**
+     * 整屏清空（ED2 + 光标归位）：已提交内容保留在终端滚动缓冲，仅从当前视图移除。
+     * 用于「加载会话 / /clear」等重置视图的瞬间；活跃区已写行数归零。
+     */
+    public void clearScreen(Writer out) {
+        writeRaw(out, "\033[2J\033[H");
+        rowsWritten = 0;
+    }
+
+    /**
      * 追加已提交内容：按 \n 拆行后每行写 行\r\n，原生折行进回滚、可划选复制，
      * 不计已写行数（banner / 输入 / 历史 / 状态行用）。结尾换行不产生多余空行。
      */

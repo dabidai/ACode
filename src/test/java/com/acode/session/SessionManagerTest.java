@@ -138,6 +138,73 @@ class SessionManagerTest {
                 "无历史会话时选择菜单应提示「没有可恢复的会话」");
     }
 
+    @Test
+    void saveSessionAfterVerbatimReloadSkipsDuplicate() {
+        SessionStore store = store();
+        store.save(new Session(null, System.currentTimeMillis(),
+                List.of(user("旧问"), assistant("旧答"))));
+        Conversation conversation = conversation();
+        SessionManager manager = manager(conversation, new OutputPane(), new RenderContext(new AppConfig()));
+
+        manager.loadSession(store.readLatest().orElseThrow());
+        assertEquals(2, conversation.messageCount(), "加载后会话应包含全部历史");
+
+        manager.saveSession();
+
+        assertEquals(1, countJsonFiles(), "resume 后未新增消息直接退出，不应再存一份重复会话");
+    }
+
+    @Test
+    void saveSessionAfterRestoreWithoutNewMessagesSkipsDuplicate() {
+        SessionStore store = store();
+        store.save(new Session(null, System.currentTimeMillis(),
+                List.of(user("旧问"), assistant("旧答"))));
+        Conversation conversation = conversation();
+        SessionManager manager = manager(conversation, new OutputPane(), new RenderContext(new AppConfig()));
+
+        manager.restoreIfResume(true);
+        assertEquals(2, conversation.messageCount());
+
+        manager.saveSession();
+
+        assertEquals(1, countJsonFiles(), "--resume 启动后未新增消息直接退出，不应重复存档");
+    }
+
+    @Test
+    void saveSessionAfterReloadWithNewMessagesSavesContinuation() {
+        SessionStore store = store();
+        store.save(new Session(null, System.currentTimeMillis(),
+                List.of(user("旧问"), assistant("旧答"))));
+        Conversation conversation = conversation();
+        SessionManager manager = manager(conversation, new OutputPane(), new RenderContext(new AppConfig()));
+        manager.loadSession(store.readLatest().orElseThrow());
+        conversation.addMessage(user("追问"));
+
+        manager.saveSession();
+
+        assertEquals(2, countJsonFiles(), "resume 后新增消息，退出应另存续写会话");
+        assertEquals(List.of("旧问", "旧答", "追问"),
+                store.readLatest().orElseThrow().getMessages().stream().map(ChatMessage::content).toList(),
+                "续写文件应包含加载历史 + 新增消息");
+    }
+
+    @Test
+    void saveSessionAfterReloadClearAndRechatSameCountSavesNewFile() {
+        SessionStore store = store();
+        store.save(new Session(null, System.currentTimeMillis(), List.of(user("旧问"))));
+        Conversation conversation = conversation();
+        SessionManager manager = manager(conversation, new OutputPane(), new RenderContext(new AppConfig()));
+        manager.loadSession(store.readLatest().orElseThrow());
+        conversation.clear();
+        conversation.addMessage(user("新问"));
+
+        manager.saveSession();
+
+        assertEquals(2, countJsonFiles(), "/clear 后重聊且消息数恰好相同的新对话应正常存档，不能按数量误判为重复");
+        assertEquals("新问", store.readLatest().orElseThrow().getMessages().get(0).content(),
+                "新存档应是重聊后的内容而非加载的旧会话");
+    }
+
     private int countJsonFiles() {
         try (var stream = Files.list(tempDir)) {
             return (int) stream.filter(p -> p.getFileName().toString().endsWith(".json")).count();

@@ -21,6 +21,7 @@ import com.acode.tool.Tool;
 import com.acode.tool.ToolContext;
 import com.acode.tool.ToolRegistry;
 import com.acode.tool.ToolResult;
+import com.acode.util.VirtualThreads;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -28,6 +29,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -309,7 +312,7 @@ public class Agent {
      * 返回 true 表示流式过程中被取消。
      */
     private boolean stream(ChatRequest request, TurnCollector collector) {
-        Thread worker = new Thread(() -> {
+        Future<?> future = VirtualThreads.POOL.submit(() -> {
             try {
                 provider.streamChat(request, collector);
             } catch (RuntimeException e) {
@@ -317,16 +320,16 @@ public class Agent {
                     collector.onError(new ProviderException("生成过程异常：" + e.getMessage(), e));
                 }
             }
-        }, "acode-provider");
-        worker.setDaemon(true);
-        worker.start();
+        });
         try {
-            worker.join();
+            future.get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        } catch (ExecutionException e) {
+            throw new IllegalStateException("provider 流式任务异常", e.getCause());
         }
         if (cancelled.get()) {
-            worker.interrupt();
+            future.cancel(true); // 直连取消 provider 任务（等价原 worker.interrupt，不再间接延迟）
             return true;
         }
         return false;

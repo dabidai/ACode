@@ -41,6 +41,8 @@ public class ChatMessage {
         return new ChatMessage(role, List.of(new TextBlock(content)));
     }
 
+    /** 消息角色。普通类上的 record 风格访问器（无 get 前缀），必须显式注解才能被 Jackson 序列化。 */
+    @JsonProperty("role")
     public Role role() {
         return role;
     }

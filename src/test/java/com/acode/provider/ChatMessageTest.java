@@ -28,8 +28,11 @@ class ChatMessageTest {
         ChatMessage original = ChatMessage.of(USER, "你好，世界");
         String json = JSON.writeValueAsString(original);
         assertTrue(json.contains("\"content\":["));
+        assertTrue(json.contains("\"role\":\"USER\""),
+                "序列化 JSON 应包含 role 字段（会话恢复依赖它）");
         ChatMessage restored = JSON.readValue(json, ChatMessage.class);
         assertEquals("你好，世界", restored.content());
+        assertEquals(USER, restored.role(), "反序列化后 role 应与原值一致");
         assertInstanceOf(TextBlock.class, restored.blocks().get(0));
     }
 
@@ -39,10 +42,12 @@ class ChatMessageTest {
                 new ToolUseBlock("toolu_1", "ReadFile",
                         JSON.readTree("{\"file_path\":\"pom.xml\"}"))));
         String json = JSON.writeValueAsString(m);
+        assertTrue(json.contains("\"role\":\"ASSISTANT\""));
         assertTrue(json.contains("\"type\":\"tool_use\""));
         assertTrue(json.contains("\"id\":\"toolu_1\""));
         assertTrue(json.contains("\"name\":\"ReadFile\""));
         ChatMessage restored = JSON.readValue(json, ChatMessage.class);
+        assertEquals(ASSISTANT, restored.role(), "反序列化后 role 应与原值一致");
         ToolUseBlock block = assertInstanceOf(ToolUseBlock.class, restored.blocks().get(0));
         assertEquals("toolu_1", block.id());
         assertEquals("ReadFile", block.name());
@@ -54,10 +59,12 @@ class ChatMessageTest {
         ChatMessage m = new ChatMessage(USER, List.of(
                 new ToolResultBlock("toolu_1", "文件内容", true)));
         String json = JSON.writeValueAsString(m);
+        assertTrue(json.contains("\"role\":\"USER\""));
         assertTrue(json.contains("\"type\":\"tool_result\""));
         assertTrue(json.contains("\"tool_use_id\":\"toolu_1\""));
         assertTrue(json.contains("\"is_error\":true"));
         ChatMessage restored = JSON.readValue(json, ChatMessage.class);
+        assertEquals(USER, restored.role(), "反序列化后 role 应与原值一致");
         ToolResultBlock block = assertInstanceOf(ToolResultBlock.class, restored.blocks().get(0));
         assertEquals("toolu_1", block.toolUseId());
         assertEquals("文件内容", block.content());
@@ -71,5 +78,16 @@ class ChatMessageTest {
         assertEquals(USER, restored.role());
         assertEquals("旧版文本", restored.content());
         assertInstanceOf(TextBlock.class, restored.blocks().get(0));
+    }
+
+    @Test
+    void roleRoundTripsForAllRoles() throws Exception {
+        for (ChatMessage.Role role : List.of(USER, ASSISTANT)) {
+            ChatMessage original = ChatMessage.of(role, "角色往返");
+            String json = JSON.writeValueAsString(original);
+            assertTrue(json.contains("\"role\":\"" + role.name() + "\""));
+            assertEquals(role, JSON.readValue(json, ChatMessage.class).role(),
+                    "每种持久化角色都应往返一致");
+        }
     }
 }

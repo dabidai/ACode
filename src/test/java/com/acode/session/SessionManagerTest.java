@@ -103,9 +103,10 @@ class SessionManagerTest {
 
         assertEquals(2, conversation.messageCount(), "恢复后会话应包含全部消息");
         assertEquals("旧提问", conversation.history().get(0).content(), "恢复顺序应保持");
-        // 注：ChatMessage.role() 非标准 getter 且无 @JsonProperty，JSON 往返后 role 丢失（既有缺陷），
-        // 恢复渲染按非 USER 分支无 ● 前缀；此处只断言内容与提示行，角色丢失问题记录于测试报告。
-        assertTrue(output.lines().contains("旧提问"), "恢复后应输出消息内容");
+        assertTrue(output.lines().stream().anyMatch(l -> l.startsWith("● ") && l.contains("旧提问")),
+                "恢复后用户消息应渲染为带 ● 前缀（role 已正确序列化往返）");
+        assertTrue(output.lines().contains("旧回答"),
+                "恢复后应输出 assistant 消息内容（无前缀）");
         assertTrue(output.lines().stream().anyMatch(l -> l.startsWith("（已恢复会话 ")),
                 "恢复后应输出「已恢复会话」提示行");
     }

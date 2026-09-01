@@ -37,17 +37,21 @@ public final class RenderContext {
 
     /** 活跃区渲染器：测试注入优先，否则按终端尺寸实时新建（窗口变化随读随取）。 */
     public LiveRegionRenderer liveRenderer() {
+        // 测试注入的假渲染器
         if (live != null) {
             return live;
         }
+        // 真实终端尺寸时读取
         if (tui != null) {
             return new LiveRegionRenderer(tui::width, tui::height);
         }
+        // 无终端时设定
         return new LiveRegionRenderer(80, 24);
     }
 
     /** 活跃区输出目标：测试注入优先，否则用终端 writer；无终端时丢弃到 StringWriter。 */
     public Writer screenWriter() {
+        // 测试注入的StringWriter
         if (screenWriter != null) {
             return screenWriter;
         }
@@ -56,6 +60,7 @@ public final class RenderContext {
             if (!config.isTeeEnabled()) {
                 return w;
             }
+            // 输出日志
             TeeWriter tw = new TeeWriter(w);
             try {
                 tw.logOnly("\n== ACODE TEE w=" + tui.width() + " h=" + tui.height() + " ==\n");
@@ -81,6 +86,7 @@ public final class RenderContext {
             }
         }
 
+        /** 输出内容的同时也写入了日志 */
         @Override
         public void write(char[] cbuf, int off, int len) throws IOException {
             target.write(cbuf, off, len);

@@ -31,11 +31,13 @@ public class ConfigLoader {
     /** 生产入口：全局配置在用户主目录，项目级配置在当前工作目录 */
     public static AppConfig loadDefault() {
         Path global = Path.of(System.getProperty("user.home"), GLOBAL_FILE);
+        // 获取当前目录，作为工作目录
         Path projectDir = Path.of("").toAbsolutePath();
         return load(global, projectDir);
     }
 
     /** 显式路径入口，供测试与外部调用 */
+    // TODO 不只是服务于Java
     public static AppConfig load(Path globalConfig, Path projectDir) {
         AppConfig config = new AppConfig();
         apply(config, readResourceMap(BUILTIN_RESOURCE), "classpath:" + BUILTIN_RESOURCE);
@@ -98,6 +100,7 @@ public class ConfigLoader {
     /** 把配置映射应用到 config：只覆盖出现的字段；未知键、类型错误直接报错 */
     private static void apply(AppConfig config, Map<String, Object> map, String source) {
         for (String key : map.keySet()) {
+            // 把配置中写的出错的键的问题暴露出来，防止静默失败
             if (!KNOWN_KEYS.contains(key)) {
                 throw new ConfigException(source + ": 未知配置项 " + key);
             }

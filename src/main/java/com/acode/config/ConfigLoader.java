@@ -26,7 +26,8 @@ public class ConfigLoader {
     private static final String BUILTIN_RESOURCE = "config.yaml";
     private static final List<String> KNOWN_KEYS =
             List.of("protocol", "model", "base_url", "api_key",
-                    "max_context_tokens", "max_iterations", "tee", "permission_mode", "thinking");
+                    "max_context_tokens", "max_iterations", "tee", "permission_mode", "thinking",
+                    "mcp_servers");
 
     /** 生产入口：全局配置在用户主目录，项目级配置在当前工作目录 */
     public static AppConfig loadDefault() {
@@ -147,6 +148,23 @@ public class ConfigLoader {
                 throw new ConfigException(source + ": thinking 必须是 true/false，当前值 " + value);
             }
             config.setThinking(thinkingValue);
+        }
+        if (map.containsKey("mcp_servers")) {
+            Object value = map.get("mcp_servers");
+            if (!(value instanceof Map<?, ?> servers)) {
+                throw new ConfigException(source + ": mcp_servers 必须是 server 名到配置的映射");
+            }
+            Map<String, McpServerConfig> merged = new LinkedHashMap<>(config.getMcpServers());
+            for (Map.Entry<?, ?> entry : servers.entrySet()) {
+                if (!(entry.getKey() instanceof String name)) {
+                    throw new ConfigException(source + ": mcp_servers 键必须是字符串");
+                }
+                if (!(entry.getValue() instanceof Map<?, ?> serverMap)) {
+                    throw new ConfigException(source + ": mcp_servers." + name + " 必须是映射");
+                }
+                merged.put(name, McpServerConfig.fromYaml(name, serverMap, source));
+            }
+            config.setMcpServers(merged);
         }
     }
 

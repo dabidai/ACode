@@ -20,6 +20,7 @@ import com.acode.config.ConfigException;
 import com.acode.config.ConfigLoader;
 import com.acode.config.ConfigValidator;
 import com.acode.conversation.Conversation;
+import com.acode.mcp.McpManager;
 import com.acode.permission.PermissionChecker;
 import com.acode.permission.PermissionMode;
 import com.acode.permission.PermissionResponse;
@@ -131,6 +132,9 @@ public class ConversationController {
     /** 权限沙箱根：生产为当前工作目录；测试可注入 @TempDir 避免文件路径被沙箱拦截。 */
     private Path projectRoot = Path.of(System.getProperty("user.dir"));
 
+    /** MCP 生命周期管理：启动连接并注册工具、退出清理 stdio 子进程；未配置 mcp_servers 时为空 manager。 */
+    private McpManager mcpManager;
+
     public static void run(boolean resume) {
         AppConfig config;
         try {
@@ -159,6 +163,9 @@ public class ConversationController {
         DefaultToolset.registerAll(toolRegistry);
         toolRegistry.register(new ExitPlanModeTool());
         toolRegistry.register(new AskUserTool());
+        this.mcpManager = new McpManager(config, projectRoot);
+        this.mcpManager.connectAll();
+        this.mcpManager.registerTools(toolRegistry);
         this.sessionManager = new SessionManager(new SessionStore(SessionStore.defaultDir()), conversation);
         this.resume = resume;
         this.renderContext = new RenderContext(config);
@@ -198,6 +205,16 @@ public class ConversationController {
             commandProcessor().mainLoop();
         } catch (IllegalStateException e) {
             System.err.println(e.getMessage());
+        } finally {
+            // /quit 与异常退出都清理 MCP 子进程，避免残留
+            closeMcpManager();
+        }
+    }
+
+    /** 清理 MCP 连接（stdio 子进程销毁、HTTP 会话释放）；幂等。测试亦可直接调用避免残留子进程。 */
+    void closeMcpManager() {
+        if (mcpManager != null) {
+            mcpManager.closeAll();
         }
     }
 

@@ -1,8 +1,10 @@
 package com.acode.config;
 
+import java.util.Map;
+
 /**
  * ACode 配置模型。YAML 字段 snake_case 对应 Java 字段：
- * protocol / model / base_url / api_key / max_context_tokens / max_iterations / tee / thinking / permission_mode
+ * protocol / model / base_url / api_key / max_context_tokens / max_iterations / tee / thinking / permission_mode / mcp_servers
  */
 public class AppConfig {
 
@@ -15,6 +17,7 @@ public class AppConfig {
     private Boolean tee;
     private Boolean thinking;
     private String permissionMode;
+    private Map<String, McpServerConfig> mcpServers;
 
     public String getProtocol() {
         return protocol;
@@ -93,5 +96,14 @@ public class AppConfig {
 
     public void setPermissionMode(String permissionMode) {
         this.permissionMode = permissionMode;
+    }
+
+    /** MCP server 列表（名→配置）；未配置时为空映射。 */
+    public Map<String, McpServerConfig> getMcpServers() {
+        return mcpServers == null ? Map.of() : mcpServers;
+    }
+
+    public void setMcpServers(Map<String, McpServerConfig> mcpServers) {
+        this.mcpServers = mcpServers;
     }
 }

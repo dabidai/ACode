@@ -110,3 +110,66 @@ connect/close/reconnect 共用一把锁；`close()` 置 `volatile closed`，`con
 - **HTTP isAlive 原子更新细节**：实现时按「最近一次请求结果原子记录」处理，不新增接口
 - **安全外壳解耦成装饰器**（SafeTool wrapper，见决策 5 未来方向）：跨工具统一重构，本轮不实施
 - 其他并发点（tools() 快照不可变性、重连期间的超时上限）在实现时随 T6/T7 落定，不单独立文档
+
+---
+
+# 实现落地时的架构影响与偏离记录（T1–T8）
+
+> 最后更新：2026-09-02。记录按 tasks.md 逐任务实现时，对既有接口/主流程做过的增量扩展与偏离，
+> 以及「改动会否破坏当前项目架构」的结论。全部改动均为**增量**：未改任何既有行为路径的语义，
+> 未配置 mcp_servers 时 ACode 行为与之前完全一致。
+
+## 1. Transport 接口新增默认方法 setTerminationHandler
+
+tasks.md T2 定义的 Transport 接口为 `start/send/setMessageHandler/isAlive/close`。实现新增
+`default void setTerminationHandler(Runnable)`：stdio EOF / 进程退出 / 流关闭时恰好回调一次，
+供 `McpClient`（T4）把挂起请求全部异常完成。
+
+**为什么需要**：`McpClient` 的 pending 表只有「响应到达」一种完成途径；传输层死亡（子进程被杀）时
+没有信号通知协议层，挂起的 `future.get(timeout)` 只能靠超时兜底（最长 60s），违背「进程意外死亡被
+及时感知」。有默认空实现，既有契约不被破坏。
+
+## 2. T6 callTool 的重连触发是「isAlive 检测 + 调用失败兜底」双路径
+
+tasks.md 契约原文是「isAlive false 时先重连一次」。实现比它多一条路径：
+`client.callTool` 抛 `Kind.CONNECTION` 失败时也 `reconnectIfNeeded` + 重试一次。
+
+**为什么需要**：HTTP 传输的 `isAlive()` = 「最近一次请求成败」——server 在上次成功请求后刚死亡时，
+`isAlive()` 仍是 `true`（陈旧），单靠 isAlive 检测不到死连接，调用会在 send 时才报连接失败。
+兜底路径保证这种情况也重连一次。**上限**：每个 callTool 最多 2 次建连（检测路径 1 次 + 失败兜底 1 次），
+不无限重试，与 checklist「重连失败返回失败结果、不无限重试」一致。等锁单飞语义不受影响（两条路径
+都经同一个 `connectLock`）。
+
+## 3. T8 接入主流程：构造器同步 connectAll，启动会被慢 server 阻塞
+
+`ConversationController` 构造器在工具注册后同步执行 `McpManager.connectAll()`。若配置了慢/挂起
+的 server（握手超时），启动会阻塞到该 server 超时（默认 60s，config `timeout` 可缩短）。
+
+**对既有架构的影响**：无破坏——未配置 mcp_servers 时 manager 为空、connectAll/registerTools 为
+no-op；既有测试全部以无 mcp_servers 的 config 构造 controller，行为不变。**已知代价**：配置了
+server 后启动多一段阻塞（受超时兜底）。**未来方向（本轮不做）**：异步/并行连接（connectAll 抛到
+VirtualThreads 后注册），需保证「注册发生在 Agent 首次构建前」的时序。
+
+## 4. T8 退出清理挂在 start() 的 finally
+
+`start()` 在 `try (AcodeTerminal)` 外新增 `finally { closeMcpManager(); }`：`/quit` 与异常退出都
+清理 stdio 子进程，满足 checklist「任务管理器无残留」。未改动 try-with-resources 结构本身。
+
+## 5. 测试设施偏离：FakeMcpServer 的 kill 先回包再退出
+
+tasks.md 原设计是 kill「进程直接结束不回包」。实现改为「先回 text 响应再退出」。原因：经
+`McpClient.callTool("kill")` 走完整协议时，不回包会导致挂起请求等超时（最长 60s）而非立即感知死亡。
+回包后退出仍精确模拟「子进程死亡」：EOF → `markDead` → 终止回调 → `isAlive=false`，StdioTransport
+的 EOF 终止语义测试（`subprocessDeathMarksDeadAndTriggersTermination`）不受影响。
+
+## 6. 包可见测试 seam：transport 工厂注入 + connectCount()
+
+`McpServerConnection` 提供包可见构造器（注入 `Function<McpServerConfig, Transport>`）与包可见
+`connectCount()`，用于 McpToolWrapperTest 覆盖「重连失败返回失败、不无限重试」「并发等锁单飞只重建一次」。
+生产路径不受影响（默认工厂按 config.type 建 Stdio/Http 传输）。
+
+## 7. 测试方法名与新增包
+
+新测试方法全部英文驼峰（仓库惯例）；新增包 `com.acode.mcp`（主代码）与 `com.acode.mcp.fakeserver`
+（测试子进程）。未动既有包的任何类语义（config 层仅增量：`AppConfig.mcpServers` 字段、
+`ConfigLoader.KNOWN_KEYS + apply 分支`、新 `McpServerConfig`）。

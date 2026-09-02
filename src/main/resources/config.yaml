@@ -25,3 +25,28 @@ max_iterations: 20
 # acode-sse.log、acode-streamprinter.log、acode-terminal.log（相对启动目录）。
 # 默认 false（不产生诊断日志）；也可用环境变量 ACODE_TEE 兜底开启，不必改配置。
 tee: false
+
+# MCP server 接入（可选，全部注释即不启用）：声明后 ACode 启动自动连接并注册其工具，
+# 工具注册名为「server名_工具名」（如 my_server_list_issues）。请写在外部配置
+# ~/.acode/config.yaml（全局）或 .acode/config.yaml（项目级），本文件不绑定外部 server。
+#
+# 命令启动型（stdio 子进程）：
+# mcp_servers:
+#   my_server:
+#     type: stdio
+#     command: npx
+#     args: [-y, "@modelcontextprotocol/server-everything"]
+#     # env: { KEY: value }                # 可选：显式环境变量（其余本机变量一律不传）
+#     # timeout: 60                        # 可选：握手/工具调用超时秒数，默认 60
+#     # permission: exec                   # 可选：read/write/exec，默认 exec（调用前确认、plan 模式不可见）
+#     # enabled: true                      # 可选：开关，默认开
+#
+# URL 型（Streamable HTTP 远程 server）：
+#   remote_server:
+#     type: http
+#     url: https://example.com/mcp
+#     # headers: { Authorization: "Bearer xxx" }   # 可选：静态请求头透传
+#     # timeout: 60                        # 可选：超时秒数，默认 60
+#     # permission: read                   # 可选：声明 read 则该 server 工具在 /plan 模式可见
+#     # enabled: true                      # 可选：开关，默认开
+

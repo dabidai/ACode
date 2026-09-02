@@ -388,3 +388,58 @@
 3. `/permission-mode ACCEPT_EDITS` / `yolo` / `acceptEdits extra` → 输出非法提示、模式不变。
 4. 检查 `.acode/config.yaml` 内容不变；重启后按 config 值恢复。
 
+---
+
+# ACode 阶段六（ch07）：MCP 工具生态 — 手动验收步骤
+
+> 对应 docs/ch07/checklist.md 的 ⚑ 端到端验收项。前置：构建环境 `JAVA_HOME=D:\java\jdk21`，
+> 已接入一个真实社区 MCP Server（推荐 `npx @modelcontextprotocol/server-everything`）。
+> 未运行手动验收前，checklist 中相应项保持未勾选。
+
+## 前置
+
+1. 打包：`JAVA_HOME=D:\java\jdk21 mvn -DskipTests package`（产物 `target/acode.jar`）。
+2. 在 `~/.acode/config.yaml`（全局）或 `.acode/config.yaml`（项目级）声明 MCP server（见 `src/main/resources/config.yaml` 注释示例）：
+   ```yaml
+   mcp_servers:
+     everything:
+       type: stdio
+       command: npx
+       args: [-y, "@modelcontextprotocol/server-everything"]
+   ```
+3. 启动：`java -jar target/acode.jar`。
+
+## E1 启动连接可见
+
+1. 启动 ACode。
+2. 预期：未配置 mcp_servers 时启动行为与之前完全一致（无 MCP 工具、无报错）；
+   配置后终端可见 MCP server 连接结果——连接失败打「警告：MCP server X 连接失败…」，成功无提示但工具可用。
+
+## E2 工具列表含 MCP 工具
+
+1. 提问「列出你现在有哪些工具」或让模型调用 `everything_*` 格式的工具。
+2. 预期：Agent 请求的工具列表含 `everything_工具名`（server 名前缀）；直接让模型调用如
+   `everything_echo` 能成功返回。
+
+## E3 权限档与 plan 模式
+
+1. 默认（未声明 permission）server 的工具：普通模式调用前弹确认菜单（同内置 EXEC 工具）；
+   `/plan` 模式下工具表不可见。
+2. 声明 `permission: read` 的 server：其工具在 `/plan` 模式工具表可见、普通模式不弹确认（READ）。
+
+## E4 isError 不中断 Loop
+
+1. 让模型调用一个远端不存在的 MCP 工具（如 `everything_nonexistent_tool`）。
+2. 预期：工具卡片显示失败、模型收到失败结果（含远端错误文本）、Loop 继续不中断，可换策略继续对话。
+
+## E5 退出清理子进程
+
+1. 对话后 `/quit` 退出。
+2. 打开任务管理器检查：无残留 `npx` / node 子进程（stdio 子进程被 closeAll 清理）。
+
+## E6 懒重连（可选）
+
+1. 用任务管理器杀掉 MCP server 的子进程（npx/node 进程）。
+2. 再次让模型调用该 server 的工具。
+3. 预期：自动重连一次并成功返回结果；若重连失败（如 server 已不可用）返回失败结果、不无限重试、不崩溃。
+

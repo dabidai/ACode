@@ -1,108 +1,112 @@
-# ACode 阶段二：工具调用 — 验收清单
+# ACode 阶段三：Agent Loop — 验收清单
 
-> 最后更新：2026-08-13
+> 最后更新：2026-08-14
 > 每一项均可勾选、可观测。执行顺序与 tasks.md 一致；带 ⚑ 的为端到端验收。
-> 默认值说明：Bash 默认超时 60s、文件/搜索工具默认超时 10s、命令输出截断 30000 字符、ReadFile 上限 2000 行、Grep 命中上限 500 条、Glob 结果上限 200 条、工具结果进入历史前截断 2000 字符、UI 结果摘要折叠为单行（超 200 字符截断）。
+> 默认值说明：max_iterations 默认 20（非正报错）、截断恢复上限 3 次、可重试错误重试上限 2 次（退避复用 RetryPolicy）、事件队列容量 64、工具结果进入历史前截断 2000 字符、计划落盘 `.acode/plans/plan-<slug>.md`、取消补位文案「已取消」、截断继续提示文案「输出被截断，请从断点继续，不要重复已输出内容」、触顶提示「达到最大轮数」、plan 交付提示「输入 /do 退出 plan 模式开始执行」、ExitPlanMode 非 plan 模式错误文案「只能在 plan 模式下调用」。
 
-## T1 工具框架核心
+## T1 AgentEvent 事件模型
 
-- [x] `mvn compile` 通过，`com.acode.tool` 包编译无警告
-- [x] 参数缺失时执行返回失败结果，错误文本包含缺失参数名
-- [x] 参数类型不匹配（如应传数字传了字符串）返回失败结果，错误文本包含参数名
-- [x] 工具内部抛运行时异常 → 返回失败结果（is_error=true），不向上抛
+- [ ] `mvn compile` 通过，`com.acode.agent` 包编译无警告
+- [ ] 7 种事件类型齐全：StreamText / ToolUseEvent / ToolResultEvent / TurnComplete / LoopComplete / ErrorEvent / RetryEvent
+- [ ] 队列容量常量值为 64，Agent 与测试共用同一常量
+- [ ] 各 record 构造/访问器冒烟测试通过
 
-## T2 消息模型结构化
+## T2 Provider 层 stop_reason 透传
 
-- [x] 旧 `ChatMessage.of(Role, String)` 构造的消息，Jackson 序列化→反序列化往返后文本一致（向后兼容）
-- [x] 含 tool_use 块的消息：序列化后 JSON 含 `type:"tool_use"`、id、name、input；往返后字段不丢
-- [x] 含 tool_result 块的消息：序列化后 JSON 含 `type:"tool_result"`、tool_use_id、is_error；往返后字段不丢
-- [x] 阶段一相关测试（ConversationTest / SessionStoreTest / AnthropicProviderTest）全部保持绿色，未因消息模型改造破坏
+- [ ] `ChatListener.onComplete()` 改 default 委托后，存量实现（StreamPrinter / FakeProvider / 各处匿名类）零改动且测试全绿
+- [ ] Anthropic 录制片段：message_delta 带 `stop_reason:"end_turn"` → listener 收到 stopReason="end_turn"
+- [ ] Anthropic 录制片段：message_delta 带 `stop_reason:"max_tokens"` → listener 收到 stopReason="max_tokens"
+- [ ] OpenAI 录制片段：finish_reason="stop" → listener 收到 stopReason="stop"
+- [ ] OpenAI 录制片段：finish_reason="length" → listener 收到 stopReason="length"
+- [ ] 无 stop_reason 的流（如 FakeProvider 无参 complete）→ 收到 null，行为与改前一致
 
-## T3 工具注册中心
+## T3 TurnCollector 流式收集器
 
-- [x] 注册 6 个内置工具后 `list()` 返回 6 条，名称各不相同
-- [x] 转换为 Anthropic tools 格式：数组长度为 6，每条含 name / description / input_schema 三字段
-- [x] `disable(name)` 后该工具不可用（执行返回失败结果），`enable(name)` 后恢复
-- [x] 查询未注册的工具名 → 明确返回不存在，不抛未捕获异常
+- [ ] 单轮脚本（delta + tool_use + complete("end_turn")）→ text() 拼接完整、toolUses() 含全部调用、stopReason()="end_turn"
+- [ ] 事件入队顺序：StreamText 先于 ToolUseEvent，且与脚本顺序一致
+- [ ] cancelled 置位后，后续 onDelta/onToolUse/onComplete 回调被忽略（不累积、不发事件）
+- [ ] onError 被记录且可被上层读取
 
-## T4 文件读写工具
+## T4 StreamingToolExecutor 工具分区执行器
 
-- [x] 读已存在文本文件 → 返回内容与磁盘一致
-- [x] 读不存在文件 → 返回失败结果，错误文本包含文件路径
-- [x] 读超过 2000 行的文件 → 返回前 2000 行并附「已截断」提示
-- [x] 写文件（目标文件已存在）→ 磁盘内容被完整覆盖，与入参一致
-- [x] 写文件到不存在父目录的路径 → 自动创建父目录后写入成功
-- [x] 相对路径基于工作目录解析，绝对路径直接用
+- [ ] 混合批次（ReadFile + WriteFile + ReadFile）→ 执行时序：两个读先完成、写在读之后开始（用记录时序的桩工具断言）
+- [ ] 两个读类调用真实并发执行（两桩同时运行，总耗时约等于单个耗时而非两倍）
+- [ ] 结果 List 顺序与输入声明顺序一致（回传顺序 = 声明顺序，与执行顺序无关）
+- [ ] 每完成一个调用 → 事件队列收到一条 ToolResultEvent（含 toolId/toolName/output/isError）
+- [ ] cancelled 置位时未执行/未完成的调用补 `ToolResult.failure("已取消")`，结果 List 长度与输入一致
+- [ ] 未注册/已禁用的工具 → 返回失败结果，不抛异常
+- [ ] 空批次 → 返回空 List，不产生事件
 
-## T5 多段编辑工具
+## T5 Agent 循环本体
 
-- [x] 一次调用 2 个替换段全部匹配 → 文件中两处都被替换，结果正确
-- [x] 其中一段 old 内容在文件中不存在 → 整体失败，返回失败结果
-- [x] 任一段 old 内容在文件中出现 2 次以上 → 失败，错误文本含「不唯一」字样
-- [x] 上述失败场景下原文件字节数与内容完全不变（原子性）
+- [ ] 单轮无工具脚本 → 1 次请求、LoopComplete(1)、termination=NORMAL、assistant 文本入历史
+- [ ] 两轮脚本（tool_use → 最终文本）→ 2 次请求、第 2 轮历史含第 1 轮 tool_result、LoopComplete(2)
+- [ ] 三轮链（tool_use → tool_use → 文本）→ 3 次请求、每轮历史逐轮累积、LoopComplete(3)
+- [ ] maxIterations=2 且脚本持续返回 tool_use → 第 2 轮触顶不执行工具、LoopComplete、termination=MAX_ITERATIONS、已完成的工具结果保留在历史
+- [ ] 流式中 cancel() → 循环结束、termination=CANCELED、不发 LoopComplete
+- [ ] 工具执行中 cancel() → 未执行工具补「已取消」结果入历史、无悬空 tool_use（R5）
+- [ ] `complete("max_tokens")` 脚本 → 文本入历史 + 注入继续提示 → 下一轮请求含该提示；连续 4 次截断 → 第 4 次按正常终止（恢复上限 3 次）
+- [ ] 截断轮文本与工具调用都为空 → 跳过 assistant 消息、只注入继续提示（R8）
+- [ ] 流错误（不可重试）→ ErrorEvent + LoopComplete、termination=ERROR
+- [ ] 流错误（可重试）→ RetryEvent(reason, waitMs) 后成功续跑；连续 3 次仍错 → ErrorEvent（重试上限 2 次）
+- [ ] 工具结果超过 2000 字符 → 进入历史前截断并附提示
 
-## T6 搜索工具
+## T6 max_iterations 配置
 
-- [x] 模式 `**/*.java` 在项目目录命中 ≥3 个文件
-- [x] Grep 正则命中内容 → 返回路径 + 行号 + 行内容
-- [x] Grep 无命中 → 返回空结果，不报错
-- [x] Grep 命中超过 500 条 → 截断并附提示
-- [x] Glob 结果超过 200 条 → 截断并附提示
+- [ ] 不写配置时默认值为 20
+- [ ] `max_iterations: 5` → 加载后生效为 5
+- [ ] `max_iterations: 0` 或负数 → 配置校验报错，错误文本包含字段名
+- [ ] examples 两份配置含 max_iterations 注释示例
+- [ ] ConfigLoaderTest / ConfigValidatorTest 新增用例全绿
 
-## T7 命令执行工具
+## T7 ExitPlanModeTool + ToolContext + PlanWriter
 
-- [x] `echo hello` → 结果含 `hello`，进程正常退出
-- [x] `sleep 5`（配 1s 超时）→ 返回超时错误，错误文本含「超时」，进程已被终止
-- [x] 输出超过 30000 字符 → 截断并附「输出过长」提示
-- [x] 命令退出码非 0（如 `exit 3`）→ 结果带 is_error 标记，返回码可见
-- [x] 本机安装 Git Bash 时 shell 检测优先命中 git-bash 路径；无 Git Bash 环境回退系统默认 shell 且不报错
+- [ ] planMode=true 的上下文下调用 ExitPlanMode → 返回成功结果（非 is_error）
+- [ ] planMode=false（默认构造）下调用 → 返回 is_error，错误文本含「只能在 plan 模式下调用」
+- [ ] ExitPlanMode 权限元信息为 READ
+- [ ] PlanWriter 在 @TempDir 下：自动创建 `.acode/plans/` 目录、文件内容与入参一致、返回的路径指向已存在文件
+- [ ] slug 清洗：含中文/特殊字符的文本生成的 slug 只含字母数字与连字符，非空且有兜底
+- [ ] 旧 `ToolContext(Path)` 构造仍可用，现有工具测试全绿
 
-## T8 Anthropic 请求侧
+## T8 Plan Mode 编排
 
-- [x] `AnthropicProviderTest` 断言：请求 JSON 含 `tools` 数组，每条含 name/description/input_schema
-- [x] 请求 JSON 中 assistant 消息的 content 为数组，tool_use 块含 id/name/input
-- [x] 请求 JSON 中 user 消息的 tool_result 块含 `tool_use_id` 与 `content`
-- [x] SYSTEM role 仍收进根 `system` 字段，不受 content 改造影响
+- [ ] setPlanMode(true) 后请求的 tools 只含 READ 权限工具 + ExitPlanMode（`receivedRequests().get(i).tools()` 名称集合断言）
+- [ ] setPlanMode(false) 后请求 tools 恢复为全部可用工具且不含 ExitPlanMode
+- [ ] plan 模式第 1 轮请求首条 SYSTEM 消息为完整提醒（含「只读」「交付计划工具」「计划落盘路径」要点）
+- [ ] plan 模式第 2 轮起 SYSTEM 消息为稀疏提醒（单行）
+- [ ] 脚本让模型调用 ExitPlanMode → 本轮累积文本写入 `.acode/plans/plan-<slug>.md`、tool_result 入历史、LoopComplete、termination=PLAN_DELIVERED、planPath() 非空
+- [ ] plan 模式轮数触顶 → 终止原因正确、不写计划文件
 
-## T9 Anthropic 响应侧
+## T9 CommandRouter /plan /do
 
-- [x] 录制片段：单个 tool_use 参数跨 3 次 `input_json_delta` 碎片 → 拼接解析出的参数 JSON 与完整值一致
-- [x] 录制片段：thinking 块与 tool_use 块混排 → tool_use 被正确捕获，thinking 不串入
-- [x] 纯文本回复（无 tool_use）仍走 onDelta 流程，行为与阶段一一致
+- [ ] 输入 `/plan` → route 返回 PLAN；`/do` → DO；其他输入行为不变
+- [ ] HELP_TEXT 包含 /plan 与 /do 两行说明
+- [ ] CommandRouterTest 新增用例全绿
 
-## T10 工具执行与回传
+## T10 Agent 综合测试
 
-- [x] tool_use 命中已注册工具 → 工具真实执行，结果回传
-- [x] tool_use 命中未注册/已禁用工具 → 返回带 is_error 的错误结果，不抛异常
-- [x] 工具失败 → 回传的 tool_result 块 `is_error=true`
-- [x] 工具结果超过 30000 字符 → 回传与进入历史前都被截断
+- [ ] 3 轮工具链：事件序列符合 StreamText → ToolUseEvent → ToolResultEvent → TurnComplete → LoopComplete 的相对顺序（每个事件至少出现一次且顺序不颠倒）
+- [ ] receivedRequests 逐轮断言：第 i+1 轮请求含第 i 轮的 tool_result 与 assistant 文本
+- [ ] 历史消息结构：assistant 消息含 text 块 + tool_use 块、tool_result 的 tool_use_id 对齐、超长结果被截断
+- [ ] 取消后历史无悬空 tool_use（每个 tool_use 都有对应 tool_result）
+- [ ] plan 全流程后 setPlanMode(false) → 工具列表恢复
 
-## T11 UI 工具调用展示
+## T11 接入主流程
 
-- [x] 工具调用时输出区出现一行「▸ 工具名(参数摘要)」
-- [x] 执行期间状态为「进行中」，完成后变为「完成」/「失败」（可观测字样）
-- [x] 结果摘要折叠为单行（多行压缩为一行、超 200 字符截断并带标记）
-- [x] 文本流式回复仍正常显示，与工具卡片不互相覆盖
+- [ ] 存量 `singleStepToolLoopExecutesToolAndReturnsFinalText` / `failedToolResultPassedBackWithErrorFlag` / `hugeToolResultIsTruncatedBeforeEnteringHistory` / `plainQuestionUsesSingleRoundWithoutTools` 平移后全绿
+- [ ] 原「第二轮 tool_use 只显示文本」用例重写为真实执行：3 轮脚本断言工具执行、历史完整、无「连环工具调用暂不支持」字样
+- [ ] 新增取消用例：工具执行时注入 ctrlC=true → 输出含「已中断」、可继续下一次 exchange
+- [ ] 新增触顶用例：maxIterations 小值 → 输出含「达到最大轮数」
+- [ ] 循环期间屏幕出现：流式文本、工具卡片（进行中 → 完成/失败）、重试状态行（若有）、最终回复
+- [ ] 普通单轮对话（无工具）行为与阶段二一致（单次请求、直接展示文本）
 
-## T12 接入主流程（单步闭环）
+## T12 端到端验收 ⚑
 
-- [x] FakeProvider 两轮模拟：第一轮返回 tool_use（真实执行 ReadFileTool）→ 第二轮请求携带含 tool_result 的历史 → 最终文本展示
-- [x] 上述闭环后会话历史同时含 tool_use 块与 tool_result 块
-- [x] 无 tool_use 的普通提问 → 行为与阶段一完全一致（单次请求、直接展示文本）
-- [x] 第二轮仍返回 tool_use → 工具不执行，仅展示文本并提示「连环调用未支持」
-- [ ] 工具执行期间按 Ctrl+C → 中断工具执行，可继续输入新问题（时机敏感，走手测）
-
-## T13 会话持久化与上下文适配
-
-- [x] 含工具调用的对话退出 → 会话文件包含 tool_use 与 tool_result 块
-- [x] `--resume` 恢复该会话 → 文本块照常显示，工具块显示为一行摘要（如「〔工具调用 ReadFile〕」）
-- [x] 恢复后继续提问 → 上下文包含恢复前的工具结果（模型能引用）
-- [x] 上下文超限丢弃时，tool_use/tool_result 内容参与 token 估算（不因结构变化丢块或漏算）
-
-## T14 端到端验收 ⚑
-
-- [ ] 真实 API：问「读 `pom.xml` 并总结用到了哪些依赖」→ 屏幕出现工具卡片（ReadFile + 参数摘要）→ 最终回复引用 `pom.xml` 真实内容
-- [ ] 真实 API：分别让模型调用 WriteFile / EditFile / Bash / Glob / Grep 各至少一次，卡片状态为「完成」，结果与真实执行一致
-- [ ] 真实 API：让模型调用不存在的工具名 → 卡片状态为「失败」，模型最终回复能说明失败原因（is_error 已回传）
-- [ ] 含工具调用的会话退出后 `--resume` 恢复 → 工具块显示摘要，继续对话正常
-- [x] 全程 `mvn test` 全绿（新增工具相关单测均无网络依赖）
+- [ ] 真实 API（anthropic 与 openai 各一遍）：问「读 `pom.xml` 总结依赖，然后跑 `mvn -q compile` 并把失败的测试修好」类多步任务 → 屏幕出现 ≥2 轮工具卡片、模型自主连续执行到自然收尾、最终回复引用真实执行结果
+- [ ] 真实 API：流式输出中按 Ctrl+C → 循环结束、无残影、可继续输入新问题
+- [ ] 真实 API：工具执行中按 Ctrl+C → 输出「已中断」、历史无悬空工具调用（退出后 resume 该会话继续对话不报错）
+- [ ] 真实 API：`/plan` 后提一个多步需求 → 模型只用读工具探索、调用 ExitPlanMode 交付 → 计划文件出现在 `.acode/plans/` 且内容为完整计划 → 界面提示「输入 /do 退出 plan 模式开始执行」→ `/do` 后可正常写文件
+- [ ] 真实 API：`max_iterations: 2` 下提多步任务 → 触顶提示「达到最大轮数」、已完成步骤结果保留
+- [ ] 退出后 `--resume` 恢复含多轮工具调用的会话 → 工具块显示摘要、继续对话正常（模型能引用恢复前的工具结果）
+- [ ] `/help` 输出含 /plan 与 /do 说明
+- [ ] 全程 `mvn test` 全绿（新增 agent 包测试均无网络依赖）

@@ -1,228 +1,262 @@
-# ACode 阶段一：任务清单 — tasks
+# ACode 阶段二：工具调用 — 任务清单
 
-> 最后更新：2026-08-07
-> 每个任务应能在一次专注会话内完成。依赖关系：1 → 2 → 3 → (4,5) → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13（4 与 5 可并行）。
+> 最后更新：2026-08-13
+> 依赖关系：`T1→T3→(T4,T5,T6,T7)→T10`；`T2→T8→T9→T10→T11→T12→T13→T14`；T2 与 T1/T3 可并行，T4~T7 相互独立可并行，T11 与 T12 顺序执行（T12 复用 T11 的展示）。
 
 ## 约定
 
-- 包根：`com.acode`，源码 `src/main/java/com/acode/`，测试 `src/test/java/com/acode/`
-- 每个任务完成后跑 `mvn compile` 或 `mvn test` 确认不破坏已有代码
+- 包根 `com.acode`，新增工具层 `src/main/java/com/acode/tool/`（框架）、`src/main/java/com/acode/tool/impl/`（六个具体工具），测试 `src/test/java/com/acode/tool/`
+- 现有消息/编排/UI 文件行号以 2026-08-13 的 HEAD 为准，改动时先 Read 确认
+- 每个任务完成后跑 `mvn compile` 或 `mvn test` 确认不破坏已有代码；测试方法名用英文驼峰
+- 需要复用的现有设施：`ProviderHttpClient`（HTTP）、`SseParser`（帧解析）、`Conversation.estimateTokens`（字符估算）、`FakeProvider`（测试桩）、JUnit `@TempDir`（文件工具测试）
 
 ---
 
-### T1 项目骨架
+### T1 工具框架核心
 
-**目标**：Maven 工程可编译、可运行，打印启动横幅。
+**目标**：统一的工具接口 + 基类 + 结果模型，六个工具共享同一契约。
 
 **影响文件（新建）**
-- `pom.xml` — Java 21、打包方式 jar、依赖版本锁定（下文各任务用到的依赖一次性声明）
-- `src/main/java/com/acode/App.java` — main 入口，解析启动参数（`--resume`），打印启动横幅
-- `src/main/resources/logback.xml` — 日志到文件（`~/.acode/logs/`），避免污染终端输出
+- `src/main/java/com/acode/tool/Tool.java` — 接口：名称、描述、权限级别（read/write/exec 元信息）、参数 JSON Schema、执行方法（入参为解析后的参数 + 执行上下文）
+- `src/main/java/com/acode/tool/ToolResult.java` — 执行结果：正文输出、是否成功、是否错误、错误信息（失败与超时统一带 is_error 标记，不抛给上层）
+- `src/main/java/com/acode/tool/ToolContext.java` — 执行上下文：工作目录（相对路径的基准）、可选注入
+- `src/main/java/com/acode/tool/BaseTool.java` — 抽象基类：参数解析/校验（缺失/类型错 → 返回失败结果并带参数名）、执行超时包装、运行时异常 → 失败结果
+- `src/main/java/com/acode/tool/ToolExecutionException.java` — 供 BaseTool 内部包装，不跨层抛出
+- `src/test/java/com/acode/tool/BaseToolTest.java` — 参数缺失/类型错返回失败结果、正常执行返回成功、内部异常转失败
 
-**依赖**：无（起点任务）
+**依赖**：无
 
 **参考资料**
-- Maven 官方：https://maven.apache.org/guides/getting-started/index.html
-- `maven.compiler.release` 属性（Java 21）：https://maven.apache.org/plugins/maven-compiler-plugin/examples/set-compiler-release.html
+- 参考 ch01 T3 Provider 接口「先定义接口 + 测试桩」的做法：`src/main/java/com/acode/provider/ChatProvider.java`
+- 权限元信息：参考 Claude Code 工具分级语义（只读 / 写 / 命令执行），本章仅标记不拦截
 
 ---
 
-### T2 配置模块
+### T2 消息模型结构化
 
-**目标**：YAML 配置加载与两级合并（项目级覆盖全局），缺字段/类型错误报错定位到来源文件。
+**目标**：`ChatMessage` 从纯文本升级为 content block 列表（text / tool_use / tool_result），Anthropic 工具协议与后续章节的地基。
+
+**影响文件（新建 + 修改）**
+- `src/main/java/com/acode/provider/ContentBlock.java`（新）— sealed 接口，三个实现
+- `src/main/java/com/acode/provider/TextBlock.java`（新）— 正文文本
+- `src/main/java/com/acode/provider/ToolUseBlock.java`（新）— 模型发起：id、工具名、参数 JSON
+- `src/main/java/com/acode/provider/ToolResultBlock.java`（新）— 回传：tool_use_id、内容、是否错误
+- `src/main/java/com/acode/provider/ChatMessage.java`（改）— record 改为持 `List<ContentBlock>`，保留 `of(Role, String)` 工厂（内部包 TextBlock）保证阶段一代码零改动；Jackson 多态序列化（按 type 字段）
+- `src/main/java/com/acode/conversation/Conversation.java`（改）— `estimateTokens` 遍历所有 block（tool_use 参数、tool_result 内容都要估）
+- `src/test/java/com/acode/provider/ChatMessageTest.java`（新）— `of()` 兼容、含 tool_use/tool_result 的消息 Jackson 往返一致
+
+**依赖**：无
+
+**参考资料**
+- Anthropic content block 结构（text/tool_use/tool_result）：https://docs.anthropic.com/en/api/messages
+- Jackson 多态序列化 `@JsonTypeInfo`（按显式 type 字段），现有 `ObjectMapper` 统一在工具内配置
+- `SessionStore` 目前按字段直接序列化 `ChatMessage`，T2 改完需跑 `mvn test` 确认 `SessionStoreTest` 不破
+
+---
+
+### T3 工具注册中心
+
+**目标**：集中管理工具注册/启用/禁用/查询，并转换为 Anthropic tools 参数格式。
 
 **影响文件（新建）**
-- `src/main/java/com/acode/config/AppConfig.java` — 配置模型（provider 四字段 + 上下文窗口上限）
-- `src/main/java/com/acode/config/ConfigLoader.java` — 加载全局 `~/.acode/config.yaml` → 项目级 `.acode/config.yaml` 合并（深合并：项目级只覆盖出现的字段）
-- `src/main/java/com/acode/config/ConfigValidator.java` — 校验 protocol 枚举值、非空字段、base_url 格式
-- `src/test/java/com/acode/config/ConfigLoaderTest.java`、`ConfigValidatorTest.java`
-- `examples/config.yaml` — 两份示例配置（全局完整版、项目级覆盖版）
+- `src/main/java/com/acode/tool/ToolRegistry.java` — register / enable / disable / get / list；未注册或已禁用时调用方返回错误
+- `src/main/java/com/acode/tool/ToolSchemaConverter.java` — 单个 Tool → Anthropic tools JSON 节点（name / description / input_schema）
+- `src/main/java/com/acode/tool/DefaultToolset.java` — 组装六个内置工具的注册入口（后续任务逐个填充）
+- `src/test/java/com/acode/tool/ToolRegistryTest.java` — 注册/禁用/转格式断言
 
 **依赖**：T1
 
 **参考资料**
-- SnakeYAML load/loadAs：https://github.com/snakeyaml/snakeyaml/wiki/Usage（构造器 `new Yaml()` 与 `yaml.loadAs(input, class)`）
-- Jackson `ObjectMapper.readerForUpdating()` 实现「只覆盖出现的字段」的合并：https://github.com/FasterXML/jackson-databind#usage
+- Anthropic tools 参数格式（`tools` 数组、`input_schema` JSON Schema）：https://docs.anthropic.com/en/docs/build-with-claude/tool-use
+- `input_schema` 每个工具自己定义（在 Tool 的 inputSchema 里声明），转换器只做包装
 
 ---
 
-### T3 Provider 抽象层
+### T4 文件读写工具
 
-**目标**：统一接口 + 请求/响应模型 + 流式回调 + 错误分类，Anthropic/OpenAI 共用。
+**目标**：ReadFile / WriteFile 两个文件工具可用，均基于 ToolContext 工作目录解析相对路径。
 
 **影响文件（新建）**
-- `src/main/java/com/acode/provider/ChatProvider.java` — 接口：`streamChat(request, listener)`，`listener` 回调三方法（onDelta / onComplete / onError）
-- `src/main/java/com/acode/provider/ChatRequest.java` — 消息列表、model、thinking 开关、maxTokens 上限
-- `src/main/java/com/acode/provider/ChatMessage.java` — role + content
-- `src/main/java/com/acode/provider/ChatListener.java` — 回调接口定义
-- `src/main/java/com/acode/provider/ProviderException.java` + 分类子类：`AuthException`（401/403）、`RateLimitException`（429）、`ServerException`（5xx）、`NetworkException`（连接失败/超时）、`InvalidRequestException`（4xx 其余）
+- `src/main/java/com/acode/tool/impl/ReadFileTool.java` — 读文本文件：支持限定行范围；超长文件按上限截断并附提示
+- `src/main/java/com/acode/tool/impl/WriteFileTool.java` — 覆盖写整个文件：缺失父目录自动创建；写入前备份父目录是否存在校验
+- `src/test/java/com/acode/tool/impl/ReadFileToolTest.java`、`WriteFileToolTest.java` — 用 `@TempDir`：正常读、读不存在文件返回失败、大文件截断、写后磁盘内容一致、自动建目录
 
-**依赖**：T2
+**依赖**：T1、T3（注册进 DefaultToolset）
 
 **参考资料**
-- 接口先定义、两端实现随后跟进，先写 `src/test/java/com/acode/provider/FakeProvider.java` 测试桩便于上层联调
+- `java.nio.file.Files`（readString / writeString / createDirectories）；路径解析：相对路径基于 `ToolContext` 工作目录，绝对路径直接用
+- 行范围/截断上限的具体值进 checklist（T4 节），实现先取可配置常量
 
 ---
 
-### T4 Anthropic Provider + SSE
+### T5 多段编辑工具
 
-**目标**：Claude 后端可用，流式解析 thinking 与正文，请求带 thinking 参数。
+**目标**：EditFile 一次调用做多段精确替换，整体原子性。
 
 **影响文件（新建）**
-- `src/main/java/com/acode/provider/anthropic/AnthropicProvider.java` — 请求构建（messages API、`thinking: {type:"enabled", budget_tokens}`、`max_tokens` > budget）、响应流解析
-- `src/main/java/com/acode/provider/anthropic/AnthropicSseParser.java` — 按事件类型分发：`message_start`、`content_block_start`、`content_block_delta`（区分 `delta.text` 与 `delta.thinking`）、`content_block_stop`、`message_delta`、`message_stop`、`error`
-- `src/main/java/com/acode/sse/SseParser.java` — 通用 SSE 帧解析（按 `\n\n` 切分事件，解析 `event:`/`data:` 行；Anthropic/OpenAI 复用）
-- `src/test/java/com/acode/provider/anthropic/AnthropicSseParserTest.java` — 用录制的真实事件片段做测试（含 thinking 事件、中文文本、error 事件）
+- `src/main/java/com/acode/tool/impl/EditFileTool.java` — 入参含文件路径 + 多个替换段（每段 old/new）；所有段必须各自恰好匹配一处，任一不匹配或匹配不唯一 → 整体失败、文件字节不变；全部匹配后按段顺序一次写回
+- `src/test/java/com/acode/tool/impl/EditFileToolTest.java` — 多段一次成功、一段不匹配整体失败且文件未变、old 出现多处报不唯一、替换后新旧内容正确
 
-**依赖**：T3
+**依赖**：T1、T3
 
 **参考资料**
-- 流式事件类型清单（含 thinking delta 示例）：https://docs.anthropic.com/en/api/messages-streaming
-- thinking 参数与 budget_tokens 约束：https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
-- SSE 帧格式（event/data 行、空行分隔）：https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation
+- 语义对齐 Claude Code Edit：old_string 精确匹配、重复匹配拒绝：https://docs.anthropic.com/en/docs/claude-code/（Edit 工具行为，参考其幂等与原子性）
+- 实现要点：先读全文 → 对每段查找（第 1 次出现 → 替换；查找到 >1 次 → 失败）→ 全部通过才写回，保证原子性
 
 ---
 
-### T5 OpenAI Provider + SSE
+### T6 搜索工具
 
-**目标**：OpenAI 后端可用（普通 chat，无 reasoning）。
+**目标**：Glob 匹配文件路径、Grep 正则搜内容，模型能定位代码。
 
 **影响文件（新建）**
-- `src/main/java/com/acode/provider/openai/OpenAiProvider.java` — chat completions 请求构建、响应流解析
-- `src/main/java/com/acode/provider/openai/OpenAiSseParser.java` — `data: {…}` 行解析、`data: [DONE]` 结束标记、`data: {"error":…}` 错误事件
-- `src/test/java/com/acode/provider/openai/OpenAiSseParserTest.java`
+- `src/main/java/com/acode/tool/impl/GlobTool.java` — 按模式递归匹配路径（支持 `**`），返回匹配的路径列表
+- `src/main/java/com/acode/tool/impl/GrepTool.java` — 按正则搜索文件内容：可限目录、可限文件名匹配；返回命中的路径 + 行号 + 行内容
+- `src/test/java/com/acode/tool/impl/GlobToolTest.java`、`GrepToolTest.java` — 临时目录造数据：`**/*.java` 命中、正则命中行含行号、无命中返回空、忽略目录跳过
 
-**依赖**：T3
+**依赖**：T1、T3
 
 **参考资料**
-- 流式响应格式与 [DONE] 约定：https://platform.openai.com/docs/api-reference/chat/streaming
-- SSE 错误事件：`{"error": {"message": …}}` 出现在 data 行
+- 递归遍历用 `Files.walk`；glob 匹配用 `FileSystems.getDefault().getPathMatcher("glob:"+pattern)`（对 `**` 的支持依赖 matcher 行为，需测）
+- Grep 按行读取用 `Files.lines`，正则用 `Pattern`/`Matcher`，命中行数上限进 checklist（T6 节）
 
 ---
 
-### T6 重试与错误处理
+### T7 命令执行工具
 
-**目标**：429/5xx 自动重试 3 次（1s/2s/4s 指数退避），其余错误直接抛出并转中文提示。
+**目标**：Bash 工具执行 shell 命令，Windows 上优先 Git Bash 回退 cmd，带超时与输出截断。
 
 **影响文件（新建）**
-- `src/main/java/com/acode/provider/RetryPolicy.java` — 判定重试条件、退避间隔、重试上限
-- `src/main/java/com/acode/provider/ProviderHttpClient.java` — 统一 HTTP 客户端（连接超时、读超时设置），两端共用
-- `src/test/java/com/acode/provider/RetryPolicyTest.java`
+- `src/main/java/com/acode/tool/impl/BashTool.java` — 拼 shell 调用（Git Bash：`bash -lc <cmd>`；cmd：`cmd /c <cmd>`）、进程启动、超时杀进程（`destroyForcibly`）、stdout+stderr 合并、超长输出截断
+- `src/main/java/com/acode/tool/impl/ShellDetector.java` — 运行时检测：`where bash` / 常见安装路径，命中 Git Bash 则用，否则回退系统默认
+- `src/test/java/com/acode/tool/impl/BashToolTest.java` — `echo` 输出正确回传、`sleep` 配短超时被杀返回超时错误、超长输出截断、shell 检测结果可用
 
-**依赖**：T4、T5
+**依赖**：T1、T3
 
 **参考资料**
-- 用 JDK `HttpClient`（`java.net.http.HttpClient`，Java 21 内置，无需第三方 HTTP 库）；重试判定：HTTP 429 或 500~599
+- `java.lang.ProcessBuilder`（重定向到临时收集）、`Process.destroyForcibly()`（超时终止）、`readAllBytes` 上限
+- Windows 上 Git Bash 常见路径：`C:\Program Files\Git\bin\bash.exe`；检测顺序：环境变量 → 常见路径，找不到回退
+- 超时与截断具体值进 checklist（T7 节），实现先取可配置常量
 
 ---
 
-### T7 对话编排层
+### T8 Anthropic 请求侧
 
-**目标**：消息列表维护、每次请求自动携带全部历史、超限丢弃最早消息。
+**目标**：请求体携带工具定义，消息 content 输出为结构化 block 数组。
 
-**影响文件（新建）**
-- `src/main/java/com/acode/conversation/Conversation.java` — 消息追加、组装请求、token 估算（按字符数 ÷ 4 估算）、超限时从最早消息开始丢弃直到放得下
-- `src/test/java/com/acode/conversation/ConversationTest.java` — 覆盖：估算、丢弃边界（丢到刚好放下）、单条消息超限的兜底行为（清空历史只留当前问题）
+**影响文件（修改 + 新建）**
+- `src/main/java/com/acode/provider/ChatRequest.java`（改）— 增加可选 tools 字段（List<Tool> 或已序列化 schema），builder 对应
+- `src/main/java/com/acode/provider/anthropic/AnthropicProvider.java`（改）— `buildBody()`（当前 57~94 行）：messages 的 content 由字符串改为 block 数组（text 直接出文本、tool_use 出 id/name/input、tool_result 走 user 消息的 tool_result block）；根节点在有 tools 时加 `tools` 数组
+- `src/test/java/com/acode/provider/anthropic/AnthropicProviderTest.java`（改）— 断言：请求 JSON 含 `tools` 数组且每条含 name/description/input_schema；含 tool_use 的 assistant 消息 content 为数组；含 tool_result 的 user 消息 content 含 `tool_result` 块
 
-**依赖**：T3、T4
+**依赖**：T2、T3
 
 **参考资料**
-- 窗口上限从配置读取；兜底规则：若当前问题本身超限，清空历史只保留当前问题（避免死循环）
+- Anthropic messages API：tool_use 在 assistant content 数组、tool_result 在 user content 数组（`{"type":"tool_result","tool_use_id":..,"content":..,"is_error":..}`）：https://docs.anthropic.com/en/api/messages
+- `buildBody` 现有实现已把 SYSTEM role 收进根 system 字段（72~77 行），改造时保留该逻辑
 
 ---
 
-### T8 会话持久化
+### T9 Anthropic 响应侧
 
-**目标**：会话保存为 JSON、`--resume` 恢复最近一次会话。
+**目标**：流式解析 tool_use 块，JSON 参数碎片逐段拼接成完整 JSON。
 
-**影响文件（新建）**
-- `src/main/java/com/acode/session/Session.java` — 会话模型（id、时间戳、消息列表）
-- `src/main/java/com/acode/session/SessionStore.java` — 保存（追加为独立文件，不覆盖历史）、列出、读取最近一次
-- `src/test/java/com/acode/session/SessionStoreTest.java`
+**影响文件（修改 + 新建）**
+- `src/main/java/com/acode/provider/ChatListener.java`（改）— 增加 tool_use 完成回调（携带 id/name/完整参数），与 onDelta/onComplete 互斥关系重新说明（onDelta 与 tool_use 可交替）
+- `src/main/java/com/acode/provider/anthropic/AnthropicSseParser.java`（改）— `handle()`（当前 24~48 行）：
+  - `content_block_start`：`type=tool_use` → 记录 id/name，开始累积参数碎片；`type=text` → 进入文本模式
+  - `content_block_delta`：`input_json_delta` 拼接进当前 tool_use 的参数缓冲；`text_delta` 走原 onDelta
+  - `content_block_stop`：tool_use 块结束 → 把拼接的 JSON 字符串解析为参数，触发新回调
+- `src/test/java/com/acode/provider/anthropic/AnthropicSseParserTest.java`（改）— 新增录制片段：一个 tool_use 的参数跨多次 `input_json_delta` 碎片，拼接后与完整 JSON 一致；thinking 与 tool_use 混排不串块
 
-**依赖**：T7（需要消息模型，可先按 T3 的 ChatMessage 存）
+**依赖**：T8
 
 **参考资料**
-- 存储目录 `~/.acode/sessions/`，文件名按时间戳；Jackson 序列化/反序列化
+- Anthropic 流式事件（content_block_start / content_block_delta.input_json_delta / content_block_stop）：https://docs.anthropic.com/en/api/messages-streaming
+- 参数碎片用 `StringBuilder` 累积，`content_block_stop` 时用 `ObjectMapper.readTree` 校验可解析；解析失败按协议错误处理
 
 ---
 
-### T9 TUI 基础
+### T10 工具执行与回传
 
-**目标**：全屏布局（上输出区/下输入区）、多行输入、输入历史、Ctrl+C 中断、/quit 与 /help。
+**目标**：把 tool_use block 变成真实执行并构建 tool_result 回传消息。
 
-**影响文件（新建）**
-- `src/main/java/com/acode/ui/AcodeTerminal.java` — 终端初始化（raw 模式）、窗口尺寸监听、退出恢复
-- `src/main/java/com/acode/ui/OutputPane.java` — 输出区：文本追加、滚动、内容重绘（增量刷新，防闪烁）
-- `src/main/java/com/acode/ui/InputPane.java` — 输入区：多行输入（Shift+Enter 换行、Enter 提交）、输入历史上下翻、光标移动
-- `src/main/java/com/acode/ui/CommandRouter.java` — `/quit`、`/clear`、`/help` 与普通消息分流
+**影响文件（新建 + 修改）**
+- `src/main/java/com/acode/tool/ToolExecutor.java`（新）— 输入 ToolUseBlock → 查注册表（未注册/已禁用 → 构造错误结果）→ 带超时执行 → ToolResult；一个会话内多次调用串行
+- `src/main/java/com/acode/conversation/Conversation.java`（改）— 增加「追加 assistant 工具调用 + 对应 tool_result 用户消息」的便捷入口（工具结果进入完整历史，供下一轮请求携带）
+- `src/test/java/com/acode/tool/ToolExecutorTest.java`（新）— FakeRegistry：注册的工具被执行、未注册返回错误、失败工具返回 is_error
 
-**依赖**：T1、T8
+**依赖**：T2、T3、T4~T7、T9
 
 **参考资料**
-- JLine3 `TerminalBuilder` 与 `LineReaderBuilder`：https://github.com/jline/jline3（重点看 `LineReader` 的 `readLine`、multiline 模式、`Alt+Enter` 或自定义 key binding 提交）
-- JLine3 内部使用 ANSI 转义序列：https://github.com/jline/jline3/blob/master/terminal-jansi/src/main/java/org/jline/utils/InfoCmp.java（终端能力查询）
-- 输出区自绘：`\033[H`（光标回原点）、`\033[J`（清屏）配合全量重绘；Ctrl+C 用 `System.in` 读取或 JLine key binding 拦截
-
-**注意**：JLine3 是「行式输入」库，全屏布局需要自己管理光标与输出区滚动；先实现「输入行固定底部 + 输出区简单滚动」的最小可用版，美观后置。
+- tool_result 回传格式见 T8 参考资料；ToolExecutor 不感知 UI/Provider，只做「block → 结果」
+- 工具结果截断：回传给模型前与进入历史前都截断超长文本（长度上限进 checklist T10 节）
 
 ---
 
-### T10 流式输出与 Markdown 着色
+### T11 UI 工具调用展示
 
-**目标**：异步接收 delta 边生成边打印，按 Markdown 子集增量着色（代码块、加粗、标题、行内代码）。
+**目标**：终端可视化工具调用过程：名称、参数摘要、状态、结果摘要。
 
-**影响文件（新建）**
-- `src/main/java/com/acode/ui/MarkdownRenderer.java` — 增量解析器：维护状态机（是否在代码块内、是否加粗、标题行），输出 ANSI 着色文本；代码块用不同背景/前景色，标题加粗，行内代码单色
-- `src/main/java/com/acode/ui/StreamPrinter.java` — 消费 ChatListener 的 onDelta → MarkdownRenderer → 追加到 OutputPane；onComplete 收尾；onError 显示错误
-- `src/test/java/com/acode/ui/MarkdownRendererTest.java` — 覆盖：代码块跨多次 delta 不破色、标题/加粗/行内代码、普通文本原样
-
-**依赖**：T9、T4、T5
-
-**参考资料**
-- CommonMark 语法子集定义：https://spec.commonmark.org/0.31.2/
-- ANSI 颜色代码表：https://en.wikipedia.org/wiki/ANSI_escape_code#SGR_parameters
-
----
-
-### T11 /clear 与上下文联动
-
-**目标**：/clear 清空界面输出区、清空对话上下文；/help 列出全部命令。
-
-**影响文件（修改）**
-- `src/main/java/com/acode/ui/CommandRouter.java` — 补齐 `/clear`（回调清空 Conversation 与 OutputPane）、`/help` 文案
-- `src/main/java/com/acode/conversation/Conversation.java` — 增加 `clear()`
+**影响文件（新建 + 修改）**
+- `src/main/java/com/acode/ui/ToolCallDisplay.java`（新）— 在输出区渲染工具卡片：`▸ 工具名(参数摘要)` 一行 + 状态（进行中/成功/失败）+ 结果摘要（多行截断为前几行，带折叠标记）
+- `src/main/java/com/acode/ui/StreamPrinter.java`（改）— 适配新的 tool_use 回调：把文本渲染与工具卡片渲染串接（文本继续走 MarkdownRenderer）
+- `src/test/java/com/acode/ui/ToolCallDisplayTest.java`（新）— 给定 tool_use/结果，输出区出现工具名与状态字样，结果被截断
 
 **依赖**：T9、T10
 
-**参考资料**：无（纯内部联动）
+**参考资料**
+- 参考现有 `StreamPrinter.replaceTail`（48~59 行）「删除尾巴再重绘」的模式，工具卡片需要稳定占用若干行（不随流式文本抖动）
+- 卡片行数/截断行数具体值进 checklist（T11 节）
 
 ---
 
-### T12 接入主流程
+### T12 接入主流程（单步闭环）
 
-**目标**：把配置 → Provider → 会话 → TUI 串成完整对话循环：启动 → 恢复/新建会话 → 循环读输入 → 分流命令/消息 → 调 Provider 流式打印 → 保存会话。
+**目标**：完整单步闭环，ACode 首次「能干活」。
 
-**影响文件（新建）**
-- `src/main/java/com/acode/ConversationController.java` — 主循环与装配
-- `src/main/java/com/acode/App.java`（修改）— `--resume` 传入 Controller
+**影响文件（修改 + 新建）**
+- `src/main/java/com/acode/ConversationController.java`（改）— `handleChat()`（当前 311~388 行）重构：
+  1. 请求①携带工具定义（从注册中心转出）流式发起
+  2. 无 tool_use → 文本直接展示（回归阶段一）；有 tool_use → 经 ToolCallDisplay 展示 → ToolExecutor 串行执行 → 结果追加进历史 → 请求②（历史含 tool_result）→ 展示最终文本并保存
+  3. 请求②仍返回 tool_use → 不执行，仅取文本展示并提示「连环调用未支持」
+  4. 每轮请求独立绑定一次回复流，Ctrl+C 中断当前流；工具执行阶段 Ctrl+C 同样可中断
+- `src/test/java/com/acode/ConversationControllerTest.java`（新）— 用 FakeProvider 模拟两轮：第一轮返回 tool_use（真实触发 ReadFileTool 执行）、第二轮返回最终文本 → 断言会话历史含 tool_use 与 tool_result、最终文本已展示
 
-**依赖**：T2~T11 全部
+**依赖**：T9、T10、T11
 
 **参考资料**
-- 按 spec.md「分层结构」逐层装配；异常在 Controller 层统一捕获转中文提示
+- 现有 handleChat 的 worker 线程 + watch loop 模式（352~387 行）保留；两次请求各走一次该模式
+- 会话保存沿用 `saveSession()`（404~413 行），工具调用与结果随历史一起落盘（落盘细节 T13）
 
 ---
 
-### T13 端到端验证
+### T13 会话持久化与上下文适配
 
-**目标**：真实 API 跑通两家后端完整对话；错误场景、中断场景验证通过。
+**目标**：含工具块的会话可保存/恢复，上下文截断覆盖结构化消息。
 
-**影响文件**
-- `docs/manual-test.md`（新建）— 手测步骤记录：两家真实 key 各一轮 ≥5 轮对话、错误 key、断网、429（mock 或降速）、Ctrl+C 中断、--resume 恢复、项目级配置覆盖生效
+**影响文件（修改）**
+- `src/main/java/com/acode/session/Session.java`、`SessionStore.java` — 序列化/反序列化支持 content block 消息（随 T2 的消息模型，落盘格式含 type 字段）
+- `src/main/java/com/acode/conversation/Conversation.java`（改）— `trim()` 对 tool_use/tool_result block 按内容估算；超长工具结果在进入历史前先截断（T10 复用同一上限）
+- `src/main/java/com/acode/ConversationController.java`（改）— `restoreIfResume`（101~120 行）与 `loadSession`（292~309 行）：工具块以一行摘要展示（如「〔工具调用 ReadFile〕」），文本块照常显示
+
+**依赖**：T2、T12
+
+**参考资料**
+- 现有会话文件为消息列表 JSON，T2 的多态序列化保证向后兼容（旧纯文本会话仍能读）
+- 恢复时「工具块显示摘要」与 ch01「菜单用输出区尾部块」一致：不污染主文本，用一行摘要即可
+
+---
+
+### T14 端到端验证
+
+**目标**：真实 API 验证单步闭环可用，六种工具都被模型真实调用过。
+
+**影响文件（新建 + 视情况）**
+- `docs/manual-test.md`（新）— 手测步骤：真实 key 下分别让模型调用每种工具（读/写/改/执行/匹配/搜索）、单步闭环、超时、错误工具参数、Ctrl+C 中断、含工具会话的保存/恢复
 - 修 bug 产生的影响文件视情况
 
-**依赖**：T12
+**依赖**：T12、T13
 
 **参考资料**
-- 手测按 checklist.md 逐项打勾；联网问题（断网测试）用临时错误 base_url 模拟
+- 手测按 checklist.md 逐项打勾；联网问题用临时错误 base_url 模拟（沿用 ch01 T13 做法）

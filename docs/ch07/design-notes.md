@@ -1,175 +1,28 @@
-# ACode 阶段六：MCP 连接并发设计记录（design notes）
+# 参考：FlashMemory 长上下文 KV Cache 压缩 — 设计笔记
 
 > 最后更新：2026-09-02
-> 记录 T6 `McpServerConnection` 的并发审查结论、设计决策与已落地改动。
-> 本文档是「改动 + 原因」的存档：改动对应 `checklist.md` T6 新增验收项 与 `tasks.md` T6 并发契约；原因对应下方问题解释，避免重连并发这段推理将来丢失。
+> 状态：**仅作参考**。本文是一篇公众号论文解读的摘记，不是任何已定功能范围。真正的阶段内容待补充后再另行规划。
 
-## 触发问题
+## 来源
 
-`McpServerConnection` 的原始设计（T6）是「单 server 活连接 + 懒重连」，本身具备正确的并发基础：`McpClient` 的 pending 表按 id 异步匹配、stdio 单写者、HTTP 独立 POST。但「懒重连」与「关旧建新」组合后，存在四处没写死的并发风险：
+- 微信公众号文章《面向 DeepSeek-V4 的 FlashMemory：长上下文 KV Cache 如何压到约 1/10》，URL：https://mp.weixin.qq.com/s/cckaQyOGSuZGXzB0rrs8Ag
+- 解读对象：论文 FlashMemory-DeepSeek-V4 / Lookahead Sparse Attention (LSA)
+- 全文与概念卡已存第二大脑（来源摘要卡 + KV Cache / LSA / Neural Memory Indexer / FlashMemory-DeepSeek-V4 / Attention Denoiser / MRCR 等概念卡）
 
-1. **懒重连双线程竞态**：多个线程同时看到 `isAlive()==false` → 都进重连 → 关旧建新发生多次（stdio 型拉起多个子进程）
-2. **重连期间并发请求无约定**：一个线程在重连（可能数秒），其余 `callTool` 是等还是失败，设计未定义
-3. **重连建新后旧 wrapper 指向旧 client**：`tools()` 缓存的适配器绑定的是发现时刻的 client 实例，重连换实例后全部失效
-4. **close 与重连互斥缺失**：`close()` 与并发重连交错 → 可能在 close 后又重建出僵尸连接；`isAlive`/`closed` 跨线程可见性未声明
+## 论文要点（备忘）
 
-并发来源是真实的：`StreamingToolExecutor.runConcurrently`（StreamingToolExecutor.java:88-112）把 READ 权限组的多个工具用 `VirtualThreads.POOL` **真实并行**执行，所以同一 server 的多个 `callTool` 并发到达不是假设，而是常态。
+- 问题：长上下文推理时 KV Cache 常驻 GPU，128K~512K 上下文显存不可承受。
+- 方案：历史 KV 下沉 CPU Cold Pool，GPU 只留最近窗口 + 按需召回的关键 chunk；Neural Memory Indexer（独立 dual-encoder，只训 query 侧）根据当前 hidden state 预判未来会用到哪些历史 chunk；Sigmoid 阈值召回（非固定 top-k）；训练标签用 Cross-Layer Majority Voting 去噪。
+- 效果：平均物理 KV Cache 压到 baseline 约 1/7（512K 时约 1/10）；平均准确率反升约 0.6pp（attention denoiser 效应）。
+- 对照组落差：Recency Only 33.3、Random 10% 38.7 vs 检索感知 77.5 → "知道该召回哪些历史"才是关键。
+- 局限：密集全局记忆任务（MRCR 76→48）失败；超出 512K 训练长度后选择质量退化接近随机；历史侧 key 冻结、与 backbone 解耦训练、无端到端联合优化。
 
-## 核心改动（已写入哪些文件）
+## 对 ACode 的可能借鉴（仅假设，未定案）
 
-### `checklist.md` T6 —— 新增 3 条验收 + 1 段并发决策说明
+ACode 是 API 客户端，服务端显存机制（LSA/Cold Pool/Memory Indexer 训练）不可迁移。若要借鉴，落在客户端概念层：
 
-- **并发重连竞态（等锁单飞）**：两个线程同时打到死连接 → 只重建一次连接（stdio 只拉起一个子进程 / 假 server 只收到一次 initialize），两个 callTool 均正常返回
-- **重连后旧 wrapper 仍可用**：重连（建新 client）后，重连前已从 `tools()` 拿到的 wrapper 再 execute → 经 connection 路由到当前活 client、调用成功
-- **close 与重连互斥**：close 置 closed 标志后并发 callTool/重连不重建连接；close 时 in-flight 请求异常完成、不悬挂
+1. 现状超限裁最旧（Recency Only 语义）在长会话上会静默丢远距决策，且模型不知情；
+2. "被裁历史可被按需取回"的冷池思想，与"裁剪前留一小段摘要保远距信号"两类方向；
+3. "少塞噪声反升质量"提醒克制注入，避免自动记忆过度灌入上下文。
 
-### `tasks.md` T6 —— `McpServerConnection` 补充「并发契约」4 条
-
-① 重连单飞用等锁（备选快速失败，切换只改锁获取逻辑）；② wrapper 不绑定 client 实例，经 `volatile currentClient` 路由；③ `close()` 置 `volatile closed` 标志并与重连互斥；④ `isAlive`/`closed` 用 volatile 保证可见性。
-
-## 关键设计决策
-
-### 决策 1：重连单飞用「等锁」（当前选型）
-
-| 方案 | 行为 | 代价 |
-|---|---|---|
-| **等锁**（当前） | callTool 遇连接死亡 → 在重连锁上阻塞，同一时刻仅一个线程重建；其余等锁后复用新连接 | 重连期间并发调用阻塞，受 McpClient 超时兜底 |
-| 快速失败（备选） | 并发 caller 不等待，检测到重连进行中立即返回 `ToolResult.failure` | 瞬时失败更多，但更快、不阻塞 |
-
-**选型理由**：重连多发生在「进程被杀 / 网络断」等低频场景，优先减少失败、保证调用成功率。
-
-**切换方式**：只改 `callTool` 的锁获取逻辑（阻塞获取 → 尝试获取失败即返回），验收用例与契约不变。
-
-### 决策 2：wrapper 经 connection 的 `volatile currentClient` 路由
-
-wrapper 只持有 connection 与原始工具名，不持有 client 实例；每次 execute 现读 `currentClient`。重连只换 volatile 字段，旧 wrapper 自动落到新连接，对重连透明。
-
-### 决策 3：close 与重连互斥
-
-connect/close/reconnect 共用一把锁；`close()` 置 `volatile closed`，`connect()` 开头检查 closed，防 close 后重建。
-
-### 决策 4：跨线程可见性
-
-`isAlive()`/`closed`/`currentClient` 用 volatile；HTTP 的 isAlive「最近请求成败」用原子更新，避免内存可见性问题。
-
-### 决策 5：McpToolWrapper 不继承 BaseTool——`final execute` 的保留理由与边界
-
-**为什么 `BaseTool.execute`（BaseTool.java:53）是 final**：模板方法把「校验 → 提交虚拟线程 → 超时/中断/异常 → `ToolResult.failure`」焊死。`final` 把「永不抛异常 + 必有超时上限」这条安全不变式从**约定**（Tool 接口 javadoc 仅声明「实现不应抛出异常」）升级为**结构强制**——6 个内置工具（Bash 起进程、文件 IO 等复杂逻辑）没有任何一个能绕过超时或把异常漏进 Agent 循环。一旦 execute 可覆写，任意一个 override 都能打破该不变式。
-
-**值得保留的原因**：安全外壳是普适不变式，强制优于约定；内置工具逻辑复杂、风险集中，此处最需要结构保证。
-
-**已知边界（模板范围过度）**：final 把三件事捆绑，只有「安全外壳」是普适的——
-1. `paramSpecs()` 校验：不普适（MCP 是任意 JSON Schema，交互/无参工具也不走）
-2. 虚拟线程执行模型：不普适（交互工具需特定线程、MCP 需异步）
-3. final 只保护 BaseTool 子树：直接实现 `Tool` 的类（AskUserTool/ExitPlanModeTool/本阶段 McpToolWrapper）仍须手动保证不抛，靠 Tool 接口 javadoc + 单点 adapter 兜底——final 给的是防御纵深，不是系统级保证
-
-**与 T6 的关系**：McpToolWrapper 绕开 BaseTool 不是规避缺陷，而是这层模板形状不符；直接实现 Tool 复用 AskUserTool/ExitPlanModeTool 的既有先例，安全契约在 adapter 单点兑现（任何异常转 `ToolResult.failure`）。
-
-**未来方向（本阶段不做）**：理想解是把安全外壳从继承解耦成装饰器（如 SafeTool wrapper，可包任意 Tool 获得「不抛 + 超时」），内置与 MCP 工具统一复用；属跨工具统一重构，ch07 不实施。
-
-## 问题解释存档（为什么）
-
-### 问题 A：同时调 callTool 的「两个线程」是哪两个？
-
-来源是 `StreamingToolExecutor.runConcurrently`（StreamingToolExecutor.java:88-112）：一个模型回合如果产出多个 **READ 权限** 工具调用，会分成「读组」用 `VirtualThreads.POOL.submit` 真实并行执行。
-
-```
-模型一个回合要调 2 个 MCP READ 工具（同属一个 server）
-  → 读组并行：每个工具提交一个虚拟线程（VirtualThreads.POOL）
-  → 此时 server 连接刚好是死的（stdio 子进程被杀 / HTTP 网络断）
-  → 两个虚拟线程各自进 McpToolWrapper.execute → callTool
-  → 两个线程都看到 isAlive==false → 都尝试重连 → 竞态
-```
-
-「两个线程」= **同一个读组里的两个虚拟线程**，各自执行一个 `tool_use` 块，并发打到同一个 `McpServerConnection`。串行组（非 READ）在执行线程上逐个跑、互不竞争；**并发只发生在读组**。
-
-### 问题 B：旧 McpToolWrapper 为什么指向旧 client？
-
-`connect()` 语义是「关旧建新」——重连会新建一个 McpClient（新 transport、stdio 型就是新子进程）；而 wrapper 是连接发现时由 `tools()` 一次性缓存的。
-
-```
-时间轴：
- t0  connect() → 建 client#1 → listTools → tools() 缓存一批 McpToolWrapper
-       └─ 若 wrapper 构造时直接持有 client#1 的引用 ─┐
- t1  子进程死 → callTool 触发重连 → 关 client#1 → 建 client#2 │
- t2  重连后，之前缓存/已发给 Agent 的 wrapper 再 execute     │
-       └─ 它仍握着 client#1 → 打一个已关闭的 client → 永远失败 ←┘
-```
-
-根子：**连接生命周期会变（重连换实例），而 wrapper 是静态缓存的**。修法即决策 2——wrapper 不缓存 client 引用，每次现读 connection 的 `volatile currentClient`。
-
-## 验收要点（可勾选，见 checklist T6）
-
-- [ ] 两个线程同时打到死连接 → 只重建一次连接，两个 callTool 均正常返回
-- [ ] 重连建新后，重连前拿到的旧 wrapper 再 execute 仍成功（路由到新连接）
-- [ ] close 置 closed 后，并发 callTool/重连不重建连接；in-flight 请求异常完成
-
-## 明确不做 / 后续可改
-
-- **快速失败切换**：已预留，只改 `callTool` 锁获取逻辑，本轮不实现
-- **HTTP isAlive 原子更新细节**：实现时按「最近一次请求结果原子记录」处理，不新增接口
-- **安全外壳解耦成装饰器**（SafeTool wrapper，见决策 5 未来方向）：跨工具统一重构，本轮不实施
-- 其他并发点（tools() 快照不可变性、重连期间的超时上限）在实现时随 T6/T7 落定，不单独立文档
-
----
-
-# 实现落地时的架构影响与偏离记录（T1–T8）
-
-> 最后更新：2026-09-02。记录按 tasks.md 逐任务实现时，对既有接口/主流程做过的增量扩展与偏离，
-> 以及「改动会否破坏当前项目架构」的结论。全部改动均为**增量**：未改任何既有行为路径的语义，
-> 未配置 mcp_servers 时 ACode 行为与之前完全一致。
-
-## 1. Transport 接口新增默认方法 setTerminationHandler
-
-tasks.md T2 定义的 Transport 接口为 `start/send/setMessageHandler/isAlive/close`。实现新增
-`default void setTerminationHandler(Runnable)`：stdio EOF / 进程退出 / 流关闭时恰好回调一次，
-供 `McpClient`（T4）把挂起请求全部异常完成。
-
-**为什么需要**：`McpClient` 的 pending 表只有「响应到达」一种完成途径；传输层死亡（子进程被杀）时
-没有信号通知协议层，挂起的 `future.get(timeout)` 只能靠超时兜底（最长 60s），违背「进程意外死亡被
-及时感知」。有默认空实现，既有契约不被破坏。
-
-## 2. T6 callTool 的重连触发是「isAlive 检测 + 调用失败兜底」双路径
-
-tasks.md 契约原文是「isAlive false 时先重连一次」。实现比它多一条路径：
-`client.callTool` 抛 `Kind.CONNECTION` 失败时也 `reconnectIfNeeded` + 重试一次。
-
-**为什么需要**：HTTP 传输的 `isAlive()` = 「最近一次请求成败」——server 在上次成功请求后刚死亡时，
-`isAlive()` 仍是 `true`（陈旧），单靠 isAlive 检测不到死连接，调用会在 send 时才报连接失败。
-兜底路径保证这种情况也重连一次。**上限**：每个 callTool 最多 2 次建连（检测路径 1 次 + 失败兜底 1 次），
-不无限重试，与 checklist「重连失败返回失败结果、不无限重试」一致。等锁单飞语义不受影响（两条路径
-都经同一个 `connectLock`）。
-
-## 3. T8 接入主流程：构造器同步 connectAll，启动会被慢 server 阻塞
-
-`ConversationController` 构造器在工具注册后同步执行 `McpManager.connectAll()`。若配置了慢/挂起
-的 server（握手超时），启动会阻塞到该 server 超时（默认 60s，config `timeout` 可缩短）。
-
-**对既有架构的影响**：无破坏——未配置 mcp_servers 时 manager 为空、connectAll/registerTools 为
-no-op；既有测试全部以无 mcp_servers 的 config 构造 controller，行为不变。**已知代价**：配置了
-server 后启动多一段阻塞（受超时兜底）。**未来方向（本轮不做）**：异步/并行连接（connectAll 抛到
-VirtualThreads 后注册），需保证「注册发生在 Agent 首次构建前」的时序。
-
-## 4. T8 退出清理挂在 start() 的 finally
-
-`start()` 在 `try (AcodeTerminal)` 外新增 `finally { closeMcpManager(); }`：`/quit` 与异常退出都
-清理 stdio 子进程，满足 checklist「任务管理器无残留」。未改动 try-with-resources 结构本身。
-
-## 5. 测试设施偏离：FakeMcpServer 的 kill 先回包再退出
-
-tasks.md 原设计是 kill「进程直接结束不回包」。实现改为「先回 text 响应再退出」。原因：经
-`McpClient.callTool("kill")` 走完整协议时，不回包会导致挂起请求等超时（最长 60s）而非立即感知死亡。
-回包后退出仍精确模拟「子进程死亡」：EOF → `markDead` → 终止回调 → `isAlive=false`，StdioTransport
-的 EOF 终止语义测试（`subprocessDeathMarksDeadAndTriggersTermination`）不受影响。
-
-## 6. 包可见测试 seam：transport 工厂注入 + connectCount()
-
-`McpServerConnection` 提供包可见构造器（注入 `Function<McpServerConfig, Transport>`）与包可见
-`connectCount()`，用于 McpToolWrapperTest 覆盖「重连失败返回失败、不无限重试」「并发等锁单飞只重建一次」。
-生产路径不受影响（默认工厂按 config.type 建 Stdio/Http 传输）。
-
-## 7. 测试方法名与新增包
-
-新测试方法全部英文驼峰（仓库惯例）；新增包 `com.acode.mcp`（主代码）与 `com.acode.mcp.fakeserver`
-（测试子进程）。未动既有包的任何类语义（config 层仅增量：`AppConfig.mcpServers` 字段、
-`ConfigLoader.KNOWN_KEYS + apply 分支`、新 `McpServerConfig`）。
+> 以上仅是读后摘记，不等同于 ACode 任何阶段的功能承诺。真正要做什么，等补充内容后再定。

@@ -1,285 +1,220 @@
-# ACode 阶段三：Agent Loop — 任务清单
+# ACode 阶段四：Prompt 工程体系 — 任务清单
 
-> 最后更新：2026-08-14
-> 依赖关系：`(T1,T2)→T3→T5`；`T1→T4→T5`；`T6`、`T7`、`T9` 相互独立可并行；`T5+T7→T8`；`T5,T8,T9,T10→T11→T12`。
-> 参考实现：MewCode Java（`F:/code/agent-doc-tech/agent-doc-tech/downloads/source/2_mewcode-java.zip` 内 `src/main/java/com/mewcode/agent/`），任务中标注的参考文件用 `unzip -p` 直接读取，不必解压。
+> 最后更新：2026-08-18
+> 依赖关系：`(T1,T2)→T3`；`T2,T3→T7`；`T3,T5,T6,T7→T8→T10`；`T4、T5、T6、T9` 相互独立可并行。
+> 参考实现：MewCode Java（`F:/code/agent-doc-tech/agent-doc-tech/downloads/source/2_mewcode-java.zip` 内 `src/main/java/com/mewcode/prompt/{PromptSections,PromptBuilder,PlanModePrompt}.java`），任务中标注的参考文件用 `unzip -p` 直接读取，不必解压。
 
 ## 约定
 
-- 包根 `com.acode`，新增 Agent 层 `src/main/java/com/acode/agent/`（事件模型、收集器、执行器、循环本体、plan 配套），测试 `src/test/java/com/acode/agent/`
-- 现有文件行号以 2026-08-14 的 HEAD 为准，改动时先 Read 确认
+- 包根 `com.acode`，新增 Prompt 层 `src/main/java/com/acode/prompt/`（七模块、组装器、环境收集、system-reminder、管线），测试 `src/test/java/com/acode/prompt/`
+- 现有文件行号以 2026-08-18 的 HEAD 为准，改动时先 Read 确认
 - 每个任务完成后跑 `mvn test` 确认不破坏已有代码（构建环境：`JAVA_HOME=D:\java\jdk21`）；测试方法名用英文驼峰
-- 需要复用的现有设施：`ToolExecutor`（单工具执行语义）、`ToolCallDisplay`/`StreamPrinter`（UI 渲染）、`FakeProvider`（测试桩）、`RetryPolicy`（退避重试）、`Conversation.estimateTokens` 与 `trim`（上下文控制）
+- 需要复用的现有设施：`Conversation.trim/estimateTokens`（上下文控制）、`FakeProvider`（测试桩）、`AgentPlanModeTest`（plan 断言范式）、`ToolSchemaConverter.toAnthropicTools`（tools 序列化）、`AnthropicProviderTest`/`OpenAiProviderTest`（buildBody JSON 断言范式）
 
-### 全局集成风险（各任务参考资料会引用，编号 R1~R8）
+### 全局集成风险（各任务参考资料会引用，编号 R1~R7）
 
-- **R1** `ChatListener::onComplete` 被 `FakeProvider.complete()` 以方法引用形式依赖（FakeProvider.java:29-31），还有 StreamPrinter（StreamPrinter.java:75）与多处匿名实现。扩展签名必须用「反向委托」：无参 `onComplete()` 变 default 并委托给新的带参版本。若反过来（带参委托无参），只覆写带参版的收集器将收不到完成信号，Agent 循环挂死。
-- **R2** `FakeProvider.scripted()` 脚本耗尽后静默返回、不回调（FakeProvider.java:71-73）。N 轮循环测试的脚本份数必须精确匹配请求次数；Agent 层重试会额外消耗一份脚本，编排时计入。
-- **R3** `StreamPrinter.onComplete()` 只重置 renderer 与 responseLines，不重置 toolCalls 与 textFinalized（StreamPrinter.java:74-78），不可跨轮复用。接入事件流后保持「每轮新建实例」，`TurnComplete` 时对旧实例调 `updateToolCalls` 收尾。
-- **R4** Ctrl+C 检测从「主线程 20ms 轮询」变为「跨线程信号」：取消用 AtomicBoolean + interrupt，Agent 在 delta 回调、轮边界、每个工具执行前检查。socket 读阻塞对 interrupt 不敏感（ch03 同样存在），provider 子线程保持 daemon，靠取消标志保证状态不乱。
-- **R5** 取消时历史一致性：未执行的工具调用必须补 `ToolResult.failure("已取消")` 一并入历史，否则会话恢复或继续对话时出现悬空 tool_use，Anthropic 会报 400。
-- **R6** 工具列表从会话级静态（`Conversation.setTools`，Conversation.java:46-49）变为每请求动态（plan 模式过滤）。最小改动：加 `buildRequest(List<Tool>, ChatMessage systemReminder)` 重载，旧 `buildRequest()` 委托保留，存量测试零改动。
-- **R7** plan 提醒以 SYSTEM role 注入：Anthropic 端聚合进 system 字段（AnthropicProvider.java:74-95）、OpenAI 端输出 role:"system" 消息（OpenAiProvider.java:101-104），两端已原生支持、无需改 provider。提醒必须「只进请求、不进历史」，且在上下文截断之前独立插入——若并入历史参与丢弃，超限时会作为最旧消息被扔掉。
-- **R8** max_tokens 截断轮可能文本与工具调用都为空（纯 tool_use 场景被截断）：此时跳过 assistant 消息、只注入继续提示（空 assistant 消息对 Anthropic 非法）。
+- **R1** `ChatListener` 扩展必须用 default 方法（ch03 R1 同款反向委托）：新增 `default void onUsage(Usage usage) {}`，存量实现（StreamPrinter / FakeProvider / TurnCollector / 各处匿名类）零改动。若做成抽象方法，所有实现类都要改。
+- **R2** `Conversation.buildRequest(List<Tool>, ChatMessage)` 语义变化：reminder 从「SYSTEM 消息头部插入」改为「user system-reminder 尾部插入」。`AgentPlanModeTest` 现断言 `messages().get(0).content()` 是提醒的用例，改为断言 `get(messages().size()-1)`；「只进请求、不进历史」性质保留（ch03 R7）。
+- **R3** 环境快照是 session state：会话启动探测一次存入会话对象，每轮组装时作为 messages 首条注入（不进历史）。因此**不再需要** `/clear`、`loadSession`、resume 的环境补注入/替换逻辑；识别标记 `# Environment` 仅用于测试断言与排障。
+- **R4** Anthropic cache_control 规范：system 必须是 content block **数组**形式且 cache_control 加在最后一个块；tools 的 cache_control **只能加在数组最后一个工具**上。加错位置 API 报 400。
+- **R5** 环境消息不进历史、不参与 trim：trim 只作用于历史消息，环境快照每轮由会话状态重新注入，无「被 trim 丢弃」风险（取代原环境消息为最旧消息、可能被丢弃的风险）。
+- **R6** `AgentEvent` 是 sealed interface：新增 `UsageEvent` 后，所有对 AgentEvent 的 switch 会因不穷尽而编译报错——编译错误即消费点索引，逐个补分支（controller 事件循环、测试断言）。另需 `FakeProvider` 新增「发 usage」能力（照 ch03 T2 的 `complete(String)` 模式加一个 Action 工厂方法）。
+- **R7** 环境与轮次级提醒都不进历史（历史仅含真实对话消息）：UI 渲染历史（`appendHistoryMessage`）与会话预览（`preview()`）**无需**跳过 system-reminder——环境文本不会以「你:」上屏、preview 天然显示用户问题。若未来把 system-reminder 消息写入历史，再补跳过逻辑。
 
 ---
 
-### T1 AgentEvent 事件模型
+### T1 prompt 包骨架：Section + 七模块内容
 
-**目标**：sealed interface + 7 个 record，Agent 与 UI 之间的唯一契约；一次性定义队列容量常量。
+**目标**：Section 结构体 + Priority 排序的组装器雏形，七个英文模块常量落地，内容裁剪适配 ACode 工具集。
 
 **影响文件（新建）**
-- `src/main/java/com/acode/agent/AgentEvent.java` — `sealed interface AgentEvent`，records：
-  - `StreamText(String text)` — 模型文本增量
-  - `ToolUseEvent(String toolId, String toolName, JsonNode args)` — 模型发起工具调用
-  - `ToolResultEvent(String toolId, String toolName, String output, boolean isError)` — 单个工具执行完成
-  - `TurnComplete(int turn)` — 一轮结束（工具结果已回填，可开始下一轮）
-  - `LoopComplete(int totalTurns)` — 循环结束（正常/触顶/计划交付/错误统一以该事件收尾，具体原因经 Agent 查询）
-  - `ErrorEvent(String message)` — 不可恢复错误
-  - `RetryEvent(String reason, long waitMs)` — 重试预告（UI 显示等待状态）
-  - 常量 `QUEUE_CAPACITY = 64`（事件队列背压上限）
-- `src/test/java/com/acode/agent/AgentEventTest.java` — 各 record 构造与访问器冒烟
+- `src/main/java/com/acode/prompt/PromptSections.java` — 七个工厂方法，各返回带固定 priority 的 Section：
+  - `identitySection()`（0）：`You are ACode, an AI programming assistant running in the terminal...` + 两条 IMPORTANT 安全红线（不引入漏洞 / 不编造 URL）
+  - `behaviorSection()`（10）：输出规则（工具调用外文本即展示给用户）、工具被拒绝后不重复同一调用、`<system-reminder>` 标签含义、工具结果含外部数据时的 prompt injection 警惕
+  - `toolUsageSection()`（20）：六工具映射（ReadFile/EditFile/WriteFile/Glob/Grep 优先于对应 shell 命令、Bash 仅无专用工具时用）、独立调用同轮并行、多工具调用放同一响应
+  - `codeQualitySection()`（30）：不做超需求的功能/抽象/重构、默认不写注释（仅当 WHY 不明显时加一行：隐藏约束/workaround）、三行相似代码优于提前抽象、只在系统边界做验证、不做向后兼容 hack
+  - `securitySection()`（40）：可逆性与爆炸半径判断、破坏性操作先确认、危险命令清单、不破坏性捷径、意外状态先调查
+  - `taskPatternSection()`（50）：主要任务类型、模糊指令按软件工程任务理解、探索性问题回 2-3 句建议、先读再改、优先编辑已有文件、失败先诊断再换策略、完成前验证
+  - `outputStyleSection()`（60）：file_path:line_number 引用、无 emoji、冒号规则、先说一句要做什么、关键节点简短更新、结尾 1-2 句总结
+- `src/main/java/com/acode/prompt/PromptBuilder.java` — `record Section(String name, int priority, String content)`；`add(Section)` 链式；`build()`（priority 升序、strip 过滤空内容、`\n\n` 拼接）；`static String buildSystemPrompt()` 固定装配七个模块
+- `src/test/java/com/acode/prompt/PromptSectionsTest.java` — 七模块 name/priority 断言、内容非空且为英文、关键规则语句存在
+- `src/test/java/com/acode/prompt/PromptBuilderTest.java` — 乱序 add 后按优先级输出、空内容过滤、分隔符为两个换行
 
 **依赖**：无
 
 **参考资料**
-- MewCode `src/main/java/com/mewcode/agent/AgentEvent.java`（sealed interface + records；本任务去掉它的 ThinkingText/UsageEvent/PermissionRequestEvent，thinking 不展示、无 token 统计、无权限确认）
+- MewCode `com/mewcode/prompt/PromptSections.java`（七段文本的直接来源，按上面模块划分裁剪：去掉 ACode 没有的 Agent 委派 / ToolSearch / Skill / thinking / hooks 等说明）
+- MewCode `com/mewcode/prompt/PromptBuilder.java`（Section record + build 排序拼接）
+- 参考书第 5 章理论篇「七个模块」逐条说明（本任务对应内容来源）
 
 ---
 
-### T2 Provider 层 stop_reason 透传
+### T2 环境收集器 + system-reminder 机制
 
-**目标**：`ChatListener` 增加带流结束原因的完成回调（反向委托，零破坏）；两端解析器捕获并透传；FakeProvider 支持指定结束原因。
+**目标**：环境快照收集器（git 探测、shell 兜底）+ XML 包裹消息工厂（会话级注入的基础）。
 
-**影响文件（修改）**
-- `src/main/java/com/acode/provider/ChatListener.java` — 关键改法（见 R1）：
-  - 原抽象方法 `void onComplete()` 改为 `default void onComplete() { onComplete(null); }`
-  - 新增 `default void onComplete(String stopReason) { /* 默认忽略 */ }`
-  - 现有实现类零改动；解析器改调带参版
-- `src/main/java/com/acode/provider/anthropic/AnthropicSseParser.java` — 加字段 `stopReason`；`message_delta` 分支捕获 `delta.stop_reason`（当前 39-41 行被 default 吞掉）；`message_stop`（38 行）改调 `listener.onComplete(stopReason)`
-- `src/main/java/com/acode/provider/openai/OpenAiSseParser.java` — 加字段 `lastFinishReason`；52-55 行 finish_reason 分支记录（含 length / content_filter，不止 tool_calls/stop）；`[DONE]`（30 行）改调 `onComplete(lastFinishReason)`
-- `src/test/java/com/acode/provider/FakeProvider.java` — 新增 `static Action complete(String stopReason)`；现有 `complete()` 保持无参
-- `src/test/java/com/acode/provider/anthropic/AnthropicSseParserTest.java` — 新增用例：message_delta 带 stop_reason=end_turn / max_tokens 被透传（新增覆写 `onComplete(String)` 的 listener，不动现有共享 listener）
-- `src/test/java/com/acode/provider/openai/OpenAiSseParserTest.java` — 新增用例：finish_reason=stop / length 透传
-- `src/test/java/com/acode/provider/FakeProviderTest.java` — 补 `complete(String)` 行为断言
+**影响文件（新建）**
+- `src/main/java/com/acode/prompt/EnvironmentDetector.java` —
+  - `record EnvironmentSnapshot(String workDir, String os, String arch, String shell, boolean isGitRepo, String gitBranch, String model, String date)`
+  - `static EnvironmentSnapshot detect(String model)`：`System.getProperty("user.dir")`、`os.name`/`os.arch`、SHELL 环境变量（空则兜底 `"bash"`）、`git -C <workDir> rev-parse --is-inside-work-tree` + `--abbrev-ref HEAD`（失败静默、非仓库分支为空）、`LocalDate.now()`
+  - `static String render(EnvironmentSnapshot)`：生成 `# Environment` 段落的字段列表（Working directory / Platform / Shell / Is git repo / Git branch / Model / Date）
+- `src/main/java/com/acode/prompt/SystemReminder.java` —
+  - 常量 `OPEN = "<system-reminder>"`、`CLOSE = "</system-reminder>"`
+  - `static ChatMessage wrap(String content)`：USER role + 单 text 块，内容为 `OPEN\n<content>\nCLOSE`
+  - `static ChatMessage environment(EnvironmentSnapshot)`：`wrap(render(snapshot))`
+  - `static boolean isSystemReminder(ChatMessage)`：内容以 OPEN 开头（供测试断言与排障识别）
+- `src/test/java/com/acode/prompt/EnvironmentDetectorTest.java` — @TempDir 下 `git init` 的仓库（isGitRepo=true、分支非空）/ 普通目录（false、不抛异常）；SHELL 置空兜底 bash；render 含全部 8 个字段行
+- `src/test/java/com/acode/prompt/SystemReminderTest.java` — 包裹格式、role=USER、isSystemReminder 判定
 
 **依赖**：无
 
 **参考资料**
-- AnthropicSseParser.java:30-48（事件分发）、OpenAiSseParser.java:27-61
-- FakeProvider.java:16-35（Action 模型，加一个工厂方法即可）
-- Anthropic message_delta.stop_reason 与 OpenAI finish_reason 语义：https://docs.anthropic.com/en/api/messages-streaming
+- MewCode `PromptBuilder.detectEnvironment`（zip 内 PromptBuilder.java 环境探测段：`git -C workDir` 两次探测、`ProcessBuilder` 用法、`LocalDate.now()`）
 
 ---
 
-### T3 TurnCollector 流式收集器
+### T3 组装管线：Conversation 改造 + PromptPipeline
 
-**目标**：一轮流式响应的收集器：累积文本 / 工具调用 / 结束原因，同时把文本增量与工具调用转发进事件队列；带取消守卫。
+**目标**：system 提示词、环境快照（session state）、trim 后历史、轮次级 reminder 四段在每轮请求中按序组装；`PromptPipeline.assemble` 作为每轮请求唯一入口。
 
-**影响文件（新建）**
-- `src/main/java/com/acode/agent/TurnCollector.java` — `implements ChatListener`，构造 `(BlockingQueue<AgentEvent> events, AtomicBoolean cancelled)`；覆写 `onDelta`（累积 + 发 StreamText）、`onToolUse`（累积 + 发 ToolUseEvent）、`onComplete(String)`（收 stopReason）、`onError`（记录错误）；cancelled 置位后忽略一切回调（守卫模式照抄 ConversationController.java:488-520）；暴露 `text()` / `toolUses()` / `stopReason()` / `error()`
-- `src/test/java/com/acode/agent/TurnCollectorTest.java` — FakeProvider 单轮脚本：文本累积、tool_use 累积、stopReason 捕获、事件入队顺序、取消后回调被忽略、错误记录
+**影响文件（修改 + 新建）**
+- `src/main/java/com/acode/conversation/Conversation.java`（改）— 状态持有者：加 `String systemPrompt` + setter、`ChatMessage environment`（渲染好的环境 system-reminder）+ setter；`trim()`/`estimateTokens` 保留；`buildRequest(List<Tool>, ChatMessage turnReminder)`（91-104 行）改为：
+  - 结果列表 = `[SYSTEM（systemPrompt 非空时）]` + `[环境 system-reminder（environment 非空时，首条 user 消息，不进历史）]` + `trim()` + `[turnReminder（若非空，尾插）]`
+  - reminder 语义从「头部 SYSTEM 消息」改为「尾部 user 消息」；环境消息从「历史首条持久化」改为「每轮注入 messages 首条、不进历史」（R3）；`buildRequest()` 无参委托保留
+- `src/main/java/com/acode/prompt/PromptPipeline.java`（新）— 每轮唯一入口：`static ChatRequest assemble(Conversation c, List<Tool> tools, ChatMessage turnReminder)` 按「system → 环境 → 历史 → 轮次级」四段组装（环境取自 c 的会话状态；trim 逻辑留在 Conversation；后续 MEWCODE/记忆源在此插拔）
+- `src/test/java/com/acode/conversation/ConversationTest.java`（改）— 新增：systemPrompt 未设置时请求与改前一致（存量用例零改动）；设置后请求首条为 SYSTEM 消息、`history()` 不含；environment 设置后请求 messages 首条为环境 system-reminder 且不进历史；turnReminder 尾插且不进历史；turnReminder 为 null 无额外消息
+- `src/test/java/com/acode/prompt/PromptPipelineTest.java`（新）— assemble 产出「system → 环境 → 历史 → 轮次级」四段顺序断言；与 conversation.buildRequest 等价冒烟
 
 **依赖**：T1、T2
 
 **参考资料**
-- ConversationController.java:485-521（现有轮内匿名 listener 的收集与守卫逻辑，原样迁移）
-- MewCode Agent 轮内收集三元组（text / toolCalls / stopReason）
+- Conversation.java:83-104（现 buildRequest；R2）；ch03 R7 注释（提醒不进历史）
+- AnthropicProvider.java:74-95 / OpenAiProvider.java:109-127（SYSTEM 两端聚合已支持，无需改 provider）
 
 ---
 
-### T4 StreamingToolExecutor 工具分区执行器
+### T4 工具描述强化
 
-**目标**：按权限分区执行——读类并发（虚拟线程）、写类与命令类串行且保持声明顺序，全部读类先执行；结果对齐输入顺序；每个完成后发 ToolResultEvent；支持取消补位。
+**目标**：六工具 description 补齐用法、优先级、配合关系，与 ToolUsage 模块双重强化关键规则。
 
-**影响文件（新建）**
-- `src/main/java/com/acode/agent/StreamingToolExecutor.java` — 签名建议：
-  ```java
-  List<ToolResult> execute(List<ToolUseBlock> calls,
-                           BlockingQueue<AgentEvent> events,
-                           AtomicBoolean cancelled)
-  ```
-  - 分区：`tool.permission() == READ` 进读组，其余按声明顺序进串行组
-  - 读组 >1 时用 `Executors.newVirtualThreadPerTaskExecutor()` 并发提交，全部 join；读组 ≤1 或串行组逐个执行
-  - 结果 List 按输入 index 落位（回传顺序 = 声明顺序，执行顺序 = 读先并发、写后串行）
-  - 单个调用复用 `ToolExecutor`（注册表查找、失败归 ToolResult；未注册/已禁用返回失败结果）
-  - 每个完成发 `ToolResultEvent`；取消置位时未执行/未完成的补 `ToolResult.failure("已取消")`（见 R5）
-- `src/test/java/com/acode/agent/StreamingToolExecutorTest.java` — 记录执行时序的桩工具 + CountDownLatch：混合批次执行顺序（读并发先于写串行）、结果对齐声明顺序、READ 真实并发（两桩同时运行）、取消后补位、空批次、未注册工具返回失败
+**影响文件（修改，各文件 description 字段见行号）**
+- `src/main/java/com/acode/tool/impl/ReadFileTool.java`（25-29 行）— 补：路径用绝对路径；默认前 2000 行、大文件用 offset/limit 只读需要部分；优先于 Bash `cat/head/tail`；编辑文件前必须先读
+- `src/main/java/com/acode/tool/impl/EditFileTool.java`（28-33 行）— 补：编辑前必须先 ReadFile；old_string 必须与文件现有内容精确唯一匹配
+- `src/main/java/com/acode/tool/impl/WriteFileTool.java`（27-32 行）— 补：创建新文件 / 整体重写用本工具而非 Bash `echo` 重定向
+- `src/main/java/com/acode/tool/impl/BashTool.java`（33-39 行）— 补：仅在无专用工具时使用；command 参数写清命令用途；保留 Windows Git Bash 说明、60s 超时、30000 字符截断
+- `src/main/java/com/acode/tool/impl/GlobTool.java`（28-33 行）— 补：文件查找用本工具而非 `find/ls`
+- `src/main/java/com/acode/tool/impl/GrepTool.java`（31-37 行）— 补：内容搜索用本工具而非 `grep/rg`
 
-**依赖**：T1
+**依赖**：无（description 只影响 schema 生成，无行为变化，现工具测试应全绿）
 
 **参考资料**
-- ToolExecutor.java:20-28（单工具执行语义）；BaseTool 自带超时与异常归结果（执行器无需再包超时）
-- ConversationController.java:565-604（ch03 取消补位模式）；MewCode `StreamingExecutor.executeAll`（分区执行 + 事件推送）
+- MewCode `PromptSections.java` 的 UsingTools 段落（优先级/配合关系的措辞来源）
+- 参考书第 5 章理论篇「工具描述也是 Prompt 工程」（好描述 vs 差描述示例）
 
 ---
 
-### T5 Agent 循环本体
+### T5 cache_control 输出
 
-**目标**：ReAct 循环核心：五种终止条件、截断恢复（3 次上限）、重试（2 次上限）、取消信号、历史写入、终止原因查询。
-
-**影响文件（新建）**
-- `src/main/java/com/acode/agent/Agent.java` — 签名建议：
-  ```java
-  public Agent(ChatProvider provider, Conversation conversation,
-               ToolRegistry registry, ToolContext context, int maxIterations)
-  public BlockingQueue<AgentEvent> run()   // 虚拟线程跑循环，返回事件队列
-  public void cancel()                     // AtomicBoolean + interrupt
-  public Termination termination()         // NORMAL / MAX_ITERATIONS / CANCELED / PLAN_DELIVERED / ERROR
-  ```
-  循环体 `for (turn = 1; turn <= maxIterations; turn++)`：
-  - 每轮：`conversation.buildRequest()`（T8 前先用静态工具列表）→ provider 在子线程跑 streamChat（保留 ch03 的 20ms 取消轮询模式，ConversationController.java:523-553）+ TurnCollector 入队
-  - 终止判定：①本轮无 tool_use → 文本入 assistant 历史 → LoopComplete（NORMAL）；②轮数触顶且仍有 tool_use → 不执行工具、LoopComplete（MAX_ITERATIONS）；③取消 → 不发 LoopComplete、termination=CANCELED（历史一致性见 R5：执行中的工具补「已取消」结果入历史）；④stopReason 为 max_tokens/length → 截断恢复（见下）；⑤流错误 → 可重试（`RetryPolicy.isRetryable`，最多 2 次：发 `RetryEvent(reason, waitMs)` 后睡 `backoffMs` 再循环）否则 ErrorEvent + LoopComplete（ERROR）
-  - 截断恢复：文本+toolUses 非空则入 assistant 历史（都空则跳过，见 R8）→ 执行工具回传结果 → 注入 user 消息「输出被截断，请从断点继续，不要重复已输出内容」→ 恢复计数 +1（超 3 次按正常终止处理）
-  - 正常轮：assistant 消息（文本 + tool_use 块）入历史 → 分区执行（T4）→ tool_result 按声明顺序入历史 → 发 TurnComplete
-  - 工具结果入历史前截断（迁移 ConversationController.truncateForHistory，384-390 行，2000 字符上限，迁到 agent 包或作为 Agent 静态方法）
-- `src/test/java/com/acode/agent/AgentTest.java` — FakeProvider 脚本：单轮无工具、2 轮工具闭环、3 轮链、触顶（maxIterations=2）、取消（流中 / 工具中）、max_tokens 恢复（`complete("max_tokens")` 脚本 + 连续超限断言终止）、流错误 ErrorEvent、可重试错误 RetryEvent 后成功。注意脚本份数精确匹配请求次数（R2）
-
-**依赖**：T2、T3、T4
-
-**参考资料**
-- MewCode `Agent.java`：`for(iteration=1;;iteration++)` 结构、max_tokens 恢复（去掉它的 token 升级逻辑，本设计明确不做）、终止分支（ExitPlanMode 分支留空位，T8 实现）
-- ConversationController.java:412-604（被替代的两轮闭环；中断/守卫/重绘模式原样迁移）；RetryPolicy.java:17-26（isRetryable / backoffMs）
-
----
-
-### T6 max_iterations 配置
-
-**目标**：YAML 增加 max_iterations（默认 20），加载/校验/示例三处同步。
+**目标**：Anthropic 请求 system 数组形式 + 双断点（system 整体 + tools 末工具）；OpenAI 不输出。
 
 **影响文件（修改）**
-- `src/main/java/com/acode/config/AppConfig.java` — `Integer maxIterations` + getter/setter
-- `src/main/java/com/acode/config/ConfigLoader.java` — KNOWN_KEYS（23-24 行）加 `max_iterations`；apply 加分支，正整数校验风格同 max_context_tokens（97-103 行）
-- `src/main/java/com/acode/config/ConfigValidator.java` — 默认 20、非正报错，风格同 40-44 行
-- `examples/config.yaml`、`examples/config-project.yaml` — 加注释示例
-- `src/test/java/com/acode/config/ConfigLoaderTest.java`、`ConfigValidatorTest.java` — 默认值 / 合法值 / 非法值用例
-
-**依赖**：无（可与 T5 并行；Agent 构造先接受 int 参数，controller 在 T11 从 AppConfig 传入）
-
-**参考资料**
-- ConfigLoader.java:97-103、ConfigValidator.java:40-44
-
----
-
-### T7 ExitPlanModeTool + ToolContext 扩展 + PlanWriter
-
-**目标**：plan 模式交付工具与计划落盘能力；ToolContext 增加 plan 模式标记。
-
-**影响文件（新建 + 修改）**
-- `src/main/java/com/acode/tool/ToolContext.java`（改）— 加 `boolean planMode` 字段、重载构造 `ToolContext(Path, boolean)`、accessor；旧构造默认 false（现有工具零改动）
-- `src/main/java/com/acode/agent/ExitPlanModeTool.java`（新）— `implements Tool`，`Permission.READ`；execute：`!context.planMode()` → `ToolResult.failure("只能在 plan 模式下调用")`；成功返回「计划将在本轮结束后交付，请勿再调用其他工具」的结果
-- `src/main/java/com/acode/agent/PlanWriter.java`（新）— `Path savePlan(Path workingDir, String content)`：slug 由文本生成（清洗非字母数字、截断、兜底时间戳）、`Files.createDirectories` 建 `.acode/plans/`、写 `plan-<slug>.md`、返回路径
-- `src/test/java/com/acode/agent/ExitPlanModeToolTest.java`、`PlanWriterTest.java`（新）— plan 模式成功 / 非 plan 模式 is_error；@TempDir 下目录创建、slug 清洗、内容一致
+- `src/main/java/com/acode/provider/anthropic/AnthropicProvider.java`（改 `buildBody` 74-98 行）—
+  - system 改为数组：`[{"type":"text","text":"...","cache_control":{"type":"ephemeral"}}]`（原 93-95 行 `root.put("system", system.toString())` 改为 `root.putArray("system").addObject().put("type","text").put("text", ...).putObject("cache_control").put("type","ephemeral")`）
+  - tools 非空时：`ToolSchemaConverter.toAnthropicTools(...)` 返回的数组**最后一个**工具元素加 `"cache_control":{"type":"ephemeral"}`（R4）
+- `src/test/java/com/acode/provider/anthropic/AnthropicProviderTest.java`（改）— system 断言从纯字符串改为数组结构（text 值不变 + cache_control 存在）；tools 断言：末工具含 cache_control、其余工具不含；空 tools 无异常
 
 **依赖**：无
 
 **参考资料**
-- ToolContext.java:10-25（注释已预留「可按需扩展注入其他资源」）
-- MewCode `ExitPlanModeTool`（READ 类、execute 校验 plan 模式）；spec 决策：Agent 代写计划文件，规划期不需要 WriteFile 工具
+- AnthropicProvider.java:59-98（buildBody 现状）；ToolSchemaConverter.java:18-24
+- Anthropic Prompt Caching 文档：system 文本块数组、tools 末元素放 cache_control（cache breakpoint 语义）
 
 ---
 
-### T8 Plan Mode 编排
+### T6 usage 解析 + 脚注展示
 
-**目标**：plan 模式全链路：每请求动态工具过滤（读类 + 计划交付工具）、每轮提醒注入、计划交付调用 → 落盘 → 结束循环。
+**目标**：两端解析 usage（含缓存命中字段）→ `onUsage` 回调 → `UsageEvent` → 终端脚注行（T8 接线展示）。
 
 **影响文件（新建 + 修改）**
-- `src/main/java/com/acode/conversation/Conversation.java`（改）— 新增重载：
-  ```java
-  ChatRequest buildRequest(List<Tool> tools, ChatMessage systemReminder)
-  ```
-  reminder 插在 trim() 结果之前、不进历史（见 R7）；旧 `buildRequest()` 委托保留
-- `src/main/java/com/acode/agent/PlanModePrompt.java`（新）— `static String buildReminder(int iteration)`：iteration==1 完整提醒（只读探索 + 把计划写在回复文本里 + 完成后调用计划交付工具 + 计划将保存到工作目录计划目录）；之后每轮稀疏一行
-- `src/main/java/com/acode/agent/Agent.java`（改，基于 T5）— `setPlanMode(boolean)`：
-  - 每轮工具列表：plan 模式 = 可用工具中 `permission()==READ` 者 + ExitPlanMode 工具；普通模式 = 可用工具去掉 ExitPlanMode
-  - plan 模式每轮 `buildRequest(tools, ChatMessage.of(Role.SYSTEM, reminder))`
-  - 检测本轮 toolUses 含 ExitPlanMode → 执行该工具 → `PlanWriter.savePlan` 写本轮累积文本 → tool_result 入历史 → LoopComplete（PLAN_DELIVERED）+ `Path planPath()` getter
-- `src/test/java/com/acode/agent/AgentPlanModeTest.java`（新）— FakeProvider 脚本断言：请求 tools 名称集合只含 READ+ExitPlanMode（`receivedRequests().get(i).tools()`）；ExitPlanMode 调用 → 计划文件落盘（@TempDir 工作目录）、LoopComplete、planPath 非空；iteration≥2 请求首条 SYSTEM 内容为稀疏版
+- `src/main/java/com/acode/provider/Usage.java`（新）— `record Usage(long inputTokens, long outputTokens, long cacheReadTokens, long cacheCreationTokens)`
+- `src/main/java/com/acode/provider/ChatListener.java`（改）— 加 `default void onUsage(Usage usage) {}`（R1）
+- `src/main/java/com/acode/provider/anthropic/AnthropicSseParser.java`（改）— `message_start` 分支（现 49 行 default 吞掉）解析 `message.usage`：`input_tokens` / `output_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens` → `listener.onUsage(...)`
+- `src/main/java/com/acode/provider/openai/OpenAiSseParser.java`（改）— `node.path("usage")` 存在时解析：`prompt_tokens` / `completion_tokens` / `prompt_tokens_details.cached_tokens`（cacheCreation 恒 0）→ onUsage
+- `src/main/java/com/acode/agent/AgentEvent.java`（改）— 新增 `record UsageEvent(Usage usage)`（R6：sealed switch 补分支）
+- `src/main/java/com/acode/agent/TurnCollector.java`（改）— 覆写 `onUsage` → 发 `UsageEvent`
+- `src/test/java/com/acode/provider/FakeProvider.java`（改）— 新增 `static Action usage(Usage)`（R6）
+- 测试：`AnthropicSseParserTest`（录制 message_start 片段：带/不带缓存字段）；`OpenAiSseParserTest`（usage 块）；`TurnCollectorTest`（转发 UsageEvent）；`FakeProviderTest`（usage Action）
 
-**依赖**：T5、T7
+**依赖**：无（脚注接线在 T8）
 
 **参考资料**
-- MewCode `PlanModePrompt.buildReminder`（首轮完整、之后稀疏；本设计简化掉 plan 文件存在性分支）
-- Conversation.java:83-91（现 buildRequest）；AnthropicProvider.java:74-95、OpenAiProvider.java:101-104（SYSTEM 两端已支持，无需改 provider）
+- AnthropicSseParser.java:33-51（message_start 现被忽略）；OpenAiSseParser.java:30-67（usage 块无 choices）
+- ch03 R1 反向委托模式（ChatListener.java:7-35）
 
 ---
 
-### T9 CommandRouter /plan /do
+### T7 Plan Mode 改造
 
-**目标**：命令路由与帮助文案扩展。
+**目标**：plan 提醒从 SYSTEM 硬拼接改为轮次级 system-reminder（英文、尾插）；节奏第 1 轮完整、每 5 轮重复完整。
 
 **影响文件（修改）**
-- `src/main/java/com/acode/ui/CommandRouter.java` — Action 枚举加 `PLAN, DO`；route() 加 `/plan`、`/do` 分支；HELP_TEXT 补两行
-- `src/test/java/com/acode/ui/CommandRouterTest.java` — 两个路由用例 + help 文案断言
+- `src/main/java/com/acode/agent/PlanModePrompt.java`（改）— 英文 FULL/SPARSE 常量（保留 ACode 语义：只读探索、计划写在回复文本、完成后调用 ExitPlanMode 交付、计划落盘 `.acode/plans/`）；`buildReminder(int iteration)`：`iteration == 1 || (iteration - 1) % 5 == 0` → FULL，否则 SPARSE（即第 1、6、11…轮完整版；**注意**：参考实现 MewCode 的节奏公式 `(iteration-1)/5 %5==0` 有 bug 会在第 2~5 轮连续发完整版，按参考书文字意图实现）
+- `src/main/java/com/acode/agent/Agent.java`（改 `buildPlanAwareRequest` 373-379 行）— reminder 改为 `SystemReminder.wrap(PlanModePrompt.buildReminder(turn))`（user 消息；尾插由 T3 的 buildRequest 完成）
+- `src/test/java/com/acode/agent/AgentPlanModeTest.java`（改）— reminder 断言改为 `messages().get(size-1)` 且内容含 `<system-reminder>`（R2）；新增节奏用例：第 1、6 轮 FULL、第 2~5 与 7~10 轮 SPARSE
 
-**依赖**：无
+**依赖**：T2、T3
 
 **参考资料**
-- CommandRouter.java:9-42；注意：controller 的语句 switch（ConversationController.java:169-186）无 default，T11 接入前对 PLAN/DO 无动作属预期中间态，勿在 T9 完成后误判为功能可用
+- PlanModePrompt.java（现全文，中文）；MewCode `com/mewcode/prompt/PlanModePrompt.java`（zip 内；节奏公式按文字意图修正）
+- 参考书第 5 章实战篇「Plan Mode 改造」（不再让缓存失效）
 
 ---
 
-### T10 Agent 综合测试
+### T8 接入主流程
 
-**目标**：agent 层端到端假 provider 编排——N 轮循环、事件序列、历史结构、取消一致性、plan 全流程收口。
-
-**影响文件（新建）**
-- `src/test/java/com/acode/agent/AgentIntegrationTest.java` — 3 轮工具链（ReadFile → Bash → 最终文本）：
-  - 事件序列断言（StreamText → ToolUseEvent → ToolResultEvent → TurnComplete → LoopComplete 的相对顺序）
-  - `receivedRequests` 逐轮断言（每轮历史含前轮 tool_result、文本累积）
-  - 历史消息块结构（assistant 消息文本 + tool_use 块、tool_result 对齐 id、超长结果截断生效）
-  - 取消后历史无悬空 tool_use（R5）
-  - plan 全流程（setPlanMode(true) → 交付 → 落盘 → setPlanMode(false) 后工具列表恢复）
-- `src/test/java/com/acode/provider/FakeProvider.java`（视情况）— 仅当需要「同轮先 error 后成功」等编排时扩展 Action；现有模型已覆盖（重试消耗下一份脚本，见 R2），优先不改
-
-**依赖**：T5、T8
-
-**参考资料**
-- ConversationControllerTest.java:38-73（现有两轮断言范式 → N 轮范式）；FakeProvider.java:104-107（receivedRequests 逐轮断言）
-
----
-
-### T11 接入主流程（替代 handleExchange）
-
-**目标**：ConversationController 从「两轮硬编码闭环」改为「订阅 AgentEvent 渲染」，存量测试迁移。
+**目标**：controller 装配 system prompt 与环境快照（session state）、usage 脚注接线与日志；环境与轮次级提醒不进历史，UI 无需跳过渲染逻辑。
 
 **影响文件（修改）**
-- `src/main/java/com/acode/ConversationController.java`：
-  - 装配（89-104 行）：注册 ExitPlanModeTool（进注册中心但默认不进普通请求）；从 AppConfig 读 maxIterations；`conversation.setTools(...)`（101 行）可删（Agent 每轮显式传列表）
-  - 删除两轮闭环：handleExchange 主体、streamRound、executeTools、RoundResult、ToolRunOutcome（412-613 行）
-  - `handleExchange(input, ctrlC, repaint)` **保留签名**（测试依赖），改为：追加 user 消息与提示符 → `new Agent(...).run()` → 主线程事件消费循环（poll 20ms）：
-    - StreamText → `StreamPrinter.onDelta`
-    - ToolUseEvent → `StreamPrinter.onToolUse`（转成 ToolUseBlock）
-    - ToolResultEvent → 收集进本轮结果列表
-    - TurnComplete → 当前 printer `updateToolCalls(results)` 收尾后**新建实例**（R3）
-    - RetryEvent → 输出状态行（「重试中：<原因>」）
-    - ErrorEvent → 输出错误行
-    - LoopComplete → 按 `agent.termination()` 补提示：MAX_ITERATIONS 提示「达到最大轮数」；PLAN_DELIVERED 读 planPath 展示计划 + 提示「输入 /do 退出 plan 模式开始执行」；CANCELED 提示「已中断」
-    - ctrlC 命中 → `agent.cancel()` + 输出「已中断」
-  - mainLoop（169-186 行）加 PLAN/DO 分支：planMode 状态放 controller 字段（Agent 每轮 exchange 新建，状态不能放 Agent），切换时输出进入/退出提示
-- `src/test/java/com/acode/ConversationControllerTest.java`：
-  - `singleStepToolLoopExecutesToolAndReturnsFinalText`（38-73）、`failedToolResultPassedBackWithErrorFlag`（75-98）、`hugeToolResultIsTruncatedBeforeEnteringHistory`（129-149）、`plainQuestionUsesSingleRoundWithoutTools`（151-163）断言基本平移（handleExchange 签名、receivedRequests、输出、历史结构不变）
-  - `secondRoundToolUseShowsTextAndHintOnly`（100-127）**重写**：第二轮 tool_use 现在被真正执行——改 3 轮脚本，断言工具真实执行、历史含第二轮 tool_use + tool_result + 最终文本、不再有「连环工具调用暂不支持」
-  - 新增：Ctrl+C 取消用例（注入 ctrlC 在工具执行时返回 true）、maxIterations 触顶用例（小值配置）
-- `src/main/java/com/acode/ui/StreamPrinter.java` — 预期零改动（R3）
+- `src/main/java/com/acode/ConversationController.java`（改）：
+  - `start()`（150-155 行附近）：`conversation.setSystemPrompt(PromptBuilder.buildSystemPrompt())` + `conversation.setEnvironment(SystemReminder.environment(EnvironmentDetector.detect(config.getModel())))`；resume 时同样重新探测存入会话状态（每轮自动注入，不动历史）
+  - `restoreIfResume()` / `loadSession()`（161-180 / 267-277 行）：环境快照不进历史，恢复/加载会话**无需**补注入或替换逻辑（R3：环境由会话状态每轮注入）
+  - `mainLoop()` 的 CLEAR 分支（199-204 行）：`conversation.clear()` 只清历史，环境快照留在会话状态，下一轮请求仍注入
+  - `handleExchange` 事件循环：新接 `UsageEvent` → 暂存本轮 usage；`TurnComplete` → 终端脚注行输出本轮 usage（格式见 checklist 默认值）并 `log.info` 写入既有文件日志（对齐 spec「脚注 + INFO 日志文件」）
+  - `appendHistoryMessage` 与 `preview()`（256-264 行）：环境与轮次级提醒不进历史，无需跳过逻辑（R7），preview 天然显示用户问题
+- `src/test/java/com/acode/ConversationControllerTest.java`（改）— 存量用例中请求 messages 首条断言因新增 SYSTEM 消息而调整；新增：请求 messages 首条为环境 system-reminder（不进历史）、CLEAR 后请求仍注入环境、resume 后环境为重新探测的新快照、usage 脚注行出现在输出
 
-**依赖**：T5、T8、T9、T10
+**依赖**：T3、T5、T6、T7
 
 **参考资料**
-- ConversationController.java:392-604（被替换代码）；StreamPrinter.java:44-72（渲染入口与方法语义）
-- MewCode UI 订阅事件队列渲染模式（TUI 消费 BlockingQueue）
+- ConversationController.java:150-180（start/restore）、199-224（CLEAR）、256-277（preview/loadSession）、476+（handleExchange 事件循环）
+- StreamPrinter 预期零改动（ch03 R3 语义不变）
 
 ---
 
-### T12 端到端验证
+### T9 评估场景文档 + 手测文档
+
+**目标**：5 个定性评估场景成文，作为每次改 prompt 后的人工对照基准。
+
+**影响文件（新建 + 修改）**
+- `docs/ch04/eval-scenarios.md`（新）— 5 场景：①身份与安全红线；②工具选择（读→ReadFile、改前先读、写→WriteFile）；③行为准则与输出风格（探索性问题 2-3 句、file:line 引用、无 emoji、结尾 1-2 句总结）；④安全边界（危险操作确认、生成代码无注入漏洞、不编造 URL）；⑤任务模式（修 bug 最小修改、不写注释、不过度设计）。每条含输入示例 / 期望行为 / 对照判据；附录：缓存命中验证（每次跑场景看脚注 cache_read）
+- `docs/manual-test.md`（改）— 追加「阶段四」小节：启动后环境注入可见、5 场景人工对照、第 2 轮起脚注 cache_read>0、plan 模式提醒为 system-reminder
+
+**依赖**：无（可与开发并行）
+
+**参考资料**
+- 参考书第 5 章「常见陷阱和应对策略」与实战篇「功能验证过程」小节（场景措辞来源）
+
+---
+
+### T10 端到端验证
 
 **目标**：全量回归 + 真实 provider 手动验收清单。
 
 **影响文件（新建 + 视情况）**
-- `docs/manual-test.md` 追加阶段三小节 — 手测步骤：双后端（anthropic / openai）各过一遍：多轮工具链（读文件 → 改文件 → 跑命令 → 读回验证）自动闭环到自然收尾；流式中 Ctrl+C、工具执行中 Ctrl+C；/plan → 只读探索 + 交付计划 → 落盘 → /do 后可写；max_iterations 调小（如 2）验证触顶；退出后 resume 含工具轮次的会话继续对话；/help 含 /plan /do 文案
+- `docs/manual-test.md` 完成阶段四手测勾选（见 T9）
 - 修 bug 产生的影响文件视情况
 
-**依赖**：T11
+**依赖**：T8
 
 **参考资料**
-- 手测按 checklist.md 逐项打勾；联网问题用临时错误 base_url 模拟（沿用 ch02 做法）
+- 手测按 checklist.md ⚑ 项逐条打勾；联网问题用临时错误 base_url 模拟（沿用 ch01 做法）

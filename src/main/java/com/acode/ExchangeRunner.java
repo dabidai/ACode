@@ -97,6 +97,9 @@ public class ExchangeRunner {
         live.commitRegion(); // 上一轮活跃区已留在屏上作历史，本轮菜单重绘状态归零
         live.appendCommitted(writer, "● " + input);
 
+        long estimatedInputTokens = estimateCurrentInputTokens();
+        long startTime = System.currentTimeMillis();
+
         Agent agent = new Agent(provider, conversation, toolRegistry,
                 new ToolContext(projectRoot), maxIterations());
         agent.setPlanMode(planMode);
@@ -107,11 +110,13 @@ public class ExchangeRunner {
         StreamPrinter printer = new StreamPrinter(output, live, writer, config.isTeeEnabled());
         List<ToolResult> turnResults = new ArrayList<>();
         List<Long> elapsedList = new ArrayList<>();
-        Usage lastUsage = null;
+        long totalOutputTokens = 0;
         while (true) {
             if (ctrlC.getAsBoolean()) {
                 agent.cancel();
                 printer.finishTurn(); // 半截 footer 先转正进回滚，中断提示再追加
+                long elapsed = System.currentTimeMillis() - startTime;
+                printUsageFootnote(estimatedInputTokens, totalOutputTokens, elapsed, live, writer);
                 output.appendLine("（已中断）");
                 live.appendCommitted(writer, "（已中断）");
                 awaitLoopEnd(agent); // 取消不吐 LoopComplete：等循环线程收尾（补「已取消」）再返回
@@ -120,15 +125,15 @@ public class ExchangeRunner {
             AgentEvent event = pollEvent(events);
             if (event == null) {
                 if (!agent.isRunning() && events.isEmpty()) {
+                    long elapsed = System.currentTimeMillis() - startTime;
+                    printUsageFootnote(estimatedInputTokens, totalOutputTokens, elapsed, live, writer);
                     break; // 取消等无 LoopComplete 收尾：循环线程结束且事件耗尽即结束
                 }
                 continue;
             }
             if (event instanceof LoopComplete) {
-                if (lastUsage != null) {
-                    printUsageFootnote(lastUsage, live, writer);
-                    lastUsage = null;
-                }
+                long elapsed = System.currentTimeMillis() - startTime;
+                printUsageFootnote(estimatedInputTokens, totalOutputTokens, elapsed, live, writer);
                 printer.updateToolCalls(turnResults, elapsedList);
                 printer.finishTurn();
                 completeLoop(agent, live, writer);
@@ -143,17 +148,20 @@ public class ExchangeRunner {
                         : ToolResult.success(toolResult.output()).withDisplay(toolResult.display()));
                 elapsedList.add(toolResult.elapsedMs());
             } else if (event instanceof TurnComplete) {
-                if (lastUsage != null) {
-                    printUsageFootnote(lastUsage, live, writer);
-                    lastUsage = null;
-                }
                 printer.updateToolCalls(turnResults, elapsedList);
                 printer.finishTurn(); // 本轮文本与卡片转正进回滚，下一轮从下方开始
                 turnResults = new ArrayList<>();
                 elapsedList = new ArrayList<>();
                 printer = new StreamPrinter(output, live, writer, config.isTeeEnabled());
             } else if (event instanceof UsageEvent usageEvent) {
-                lastUsage = usageEvent.usage();
+                long out = usageEvent.usage().outputTokens();
+                if (out > 0) {
+                    totalOutputTokens = out;
+                }
+                long in = usageEvent.usage().inputTokens();
+                if (in > 0) {
+                    estimatedInputTokens = in;
+                }
             } else if (event instanceof RetryEvent retry) {
                 output.appendLine("（重试中：" + retry.reason() + "）");
                 live.appendCommitted(writer, "（重试中：" + retry.reason() + "）");
@@ -167,18 +175,33 @@ public class ExchangeRunner {
         }
     }
 
+    /**
+     * 估算当前请求的 input tokens：遍历 conversation 历史 + system prompt + 环境消息，
+     * 按字符数 ÷ 4 粗估。代理未透传 input_tokens 时的兜底方案。
+     */
+    private long estimateCurrentInputTokens() {
+        long total = 0;
+        for (ChatMessage msg : conversation.history()) {
+            total += Conversation.estimateTokens(msg);
+        }
+        return total;
+    }
+
     /** 循环轮数上限：配置缺失时用默认值（与 ConfigValidator 一致） */
     private int maxIterations() {
         Integer configured = config.getMaxIterations();
         return configured != null && configured > 0 ? configured : ConfigValidator.DEFAULT_MAX_ITERATIONS;
     }
 
-    /** 每轮 TurnComplete 输出 usage 脚注行（终端 + 文件日志），供缓存命中观察 */
-    private void printUsageFootnote(Usage usage, LiveRegionRenderer live, Writer writer) {
-        String line = "usage: in " + usage.inputTokens()
-                + " · cache_read " + usage.cacheReadTokens()
-                + " · cache_write " + usage.cacheCreationTokens()
-                + " · out " + usage.outputTokens();
+    /** 每轮结束输出 usage 脚注：输入 token（估算或 API 返回）、输出 token、耗时 */
+    private void printUsageFootnote(long inputTokens, long outputTokens, long elapsedMs,
+                                    LiveRegionRenderer live, Writer writer) {
+        String elapsed = elapsedMs < 1000
+                ? String.format("%.1fs", elapsedMs / 1000.0)
+                : String.format("%.1fs", elapsedMs / 1000.0);
+        String line = "usage: in " + inputTokens
+                + " · out " + outputTokens
+                + " · " + elapsed;
         output.appendLine(line);
         live.appendCommitted(writer, line);
         log.info("{}", line);

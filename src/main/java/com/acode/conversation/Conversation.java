@@ -22,7 +22,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public class Conversation {
 
     private final List<ChatMessage> messages = new CopyOnWriteArrayList<>();
-    private final String model;
+    private volatile String model;
     private final boolean thinking;
     private final int maxTokens;
     private final int maxContextTokens;
@@ -41,6 +41,14 @@ public class Conversation {
         this.thinking = thinking;
         this.maxTokens = maxTokens;
         this.maxContextTokens = maxContextTokens;
+    }
+
+    public String getModel() {
+        return model;
+    }
+
+    public void setModel(String model) {
+        this.model = model;
     }
 
     /** 追加一条消息到完整历史；截断只发生在组装请求时，不改变已存历史 */

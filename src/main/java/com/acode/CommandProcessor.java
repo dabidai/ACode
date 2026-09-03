@@ -10,14 +10,17 @@ import com.acode.ui.InputPane;
 import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
 import com.acode.ui.RenderContext;
+import com.acode.ui.SelectionMenu;
+import com.acode.ui.TerminalMenuKeySource;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.UserInterruptException;
 
 import java.io.Writer;
+import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
-/** 主循环命令分发：读输入 → 路由 → 执行各命令（/clear /help /resume /plan /do /permission-mode /chat）。 */
+/** 主循环命令分发：读输入 → 路由 → 执行各命令（/clear /help /resume /plan /do /permission-mode /model /chat）。 */
 public class CommandProcessor {
 
     private final AcodeTerminal tui;
@@ -28,11 +31,15 @@ public class CommandProcessor {
     private final Supplier<PermissionChecker> checkerSupplier;
     private final Consumer<String> chatHandler;
     private final Consumer<Boolean> planModeSetter;
+    private final Supplier<List<String>> modelOptionsSupplier;
+    private final Consumer<String> modelSetter;
 
     public CommandProcessor(AcodeTerminal tui, OutputPane output, RenderContext renderContext,
                             Conversation conversation, SessionManager sessionManager,
                             Supplier<PermissionChecker> checkerSupplier,
-                            Consumer<String> chatHandler, Consumer<Boolean> planModeSetter) {
+                            Consumer<String> chatHandler, Consumer<Boolean> planModeSetter,
+                            Supplier<List<String>> modelOptionsSupplier,
+                            Consumer<String> modelSetter) {
         this.tui = tui;
         this.output = output;
         this.renderContext = renderContext;
@@ -41,6 +48,8 @@ public class CommandProcessor {
         this.checkerSupplier = checkerSupplier;
         this.chatHandler = chatHandler;
         this.planModeSetter = planModeSetter;
+        this.modelOptionsSupplier = modelOptionsSupplier;
+        this.modelSetter = modelSetter;
     }
 
     public void mainLoop() {
@@ -83,6 +92,7 @@ public class CommandProcessor {
                     live.appendCommitted(writer, "（已退出规划模式，开始执行）");
                 }
                 case PERMISSION_MODE -> handlePermissionMode(line.trim().substring("/permission-mode".length()).trim(), live, writer);
+                case MODEL -> handleModel(line.trim().substring("/model".length()).trim(), live, writer);
                 case SKIP -> {
                     // 空白输入，忽略
                 }
@@ -119,5 +129,59 @@ public class CommandProcessor {
 
     private String currentPermissionModeName() {
         return checkerSupplier.get().mode().configValue();
+    }
+
+    /**
+     * /model 切换模型：无参数时弹出选择菜单（有 CC Switch 映射时）或显示当前模型；
+     * 有参数时直接切换到指定模型。
+     */
+    void handleModel(String arg, LiveRegionRenderer live, Writer writer) {
+        String modelArg = arg == null ? "" : arg.trim();
+        if (!modelArg.isEmpty()) {
+            modelSetter.accept(modelArg);
+            String line = "（已切换模型：" + modelArg + "）";
+            output.appendLine(line);
+            live.appendCommitted(writer, line);
+            return;
+        }
+
+        List<String> options = modelOptionsSupplier.get();
+        if (options.isEmpty()) {
+            String line = "当前模型：" + conversation.getModel();
+            output.appendLine(line);
+            live.appendCommitted(writer, line);
+            return;
+        }
+
+        String currentModel = conversation.getModel();
+        int initialSelected = 0;
+        for (int i = 0; i < options.size(); i++) {
+            if (options.get(i).contains(currentModel)) {
+                initialSelected = i;
+                break;
+            }
+        }
+
+        int selected = new SelectionMenu(options, "（↑/↓ 选择模型，回车确认，Esc 取消）", initialSelected)
+                .select(live, writer, new TerminalMenuKeySource(tui.terminal().reader()));
+        if (selected >= 0) {
+            String chosen = options.get(selected);
+            String actualModel = extractActualModel(chosen);
+            modelSetter.accept(actualModel);
+            String line = "（已切换模型：" + actualModel + "）";
+            output.appendLine(line);
+            live.appendCommitted(writer, line);
+        } else {
+            output.appendLine("（已取消）");
+            live.appendCommitted(writer, "（已取消）");
+        }
+    }
+
+    private static String extractActualModel(String displayEntry) {
+        int arrowIdx = displayEntry.indexOf("→");
+        if (arrowIdx < 0) {
+            return displayEntry.trim();
+        }
+        return displayEntry.substring(arrowIdx + 1).trim();
     }
 }

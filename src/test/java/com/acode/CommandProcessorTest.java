@@ -13,6 +13,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.StringWriter;
 import java.io.Writer;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -32,7 +33,7 @@ class CommandProcessorTest {
     private CommandProcessor processor(OutputPane output, RenderContext rc, PermissionChecker checker) {
         return new CommandProcessor(null, output, rc,
                 new Conversation("m", false, 4096, 2000), null,
-                () -> checker, s -> { }, b -> { });
+                () -> checker, s -> { }, b -> { }, List::of, s -> { });
     }
 
     private static RenderContext renderContextWith(Writer writer) {
@@ -113,5 +114,56 @@ class CommandProcessorTest {
         assertEquals(PermissionMode.ACCEPT_EDITS, checker.mode(), "合法值应切换权限模式");
         assertTrue(output.lines().contains("（已切换到权限模式：acceptEdits）"),
                 "切档成功应输出确认行");
+    }
+
+    @Test
+    void modelWithNoOptionsPrintsCurrentModel() {
+        OutputPane output = new OutputPane();
+        StringWriter writer = new StringWriter();
+        RenderContext rc = renderContextWith(writer);
+        Conversation conversation = new Conversation("agnes-2.0-flash", false, 4096, 2000);
+        CommandProcessor processor = new CommandProcessor(null, output, rc,
+                conversation, null,
+                () -> checker(), s -> { }, b -> { }, List::of, s -> { });
+
+        processor.handleModel("", rc.liveRenderer(), writer);
+
+        assertTrue(output.lines().contains("当前模型：agnes-2.0-flash"),
+                "无选项时应输出当前模型");
+    }
+
+    @Test
+    void modelWithArgCallsModelSetter() {
+        OutputPane output = new OutputPane();
+        StringWriter writer = new StringWriter();
+        RenderContext rc = renderContextWith(writer);
+        Conversation conversation = new Conversation("old-model", false, 4096, 2000);
+        String[] captured = {null};
+        CommandProcessor processor = new CommandProcessor(null, output, rc,
+                conversation, null,
+                () -> checker(), s -> { }, b -> { }, List::of, s -> captured[0] = s);
+
+        processor.handleModel("new-model", rc.liveRenderer(), writer);
+
+        assertEquals("new-model", captured[0], "有参数时应调用 modelSetter");
+        assertTrue(output.lines().contains("（已切换模型：new-model）"),
+                "切档成功应输出确认行");
+    }
+
+    @Test
+    void modelExtractsActualModelFromDisplayEntry() {
+        OutputPane output = new OutputPane();
+        StringWriter writer = new StringWriter();
+        RenderContext rc = renderContextWith(writer);
+        Conversation conversation = new Conversation("old", false, 4096, 2000);
+        String[] captured = {null};
+        CommandProcessor processor = new CommandProcessor(null, output, rc,
+                conversation, null,
+                () -> checker(), s -> { }, b -> { }, List::of, s -> captured[0] = s);
+
+        processor.handleModel("opus  →  agnes-2.0-flash", rc.liveRenderer(), writer);
+
+        assertEquals("opus  →  agnes-2.0-flash", captured[0],
+                "直接参数应原样传递（不经过菜单解析）");
     }
 }

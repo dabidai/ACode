@@ -74,7 +74,9 @@ import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -293,7 +295,8 @@ public class ConversationController {
         if (commandProcessor == null) {
             commandProcessor = new CommandProcessor(tui, output, renderContext, conversation,
                     sessionManager(), this::permissionChecker, this::handleChat,
-                    planMode -> this.planMode = planMode);
+                    planMode -> this.planMode = planMode,
+                    this::modelOptions, this::switchModel);
         }
         return commandProcessor;
     }
@@ -301,6 +304,11 @@ public class ConversationController {
     /** /permission-mode 切档（委托 CommandProcessor；测试直接调用）。 */
     void handlePermissionMode(String arg, LiveRegionRenderer live, Writer writer) {
         commandProcessor().handlePermissionMode(arg, live, writer);
+    }
+
+    /** /model 切模型（委托 CommandProcessor；测试直接调用）。 */
+    void handleModel(String arg, LiveRegionRenderer live, Writer writer) {
+        commandProcessor().handleModel(arg, live, writer);
     }
 
     /**
@@ -317,6 +325,47 @@ public class ConversationController {
 
     private void handleChat(String input) {
         handleExchange(input, this::ctrlCPressed, () -> { });
+    }
+
+    /**
+     * /model 菜单数据：从 CC Switch 模型映射构建选项列表。
+     * 只取 tier 名称键（如 opus/sonnet/haiku），跳过 Claude 全名键（含 claude- 前缀）。
+     * 格式："tier → actualModel"，无 CC Switch 时返回空列表。
+     */
+    List<String> modelOptions() {
+        CCSwitchConfig ccSwitch = config.getCcSwitchConfig();
+        if (ccSwitch == null) {
+            return List.of();
+        }
+        Map<String, String> mapping = ccSwitch.modelMapping();
+        if (mapping.isEmpty()) {
+            return List.of();
+        }
+        Map<String, String> tierOnly = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : mapping.entrySet()) {
+            String key = entry.getKey();
+            if (!key.contains("claude") && !key.contains("-")) {
+                tierOnly.put(key, entry.getValue());
+            }
+        }
+        if (tierOnly.isEmpty()) {
+            return List.of();
+        }
+        List<String> options = new ArrayList<>();
+        for (Map.Entry<String, String> entry : tierOnly.entrySet()) {
+            options.add(entry.getKey() + "  →  " + entry.getValue());
+        }
+        return options;
+    }
+
+    /**
+     * /model 切换模型：更新 conversation、config 和环境提醒，清空 exchangeRunner 懒重建。
+     */
+    void switchModel(String newModel) {
+        conversation.setModel(newModel);
+        config.setModel(newModel);
+        conversation.setEnvironment(SystemReminder.environment(EnvironmentDetector.detect(newModel)));
+        this.exchangeRunner = null;
     }
 
     /** 测试用：注入输出面板（真实流程在 start() 中创建） */

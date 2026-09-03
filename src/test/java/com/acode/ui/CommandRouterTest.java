@@ -6,6 +6,7 @@ import static com.acode.ui.CommandRouter.Action.CHAT;
 import static com.acode.ui.CommandRouter.Action.CLEAR;
 import static com.acode.ui.CommandRouter.Action.DO;
 import static com.acode.ui.CommandRouter.Action.HELP;
+import static com.acode.ui.CommandRouter.Action.MODEL;
 import static com.acode.ui.CommandRouter.Action.PERMISSION_MODE;
 import static com.acode.ui.CommandRouter.Action.PLAN;
 import static com.acode.ui.CommandRouter.Action.QUIT;
@@ -58,6 +59,17 @@ class CommandRouterTest {
     }
 
     @Test
+    void modelRoutesToModel() {
+        assertEquals(MODEL, CommandRouter.route("/model"));
+    }
+
+    @Test
+    void modelWithArgRoutesToModel() {
+        assertEquals(MODEL, CommandRouter.route("/model opus"));
+        assertEquals(MODEL, CommandRouter.route("/model agnes-2.0-flash"));
+    }
+
+    @Test
     void normalMessageRoutesToChat() {
         assertEquals(CHAT, CommandRouter.route("你好，帮我写一个排序算法"));
     }
@@ -106,6 +118,7 @@ class CommandRouterTest {
         assertTrue(CommandRouter.HELP_TEXT.contains("/plan"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/do"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/permission-mode"));
+        assertTrue(CommandRouter.HELP_TEXT.contains("/model"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/help"));
     }
 }

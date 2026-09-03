@@ -402,4 +402,19 @@ class ConversationTest {
         writer.join();
         assertEquals(501, c.messageCount());
     }
+    @Test
+    void getModelReturnsInitialModel() {
+        Conversation c = new Conversation("agnes-2.0-flash", false, 4096, 2000);
+        assertEquals("agnes-2.0-flash", c.getModel());
+    }
+
+    @Test
+    void setModelUpdatesModelUsedInBuildRequest() {
+        Conversation c = new Conversation("old-model", false, 4096, 2000);
+        c.setModel("new-model");
+        assertEquals("new-model", c.getModel());
+        c.addMessage(ChatMessage.of(com.acode.provider.ChatMessage.Role.USER, "hi"));
+        ChatRequest request = c.buildRequest(List.of(), null);
+        assertEquals("new-model", request.model(), "buildRequest 应使用 setModel 后的新模型");
+    }
 }

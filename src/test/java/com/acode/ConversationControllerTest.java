@@ -866,4 +866,50 @@ class ConversationControllerTest {
         assertEquals(0, asks.get(), "acceptEdits 模式下写文件不应弹确认");
         assertEquals("hi", Files.readString(target), "acceptEdits 模式应直接放行写入");
     }
+
+    @Test
+    void modelOptionsEmptyWithoutCCSwitch() {
+        ConversationController controller = new ConversationController(
+                FakeProvider.scripted(List.of(List.of(FakeProvider.complete()))),
+                config(), false);
+        assertTrue(controller.modelOptions().isEmpty(),
+                "无 CC Switch 配置时模型选项应为空");
+    }
+
+    @Test
+    void modelOptionsReturnsTierNamesFromCCSwitch() {
+        AppConfig cfg = config();
+        cfg.setCcSwitchDetected(true);
+        cfg.setCcSwitchConfig(new com.acode.config.CCSwitchConfig(
+                "http://127.0.0.1:15721", "token", "opus",
+                java.util.Map.of(
+                        "opus", "agnes-2.0-flash",
+                        "claude-opus-4-8[1M]", "agnes-2.0-flash",
+                        "haiku", "agnes-image-2.1-flash",
+                        "claude-haiku-4-5", "agnes-image-2.1-flash"
+                )));
+        ConversationController controller = new ConversationController(
+                FakeProvider.scripted(List.of(List.of(FakeProvider.complete()))),
+                cfg, false);
+
+        List<String> options = controller.modelOptions();
+        assertEquals(2, options.size(), "应只有 tier 名称（不含 claude 全名）");
+        assertTrue(options.stream().anyMatch(o -> o.contains("opus") && o.contains("agnes-2.0-flash")));
+        assertTrue(options.stream().anyMatch(o -> o.contains("haiku") && o.contains("agnes-image-2.1-flash")));
+    }
+
+    @Test
+    void switchModelUpdatesConversationAndConfig() {
+        AppConfig cfg = config();
+        ConversationController controller = new ConversationController(
+                FakeProvider.scripted(List.of(List.of(FakeProvider.complete()))),
+                cfg, false);
+
+        controller.switchModel("new-model");
+
+        assertEquals("new-model", controller.conversation().getModel(),
+                "conversation 的 model 应被更新");
+        assertEquals("new-model", cfg.getModel(),
+                "config 的 model 应被更新");
+    }
 }

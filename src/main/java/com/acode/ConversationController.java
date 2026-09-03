@@ -16,6 +16,9 @@ import com.acode.agent.AskUserTool;
 import com.acode.agent.EventConfirmationGate;
 import com.acode.agent.ExitPlanModeTool;
 import com.acode.config.AppConfig;
+import com.acode.config.CCSwitchConfig;
+import com.acode.config.CCSwitchConfigReader;
+import com.acode.config.CCSwitchWatcher;
 import com.acode.config.ConfigException;
 import com.acode.config.ConfigLoader;
 import com.acode.config.ConfigValidator;
@@ -98,13 +101,14 @@ public class ConversationController {
                           ACode v0.1.0
             """;
 
-    private final ChatProvider provider;
-    private final AppConfig config;
+    private volatile ChatProvider provider;
+    private volatile AppConfig config;
     private final Conversation conversation;
     private final ToolRegistry toolRegistry;
     private final SessionManager sessionManager;
     private final boolean resume;
     private boolean sessionManagerAttached;
+    private CCSwitchWatcher ccSwitchWatcher;
 
     /** plan 模式开关：/plan 进入、/do 退出；作用于下一次 exchange 新建的 Agent */
     private boolean planMode = false;
@@ -199,6 +203,12 @@ public class ConversationController {
             Writer writer = screenWriter();
             output.append(BANNER);
             live.appendCommitted(writer, BANNER);
+            if (config.isCcSwitchDetected()) {
+                String msg = "已自动检测 CC Switch 配置（代理: " + config.getBaseUrl() + "）";
+                output.appendLine(msg);
+                live.appendCommitted(writer, msg);
+                startCCSwitchWatcher();
+            }
             output.appendLine("输入 /help 查看命令，/quit 退出");
             live.appendCommitted(writer, "输入 /help 查看命令，/quit 退出");
             restoreIfResume();
@@ -206,7 +216,7 @@ public class ConversationController {
         } catch (IllegalStateException e) {
             System.err.println(e.getMessage());
         } finally {
-            // /quit 与异常退出都清理 MCP 子进程，避免残留
+            stopCCSwitchWatcher();
             closeMcpManager();
         }
     }
@@ -215,6 +225,53 @@ public class ConversationController {
     void closeMcpManager() {
         if (mcpManager != null) {
             mcpManager.closeAll();
+        }
+    }
+
+    private void startCCSwitchWatcher() {
+        ccSwitchWatcher = CCSwitchWatcher.startDefault(this::reloadCCSwitchConfig);
+    }
+
+    private void stopCCSwitchWatcher() {
+        if (ccSwitchWatcher != null) {
+            ccSwitchWatcher.stop();
+        }
+    }
+
+    void reloadCCSwitchConfig() {
+        try {
+            CCSwitchConfig newConfig = CCSwitchConfigReader.read().orElse(null);
+            if (newConfig == null) {
+                log.warn("CC Switch 配置文件已删除或不可读，保留当前配置");
+                if (output != null) {
+                    output.appendLine("CC Switch 配置已不可用，保留当前配置");
+                }
+                return;
+            }
+
+            String oldBaseUrl = config.getBaseUrl();
+            Path global = Path.of(System.getProperty("user.home"), ".acode/config.yaml");
+            Path projectDir = Path.of("").toAbsolutePath();
+            AppConfig reloaded = ConfigLoader.reloadWithCCSwitch(global, projectDir, newConfig);
+
+            boolean providerChanged = !reloaded.getBaseUrl().equals(oldBaseUrl)
+                    || !reloaded.getApiKey().equals(config.getApiKey())
+                    || !reloaded.getProtocol().equals(config.getProtocol());
+
+            this.config = reloaded;
+            if (providerChanged) {
+                this.provider = buildProvider(reloaded);
+                this.exchangeRunner = null;
+            }
+
+            if (output != null) {
+                output.appendLine("CC Switch 配置已更新（代理: " + reloaded.getBaseUrl() + "）");
+            }
+        } catch (Exception e) {
+            log.warn("CC Switch 配置热更新失败，保留当前配置", e);
+            if (output != null) {
+                output.appendLine("CC Switch 配置热更新失败，保留当前配置");
+            }
         }
     }
 

@@ -18,6 +18,8 @@ public class AppConfig {
     private Boolean thinking;
     private String permissionMode;
     private Map<String, McpServerConfig> mcpServers;
+    private boolean ccSwitchDetected;
+    private CCSwitchConfig ccSwitchConfig;
 
     public String getProtocol() {
         return protocol;
@@ -105,5 +107,21 @@ public class AppConfig {
 
     public void setMcpServers(Map<String, McpServerConfig> mcpServers) {
         this.mcpServers = mcpServers;
+    }
+
+    public boolean isCcSwitchDetected() {
+        return ccSwitchDetected;
+    }
+
+    public void setCcSwitchDetected(boolean ccSwitchDetected) {
+        this.ccSwitchDetected = ccSwitchDetected;
+    }
+
+    public CCSwitchConfig getCcSwitchConfig() {
+        return ccSwitchConfig;
+    }
+
+    public void setCcSwitchConfig(CCSwitchConfig ccSwitchConfig) {
+        this.ccSwitchConfig = ccSwitchConfig;
     }
 }

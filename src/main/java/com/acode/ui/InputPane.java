@@ -2,6 +2,7 @@ package com.acode.ui;
 
 import org.jline.keymap.KeyMap;
 import org.jline.reader.Binding;
+import org.jline.reader.Completer;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
 import org.jline.reader.Reference;
@@ -26,12 +27,19 @@ public class InputPane {
     private Runnable cyclePermissionCallback;
 
     public InputPane(Terminal terminal, String prompt) {
+        this(terminal, prompt, null);
+    }
+
+    public InputPane(Terminal terminal, String prompt, Completer completer) {
         this.prompt = prompt;
-        this.reader = LineReaderBuilder.builder()
+        LineReaderBuilder builder = LineReaderBuilder.builder()
                 .terminal(terminal)
                 .appName("acode")
-                .option(LineReader.Option.ERASE_LINE_ON_FINISH, true)
-                .build();
+                .option(LineReader.Option.ERASE_LINE_ON_FINISH, true);
+        if (completer != null) {
+            builder.completer(completer);
+        }
+        this.reader = builder.build();
         bindKeys();
     }
 

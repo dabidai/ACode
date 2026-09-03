@@ -11,11 +11,13 @@ import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
 import com.acode.ui.RenderContext;
 import com.acode.ui.SelectionMenu;
+import com.acode.ui.SlashCommandCompleter;
 import com.acode.ui.TerminalMenuKeySource;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.UserInterruptException;
 
 import java.io.Writer;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -33,6 +35,7 @@ public class CommandProcessor {
     private final Consumer<Boolean> planModeSetter;
     private final Supplier<List<String>> modelOptionsSupplier;
     private final Consumer<String> modelSetter;
+    private final List<String> deferredMessages = new ArrayList<>();
 
     public CommandProcessor(AcodeTerminal tui, OutputPane output, RenderContext renderContext,
                             Conversation conversation, SessionManager sessionManager,
@@ -55,7 +58,8 @@ public class CommandProcessor {
     public void mainLoop() {
         LiveRegionRenderer live = renderContext.liveRenderer();
         Writer writer = renderContext.screenWriter();
-        InputPane input = new InputPane(tui.terminal(), "> ");
+        SlashCommandCompleter completer = new SlashCommandCompleter(modelOptionsSupplier);
+        InputPane input = new InputPane(tui.terminal(), "> ", completer);
         input.setCyclePermissionCallback(() -> cyclePermissionMode(live, writer));
         while (true) {
             String line;
@@ -65,6 +69,11 @@ public class CommandProcessor {
                 sessionManager.saveSession();
                 return;
             }
+            for (String msg : deferredMessages) {
+                output.appendLine(msg);
+                live.appendCommitted(writer, msg);
+            }
+            deferredMessages.clear();
             switch (CommandRouter.route(line)) {
                 case QUIT -> {
                     sessionManager.saveSession();
@@ -167,7 +176,9 @@ public class CommandProcessor {
         return checkerSupplier.get().mode().configValue();
     }
 
-    /** Shift+Tab 快捷切换：循环 default → acceptEdits → plan → bypassPermissions → default */
+    /** Shift+Tab 快捷切换：循环 default → acceptEdits → plan → bypassPermissions → default。
+     *  回调在 JLine readLine() 内执行，不能直接写终端（会与 JLine 提示符重绘冲突），
+     *  只改模式 + 排队消息，由 mainLoop 在 readLine 返回后刷出。 */
     private void cyclePermissionMode(LiveRegionRenderer live, Writer writer) {
         PermissionMode[] cycle = {PermissionMode.DEFAULT, PermissionMode.ACCEPT_EDITS,
                 PermissionMode.PLAN, PermissionMode.BYPASS};
@@ -181,9 +192,7 @@ public class CommandProcessor {
         }
         PermissionMode next = cycle[(idx + 1) % cycle.length];
         checkerSupplier.get().setMode(next);
-        String line = "（权限模式已切换：" + next.configValue() + "）";
-        output.appendLine(line);
-        live.appendCommitted(writer, line);
+        deferredMessages.add("（权限模式已切换：" + next.configValue() + "）");
     }
 
     /**

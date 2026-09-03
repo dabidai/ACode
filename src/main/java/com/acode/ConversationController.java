@@ -211,8 +211,9 @@ public class ConversationController {
                 live.appendCommitted(writer, msg);
                 startCCSwitchWatcher();
             }
-            output.appendLine("输入 /help 查看命令，/quit 退出");
-            live.appendCommitted(writer, "输入 /help 查看命令，/quit 退出");
+            String modeName = config.getPermissionMode() != null ? config.getPermissionMode() : "default";
+            output.appendLine("权限模式: " + modeName + " · 输入 /help 查看命令，/quit 退出");
+            live.appendCommitted(writer, "权限模式: " + modeName + " · 输入 /help 查看命令，/quit 退出");
             restoreIfResume();
             commandProcessor().mainLoop();
         } catch (IllegalStateException e) {

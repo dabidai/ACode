@@ -18,8 +18,12 @@ public class InputPane {
     /** 自定义 widget：向 buffer 插入换行，实现「Shift+Enter 不提交只换行」。 */
     private static final String NEWLINE_WIDGET = "acode-newline";
 
+    /** 自定义 widget：Shift+Tab 循环切换权限模式。 */
+    private static final String CYCLE_PERMISSION_WIDGET = "acode-cycle-permission";
+
     private final LineReader reader;
     private final String prompt;
+    private Runnable cyclePermissionCallback;
 
     public InputPane(Terminal terminal, String prompt) {
         this.prompt = prompt;
@@ -36,10 +40,23 @@ public class InputPane {
             reader.getBuffer().write("\n");
             return true;
         });
+        reader.getWidgets().put(CYCLE_PERMISSION_WIDGET, () -> {
+            if (cyclePermissionCallback != null) {
+                cyclePermissionCallback.run();
+            }
+            return true;
+        });
         KeyMap<Binding> main = reader.getKeyMaps().get(LineReader.MAIN);
         main.bind(new Reference(LineReader.ACCEPT_LINE), "\r");
         // Shift+Enter（CSI-u / 传统 xterm 序列）与 Ctrl+Enter 均插入换行
         main.bind(new Reference(NEWLINE_WIDGET), "\033[13;2u", "\033[1;2;13~", "\033[13;5u");
+        // Shift+Tab：循环切换权限模式
+        main.bind(new Reference(CYCLE_PERMISSION_WIDGET), "\033[Z");
+    }
+
+    /** 注入 Shift+Tab 回调：每次按下时调用，用于循环切换权限模式并显示通知。 */
+    public void setCyclePermissionCallback(Runnable callback) {
+        this.cyclePermissionCallback = callback;
     }
 
     /**

@@ -53,9 +53,10 @@ public class CommandProcessor {
     }
 
     public void mainLoop() {
-        InputPane input = new InputPane(tui.terminal(), "> ");
         LiveRegionRenderer live = renderContext.liveRenderer();
         Writer writer = renderContext.screenWriter();
+        InputPane input = new InputPane(tui.terminal(), "> ");
+        input.setCyclePermissionCallback(() -> cyclePermissionMode(live, writer));
         while (true) {
             String line;
             try {
@@ -102,15 +103,20 @@ public class CommandProcessor {
     }
 
     /**
-     * /permission-mode 切档：无参数输出当前模式；参数须为 4 合法值之一（大小写敏感、无多余参数）。
+     * /permission-mode 切档：无参数弹交互菜单（tui 为 null 时 fallback 文本）；
+     * 参数须为 4 合法值之一（大小写敏感、无多余参数）。
      * 非法值输出错误、模式不变；合法切档只改内存 volatile mode，不写回 config.yaml。
      */
     void handlePermissionMode(String arg, LiveRegionRenderer live, Writer writer) {
         String modeArg = arg == null ? "" : arg.trim();
         if (modeArg.isEmpty()) {
-            String line = "当前权限模式：" + currentPermissionModeName();
-            output.appendLine(line);
-            live.appendCommitted(writer, line);
+            if (tui == null) {
+                String line = "当前权限模式：" + currentPermissionModeName();
+                output.appendLine(line);
+                live.appendCommitted(writer, line);
+                return;
+            }
+            showPermissionModeMenu(live, writer);
             return;
         }
         PermissionMode mode = PermissionMode.fromConfig(modeArg);
@@ -127,8 +133,57 @@ public class CommandProcessor {
         live.appendCommitted(writer, line);
     }
 
+    private void showPermissionModeMenu(LiveRegionRenderer live, Writer writer) {
+        PermissionMode current = checkerSupplier.get().mode();
+        List<String> options = List.of(
+                "default            读放行，写/执行需确认",
+                "acceptEdits        读/写放行，执行需确认",
+                "plan               同 default（配合 /plan /do 工作流）",
+                "bypassPermissions  全部放行（危险命令黑名单仍生效）");
+        PermissionMode[] modes = {PermissionMode.DEFAULT, PermissionMode.ACCEPT_EDITS,
+                PermissionMode.PLAN, PermissionMode.BYPASS};
+        int initialSelected = 0;
+        for (int i = 0; i < modes.length; i++) {
+            if (modes[i] == current) {
+                initialSelected = i;
+                break;
+            }
+        }
+        int selected = new SelectionMenu(options, "（↑/↓ 选择权限模式，回车确认，Esc 取消）", initialSelected)
+                .select(live, writer, new TerminalMenuKeySource(tui.terminal().reader()));
+        if (selected >= 0) {
+            PermissionMode chosen = modes[selected];
+            checkerSupplier.get().setMode(chosen);
+            String line = "（已切换到权限模式：" + chosen.configValue() + "）";
+            output.appendLine(line);
+            live.appendCommitted(writer, line);
+        } else {
+            output.appendLine("（已取消）");
+            live.appendCommitted(writer, "（已取消）");
+        }
+    }
+
     private String currentPermissionModeName() {
         return checkerSupplier.get().mode().configValue();
+    }
+
+    /** Shift+Tab 快捷切换：循环 default → acceptEdits → plan → bypassPermissions → default */
+    private void cyclePermissionMode(LiveRegionRenderer live, Writer writer) {
+        PermissionMode[] cycle = {PermissionMode.DEFAULT, PermissionMode.ACCEPT_EDITS,
+                PermissionMode.PLAN, PermissionMode.BYPASS};
+        PermissionMode current = checkerSupplier.get().mode();
+        int idx = 0;
+        for (int i = 0; i < cycle.length; i++) {
+            if (cycle[i] == current) {
+                idx = i;
+                break;
+            }
+        }
+        PermissionMode next = cycle[(idx + 1) % cycle.length];
+        checkerSupplier.get().setMode(next);
+        String line = "（权限模式已切换：" + next.configValue() + "）";
+        output.appendLine(line);
+        live.appendCommitted(writer, line);
     }
 
     /**

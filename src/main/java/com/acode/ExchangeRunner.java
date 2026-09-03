@@ -196,10 +196,9 @@ public class ExchangeRunner {
     /** 每轮结束输出 usage 脚注：输入 token（估算或 API 返回）、输出 token、耗时 */
     private void printUsageFootnote(long inputTokens, long outputTokens, long elapsedMs,
                                     LiveRegionRenderer live, Writer writer) {
-        String elapsed = elapsedMs < 1000
-                ? String.format("%.1fs", elapsedMs / 1000.0)
-                : String.format("%.1fs", elapsedMs / 1000.0);
-        String line = "usage: in " + inputTokens
+        String mode = permissionCheckerSupplier.get().mode().configValue();
+        String elapsed = String.format("%.1fs", elapsedMs / 1000.0);
+        String line = "[" + mode + "] usage: in " + inputTokens
                 + " · out " + outputTokens
                 + " · " + elapsed;
         output.appendLine(line);

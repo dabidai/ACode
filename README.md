@@ -77,6 +77,8 @@ java -jar target/acode.jar --resume # 恢复上次会话
 | `/resume` | 加载历史会话（↑/↓ 选择） |
 | `/help` | 显示帮助 |
 | `PageUp / PageDown` | 滚动查看完整聊天 |
+| `/model` | 显示模型参数 |
+
 
 ## 🛡️ 权限模式
 

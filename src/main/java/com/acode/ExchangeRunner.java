@@ -17,6 +17,7 @@ import com.acode.config.AppConfig;
 import com.acode.config.ConfigValidator;
 import com.acode.conversation.Conversation;
 import com.acode.permission.PermissionChecker;
+import com.acode.permission.PermissionMode;
 import com.acode.permission.PermissionResponse;
 import com.acode.provider.ChatMessage;
 import com.acode.provider.ChatProvider;
@@ -30,7 +31,9 @@ import com.acode.tool.ToolResult;
 import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
 import com.acode.ui.RenderContext;
+import com.acode.ui.StatusBar;
 import com.acode.ui.StreamPrinter;
+import com.acode.ui.StreamingTimer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -91,11 +94,14 @@ public class ExchangeRunner {
     void run(String input, BooleanSupplier ctrlC, Runnable repaint, boolean planMode) {
         conversation.nextEpoch(); // 先失效上一轮残留的 agent 线程写入，再开始本轮
         conversation.addMessage(ChatMessage.of(ChatMessage.Role.USER, input));
-        output.append("● " + input + "\n");
         LiveRegionRenderer live = renderContext.liveRenderer();
         Writer writer = renderContext.screenWriter();
-        live.commitRegion(); // 上一轮活跃区已留在屏上作历史，本轮菜单重绘状态归零
-        live.appendCommitted(writer, "● " + input);
+
+        // Echo 用户输入（JLine 已擦除原行，重写 >*input，紧跟无空格）
+        output.appendLine(">*" + input);
+        live.clearBelowCursor(writer); // 擦掉提示符下方仍在屏上的页脚两行，输出从干净行开始
+        live.appendCommitted(writer, ">*" + input);
+        printDivider(live, writer); // 3.2 分隔线（回复之前）
 
         long estimatedInputTokens = estimateCurrentInputTokens();
         long startTime = System.currentTimeMillis();
@@ -108,6 +114,7 @@ public class ExchangeRunner {
         BlockingQueue<AgentEvent> events = agent.run();
 
         StreamPrinter printer = new StreamPrinter(output, live, writer, config.isTeeEnabled());
+        StreamingTimer timer = new StreamingTimer(startTime);
         List<ToolResult> turnResults = new ArrayList<>();
         List<Long> elapsedList = new ArrayList<>();
         long totalOutputTokens = 0;
@@ -120,6 +127,7 @@ public class ExchangeRunner {
                 output.appendLine("（已中断）");
                 live.appendCommitted(writer, "（已中断）");
                 awaitLoopEnd(agent); // 取消不吐 LoopComplete：等循环线程收尾（补「已取消」）再返回
+                renderWaitingFrame(live, writer);
                 break;
             }
             AgentEvent event = pollEvent(events);
@@ -127,6 +135,7 @@ public class ExchangeRunner {
                 if (!agent.isRunning() && events.isEmpty()) {
                     long elapsed = System.currentTimeMillis() - startTime;
                     printUsageFootnote(estimatedInputTokens, totalOutputTokens, elapsed, live, writer);
+                    renderWaitingFrame(live, writer);
                     break; // 取消等无 LoopComplete 收尾：循环线程结束且事件耗尽即结束
                 }
                 continue;
@@ -137,6 +146,7 @@ public class ExchangeRunner {
                 printer.updateToolCalls(turnResults, elapsedList);
                 printer.finishTurn();
                 completeLoop(agent, live, writer);
+                renderWaitingFrame(live, writer);
                 break;
             } else if (event instanceof StreamText streamText) {
                 printer.onDelta(streamText.text());
@@ -149,19 +159,20 @@ public class ExchangeRunner {
                 elapsedList.add(toolResult.elapsedMs());
             } else if (event instanceof TurnComplete) {
                 printer.updateToolCalls(turnResults, elapsedList);
-                printer.finishTurn(); // 本轮文本与卡片转正进回滚，下一轮从下方开始
+                printer.finishTurn(); // 本轮文本与卡片转正进回滚，状态复位后同一实例服务下一轮
                 turnResults = new ArrayList<>();
                 elapsedList = new ArrayList<>();
-                printer = new StreamPrinter(output, live, writer, config.isTeeEnabled());
             } else if (event instanceof UsageEvent usageEvent) {
-                long out = usageEvent.usage().outputTokens();
+                Usage usage = usageEvent.usage();
+                long out = usage.outputTokens();
                 if (out > 0) {
                     totalOutputTokens = out;
                 }
-                long in = usageEvent.usage().inputTokens();
+                long in = usage.inputTokens();
                 if (in > 0) {
                     estimatedInputTokens = in;
                 }
+                conversation.recordPromptTokens(usage.promptTokens());
             } else if (event instanceof RetryEvent retry) {
                 output.appendLine("（重试中：" + retry.reason() + "）");
                 live.appendCommitted(writer, "（重试中：" + retry.reason() + "）");
@@ -171,6 +182,12 @@ public class ExchangeRunner {
                 confirm.response().answer(confirmAnswerer.apply(confirm));
             } else if (event instanceof ChoiceRequestEvent choice) {
                 choice.response().answer(choiceAnswerer.apply(choice));
+            }
+
+            // 实时计时器：挂成尾行，恒为屏幕最后一行、光标正上方，原地刷新无需任何行数计数
+            long now = System.currentTimeMillis();
+            if (timer.shouldUpdate(now)) {
+                live.setTailRow(writer, timer.text(now));
             }
         }
     }
@@ -193,17 +210,42 @@ public class ExchangeRunner {
         return configured != null && configured > 0 ? configured : ConfigValidator.DEFAULT_MAX_ITERATIONS;
     }
 
-    /** 每轮结束输出 usage 脚注：输入 token（估算或 API 返回）、输出 token、耗时 */
+    /** 每轮结束输出 usage 脚注：撤销计时尾行后把 usage 行追加在原计时行位置。 */
     private void printUsageFootnote(long inputTokens, long outputTokens, long elapsedMs,
                                     LiveRegionRenderer live, Writer writer) {
-        String mode = permissionCheckerSupplier.get().mode().configValue();
         String elapsed = String.format("%.1fs", elapsedMs / 1000.0);
-        String line = "[" + mode + "] usage: in " + inputTokens
+        String line = "usage: in " + inputTokens
                 + " · out " + outputTokens
-                + " · " + elapsed;
+                + "  总耗时" + elapsed;
+        live.clearTailRow(writer);
         output.appendLine(line);
         live.appendCommitted(writer, line);
         log.info("{}", line);
+    }
+
+    /** 打印分隔线 */
+    private void printDivider(LiveRegionRenderer live, Writer writer) {
+        int width = renderContext.terminalWidth();
+        String line = StatusBar.divider(width);
+        output.appendLine(line);
+        live.appendCommitted(writer, line);
+    }
+
+    /** 渲染等待输入帧：模式提示 + 分隔线（提示符上方）+ 页脚分隔线 + 模型信息（提示符下方）。
+     *  光标停在预留的提示符行，由 JLine 绘制 >*；linesSinceFrame 由 renderWaitingFrame 设为 2。 */
+    private void renderWaitingFrame(LiveRegionRenderer live, Writer writer) {
+        int width = renderContext.terminalWidth();
+        PermissionMode current = permissionCheckerSupplier.get().mode();
+        String modeHint = StatusBar.modeLine(current.configValue(), StatusBar.nextModeName(current), width);
+        String divider = StatusBar.divider(width);
+        String model = conversation.getModel();
+        double ctxFraction = conversation.contextUsageFraction();
+        String footerModel = StatusBar.infoLine(model, ctxFraction, projectRoot.toString(), width);
+        output.appendLine(modeHint);
+        output.appendLine(divider);
+        output.appendLine(divider);
+        output.appendLine(footerModel);
+        live.renderWaitingFrame(writer, modeHint, divider, divider, footerModel);
     }
 
     /** 事件轮询：20ms 超时；中断恢复中断位并返回 null */

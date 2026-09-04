@@ -227,4 +227,124 @@ class LiveRegionRendererTest {
         renderer.appendCommitted(sw, "a\n\nb\n");
         assertEquals("a\r\n\r\nb\r\n", sw.toString());
     }
+
+    // ---- 新增：等待输入帧（提示符上方 mode+分隔线，下方页脚，光标上移回提示符行） ----
+
+    @Test
+    void renderWaitingFrameReservesPromptRowAndMovesCursorBackUp() {
+        StringWriter sw = new StringWriter();
+        LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
+        renderer.renderWaitingFrame(sw, "MODE", "DIV", "FOOTDIV", "FOOTMODEL");
+        // 模式提示 + 分隔线（提示符上方）→ 预留提示符空行 → 页脚分隔线 + 模型信息（下方）→ 光标上移 3 行
+        assertEquals("MODE\r\n" + "DIV\r\n" + "\r\n" + "FOOTDIV\r\n" + "FOOTMODEL\r\n" + "\033[3A",
+                sw.toString());
+        assertEquals(2, renderer.linesSinceFrame(), "模式提示行到光标恒为 2 行（Shift+Tab 上移定位用）");
+    }
+
+    // ---- 新增：尾行协议（流式计时行恒为屏幕最后一行，原地刷新偏移恒为 1） ----
+
+    @Test
+    void setTailRowCreatesRowBelowCursorAndCountsOneLine() {
+        StringWriter sw = new StringWriter();
+        LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
+        renderer.setTailRow(sw, "⏱ 0.5s");
+        assertEquals("⏱ 0.5s\r\n", sw.toString(), "从无到有：直接写一行、光标下移 1");
+        assertEquals(1, renderer.linesSinceFrame());
+    }
+
+    @Test
+    void setTailRowRefreshesInPlaceWithConstantOffsetOne() {
+        LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
+        renderer.setTailRow(new StringWriter(), "⏱ 0.5s");
+        StringWriter sw = new StringWriter();
+        renderer.setTailRow(sw, "⏱ 1.0s");
+        assertEquals("\033[1A\r\033[2K" + "⏱ 1.0s\r\n", sw.toString(),
+                "已有尾行：抬起 1 行重写，净位移 0，不需要任何跨调用行数计数");
+        assertEquals(1, renderer.linesSinceFrame(), "原地刷新不改变行数记账");
+    }
+
+    @Test
+    void clearTailRowLeavesCursorOnTheBlankRowItVacated() {
+        LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
+        renderer.setTailRow(new StringWriter(), "⏱ 0.5s");
+        StringWriter sw = new StringWriter();
+        renderer.clearTailRow(sw);
+        assertEquals("\033[1A\r\033[2K", sw.toString(), "抬起并清空，光标停在空白行、不留多余空行");
+        assertEquals(0, renderer.linesSinceFrame());
+    }
+
+    @Test
+    void clearTailRowWithoutTailRowWritesNothing() {
+        LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
+        StringWriter sw = new StringWriter();
+        renderer.clearTailRow(sw);
+        assertEquals("", sw.toString());
+        assertEquals(0, renderer.linesSinceFrame(), "无尾行时不得把记账减成负数");
+    }
+
+    @Test
+    void appendCommittedLiftsTailRowAndResticksItAtBottom() {
+        LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
+        renderer.setTailRow(new StringWriter(), "⏱ 0.5s");
+        StringWriter sw = new StringWriter();
+        renderer.appendCommitted(sw, "x\ny\n");
+        assertEquals("\033[1A\r\033[2K" + "x\r\n" + "y\r\n" + "⏱ 0.5s\r\n", sw.toString(),
+                "尾行必须恒为最后一行已提交内容");
+        assertEquals(3, renderer.linesSinceFrame(), "净位移仍是新增行数（抬起 -1、贴回 +1）");
+    }
+
+    @Test
+    void appendCommittedDoesNotLiftTailRowForEmptyText() {
+        LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
+        renderer.setTailRow(new StringWriter(), "⏱ 0.5s");
+        StringWriter sw = new StringWriter();
+        renderer.appendCommitted(sw, "");
+        assertEquals("", sw.toString(), "空文本是 no-op，不得为它抬起尾行（否则净位移变 -1）");
+    }
+
+    // ---- 新增：等待帧新鲜度与光标以下残留 ----
+
+    @Test
+    void atWaitingFrameIsTrueOnlyForUntouchedWaitingFrame() {
+        LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
+        StringWriter sw = new StringWriter();
+        assertTrue(!renderer.atWaitingFrame(), "尚未渲染等待帧时不算新鲜帧");
+        renderer.renderWaitingFrame(sw, "MODE", "DIV", "FOOTDIV", "FOOTMODEL");
+        assertTrue(renderer.atWaitingFrame(), "刚渲染完的等待帧是 Shift+Tab 原地重写的唯一合法前提");
+        renderer.appendCommitted(sw, "输出");
+        assertTrue(!renderer.atWaitingFrame(), "任何追加都把模式提示行推远，原地重写会改坏屏幕");
+    }
+
+    @Test
+    void clearBelowCursorErasesFooterResidueAndResetsState() {
+        LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
+        StringWriter sw = new StringWriter();
+        renderer.redraw(sw, List.of("a", "b"));
+        renderer.renderWaitingFrame(sw, "MODE", "DIV", "FOOTDIV", "FOOTMODEL");
+        sw.getBuffer().setLength(0);
+        renderer.clearBelowCursor(sw);
+        assertEquals("\033[J", sw.toString(), "擦掉提示符下方仍在屏上的页脚两行，且不移动光标");
+        assertEquals(0, renderer.rowsWritten());
+        assertTrue(!renderer.atWaitingFrame(), "帧状态作废，Shift+Tab 转而攒延迟消息");
+    }
+
+    @Test
+    void clearBelowCursorDropsTailRow() {
+        LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
+        renderer.setTailRow(new StringWriter(), "⏱ 0.5s");
+        renderer.clearBelowCursor(new StringWriter());
+        StringWriter sw = new StringWriter();
+        renderer.setTailRow(sw, "⏱ 1.0s");
+        assertEquals("⏱ 1.0s\r\n", sw.toString(), "尾行已随擦除作废，新尾行不应再抬起");
+    }
+
+    @Test
+    void clearScreenDropsTailRow() {
+        LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
+        renderer.setTailRow(new StringWriter(), "⏱ 0.5s");
+        StringWriter sw = new StringWriter();
+        renderer.clearScreen(sw);
+        renderer.setTailRow(sw, "⏱ 1.0s");
+        assertEquals("\033[2J\033[H" + "⏱ 1.0s\r\n", sw.toString(), "整屏清空后尾行不再存在于屏上");
+    }
 }

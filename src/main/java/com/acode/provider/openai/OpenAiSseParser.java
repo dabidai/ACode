@@ -43,11 +43,10 @@ public final class OpenAiSseParser {
             // usage 块：流末尾带 choices 或独立 data 行下发；cache_creation 恒 0（OpenAI 自动缓存）
             JsonNode usageNode = node.path("usage");
             if (usageNode.isObject()) {
-                listener.onUsage(new Usage(
+                listener.onUsage(Usage.openAi(
                         usageNode.path("prompt_tokens").asLong(0),
                         usageNode.path("completion_tokens").asLong(0),
-                        usageNode.path("prompt_tokens_details").path("cached_tokens").asLong(0),
-                        0));
+                        usageNode.path("prompt_tokens_details").path("cached_tokens").asLong(0)));
             }
             JsonNode choice = node.path("choices").path(0);
             JsonNode delta = choice.path("delta");

@@ -12,11 +12,13 @@ import com.acode.ui.OutputPane;
 import com.acode.ui.RenderContext;
 import com.acode.ui.SelectionMenu;
 import com.acode.ui.SlashCommandCompleter;
+import com.acode.ui.StatusBar;
 import com.acode.ui.TerminalMenuKeySource;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.UserInterruptException;
 
 import java.io.Writer;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
@@ -36,6 +38,7 @@ public class CommandProcessor {
     private final Supplier<List<String>> modelOptionsSupplier;
     private final Consumer<String> modelSetter;
     private final List<String> deferredMessages = new ArrayList<>();
+    private Runnable framePrinter;
 
     public CommandProcessor(AcodeTerminal tui, OutputPane output, RenderContext renderContext,
                             Conversation conversation, SessionManager sessionManager,
@@ -55,12 +58,17 @@ public class CommandProcessor {
         this.modelSetter = modelSetter;
     }
 
+    /** 注入 frame 打印器：/clear 后重绘 frame 用。 */
+    public void setFramePrinter(Runnable framePrinter) {
+        this.framePrinter = framePrinter;
+    }
+
     public void mainLoop() {
         LiveRegionRenderer live = renderContext.liveRenderer();
         Writer writer = renderContext.screenWriter();
         SlashCommandCompleter completer = new SlashCommandCompleter(modelOptionsSupplier);
-        InputPane input = new InputPane(tui.terminal(), "> ", completer);
-        input.setCyclePermissionCallback(() -> cyclePermissionMode(live, writer));
+        InputPane input = new InputPane(tui.terminal(), ">*", completer);
+        input.setCyclePermissionCallback(() -> cyclePermissionMode(live, input::rewriteRowAboveInput));
         while (true) {
             String line;
             try {
@@ -69,45 +77,69 @@ public class CommandProcessor {
                 sessionManager.saveSession();
                 return;
             }
-            for (String msg : deferredMessages) {
-                output.appendLine(msg);
-                live.appendCommitted(writer, msg);
+            CommandRouter.Action action = CommandRouter.route(line);
+            if (action == CommandRouter.Action.QUIT) {
+                sessionManager.saveSession();
+                return;
             }
-            deferredMessages.clear();
-            switch (CommandRouter.route(line)) {
-                case QUIT -> {
-                    sessionManager.saveSession();
-                    return;
-                }
-                case CLEAR -> {
-                    conversation.clear();
-                    live.clearScreen(writer);
-                    output.clear();
-                    output.appendLine("（已清空）");
-                    live.appendCommitted(writer, "（已清空）");
-                }
-                case HELP -> {
-                    output.append(CommandRouter.HELP_TEXT);
-                    live.appendCommitted(writer, CommandRouter.HELP_TEXT);
-                }
-                case RESUME -> sessionManager.selectSession();
-                case PLAN -> {
-                    planModeSetter.accept(true);
-                    output.appendLine("（已进入规划模式：只读探索，计划落盘到 .acode/plans/）");
-                    live.appendCommitted(writer, "（已进入规划模式：只读探索，计划落盘到 .acode/plans/）");
-                }
-                case DO -> {
-                    planModeSetter.accept(false);
-                    output.appendLine("（已退出规划模式，开始执行）");
-                    live.appendCommitted(writer, "（已退出规划模式，开始执行）");
-                }
-                case PERMISSION_MODE -> handlePermissionMode(line.trim().substring("/permission-mode".length()).trim(), live, writer);
-                case MODEL -> handleModel(line.trim().substring("/model".length()).trim(), live, writer);
-                case SKIP -> {
-                    // 空白输入，忽略
-                }
-                case CHAT -> chatHandler.accept(line);
+            if (action == CommandRouter.Action.CHAT) {
+                chatHandler.accept(line); // ExchangeRunner 自己擦页脚、结束时自己渲染等待帧
+                continue;
             }
+            if (action == CommandRouter.Action.SKIP && deferredMessages.isEmpty()) {
+                continue; // 空行：JLine 只擦了提示符行、页脚完好，下一次 readLine 原地重画
+            }
+            // 其余命令的输出都写在提示符行上，会盖住下方的页脚：先擦干净，输出后重绘等待帧，
+            // 让「页脚常驻提示符下方」对每个提示符都成立，也让 Shift+Tab 永远只面对新鲜帧。
+            live.clearBelowCursor(writer);
+            flushDeferredMessages(live, writer);
+            executeCommand(action, line, live, writer);
+            if (framePrinter != null) {
+                framePrinter.run();
+            }
+        }
+    }
+
+    /** 冲刷 Shift+Tab 在无新鲜帧时攒下的延迟消息（加了帧新鲜度门槛后正常路径不会走到）。 */
+    private void flushDeferredMessages(LiveRegionRenderer live, Writer writer) {
+        for (String msg : deferredMessages) {
+            output.appendLine(msg);
+            live.appendCommitted(writer, msg);
+        }
+        deferredMessages.clear();
+    }
+
+    /** 执行会产生输出的命令；擦页脚与重绘等待帧由 mainLoop 统一负责。 */
+    private void executeCommand(CommandRouter.Action action, String line,
+                                LiveRegionRenderer live, Writer writer) {
+        switch (action) {
+            case CLEAR -> {
+                conversation.clear();
+                live.clearScreen(writer);
+                output.clear();
+                output.appendLine("（已清空）");
+                live.appendCommitted(writer, "（已清空）");
+            }
+            case HELP -> {
+                output.append(CommandRouter.HELP_TEXT);
+                live.appendCommitted(writer, CommandRouter.HELP_TEXT);
+            }
+            case RESUME -> sessionManager.selectSession();
+            case PLAN -> {
+                planModeSetter.accept(true);
+                output.appendLine("（已进入规划模式：只读探索，计划落盘到 .acode/plans/）");
+                live.appendCommitted(writer, "（已进入规划模式：只读探索，计划落盘到 .acode/plans/）");
+            }
+            case DO -> {
+                planModeSetter.accept(false);
+                output.appendLine("（已退出规划模式，开始执行）");
+                live.appendCommitted(writer, "（已退出规划模式，开始执行）");
+            }
+            case PERMISSION_MODE -> handlePermissionMode(
+                    line.trim().substring("/permission-mode".length()).trim(), live, writer);
+            case MODEL -> handleModel(
+                    line.trim().substring("/model".length()).trim(), live, writer);
+            case QUIT, CHAT, SKIP -> { /* mainLoop 已处理 */ }
         }
     }
 
@@ -177,9 +209,11 @@ public class CommandProcessor {
     }
 
     /** Shift+Tab 快捷切换：循环 default → acceptEdits → plan → bypassPermissions → default。
-     *  回调在 JLine readLine() 内执行，不能直接写终端（会与 JLine 提示符重绘冲突），
-     *  只改模式 + 排队消息，由 mainLoop 在 readLine 返回后刷出。 */
-    private void cyclePermissionMode(LiveRegionRenderer live, Writer writer) {
+     *  原地重写走 {@link InputPane.RowRewriter}（内部是 JLine 的 printAbove，会先擦掉输入区、
+     *  重写后从空缓存全量重绘提示符与 buffer），JLine 的 Display 缓存不会失同步，切完立刻可继续输入。
+     *  前提是等待帧仍然新鲜（{@code live.atWaitingFrame()}）：一旦帧上方/下方有追加，模式行就不在
+     *  光标上方固定 2 行处，此时改为攒延迟消息，等下一次命令输出时一并冲刷。 */
+    void cyclePermissionMode(LiveRegionRenderer live, InputPane.RowRewriter rewriter) {
         PermissionMode[] cycle = {PermissionMode.DEFAULT, PermissionMode.ACCEPT_EDITS,
                 PermissionMode.PLAN, PermissionMode.BYPASS};
         PermissionMode current = checkerSupplier.get().mode();
@@ -192,7 +226,15 @@ public class CommandProcessor {
         }
         PermissionMode next = cycle[(idx + 1) % cycle.length];
         checkerSupplier.get().setMode(next);
-        deferredMessages.add("（权限模式已切换：" + next.configValue() + "）");
+
+        PermissionMode afterNext = cycle[(idx + 2) % cycle.length];
+        int width = tui != null ? tui.width() : 80;
+        String newLine = StatusBar.modeLine(next.configValue(), afterNext.configValue(), width);
+        if (!live.atWaitingFrame()) {
+            deferredMessages.add(newLine);
+            return;
+        }
+        rewriter.rewriteRowAboveInput(LiveRegionRenderer.WAITING_FRAME_ROWS, newLine);
     }
 
     /**

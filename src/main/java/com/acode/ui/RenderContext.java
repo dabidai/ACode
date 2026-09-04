@@ -13,6 +13,8 @@ public final class RenderContext {
 
     private final AppConfig config;
     private LiveRegionRenderer live;
+    /** 真实终端路径的单例渲染器：跨组件共享 linesSinceFrame/rowsWritten/尺寸状态。 */
+    private LiveRegionRenderer cachedLive;
     private Writer screenWriter;
     private AcodeTerminal tui;
 
@@ -41,9 +43,12 @@ public final class RenderContext {
         if (live != null) {
             return live;
         }
-        // 真实终端尺寸时读取
+        // 真实终端：单例复用，随读随取终端尺寸，跨组件共享 linesSinceFrame/rowsWritten 状态
         if (tui != null) {
-            return new LiveRegionRenderer(tui::width, tui::height);
+            if (cachedLive == null) {
+                cachedLive = new LiveRegionRenderer(tui::width, tui::height);
+            }
+            return cachedLive;
         }
         // 无终端时设定
         return new LiveRegionRenderer(80, 24);
@@ -70,6 +75,11 @@ public final class RenderContext {
             return tw;
         }
         return new StringWriter();
+    }
+
+    /** 当前终端宽度，无终端时默认 80 */
+    public int terminalWidth() {
+        return tui != null ? tui.width() : 80;
     }
 
     /** 诊断用：把写进终端的每个字节按原样追加到日志文件（含 ANSI 与 \r\n），tee 开关控制。 */

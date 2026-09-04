@@ -417,4 +417,60 @@ class ConversationTest {
         ChatRequest request = c.buildRequest(List.of(), null);
         assertEquals("new-model", request.model(), "buildRequest 应使用 setModel 后的新模型");
     }
+
+    @Test
+    void contextUsageFractionPrefersRealPromptTokensOverEstimate() {
+        Conversation c = conversation();
+        c.addMessage(user("h".repeat(400))); // 估算 100 token
+        c.recordPromptTokens(1000);
+        assertEquals(0.5, c.contextUsageFraction(), 1e-9, "拿到真实用量后必须用它，而不是字符估算");
+    }
+
+    @Test
+    void contextUsageFractionFallsBackToEstimateIncludingSystemAndEnvironment() {
+        Conversation c = conversation();
+        c.setSystemPrompt("a".repeat(400)); // 100 token，不进历史但每轮都发
+        c.setEnvironment(ChatMessage.of(USER, "b".repeat(400))); // 100 token，同上
+        c.addMessage(user("c".repeat(400))); // 100 token
+        assertEquals(0.15, c.contextUsageFraction(), 1e-9, "估算必须把 system 与环境快照算进去");
+    }
+
+    @Test
+    void recordPromptTokensIgnoresNonPositiveReport() {
+        Conversation c = conversation();
+        c.addMessage(user("h".repeat(400))); // 估算 100 token
+        c.recordPromptTokens(0);
+        assertEquals(0.05, c.contextUsageFraction(), 1e-9, "代理没透传用量时应保留估算兜底");
+    }
+
+    @Test
+    void contextUsageFractionClampedToOne() {
+        Conversation c = conversation();
+        c.recordPromptTokens(9_999_999);
+        assertEquals(1.0, c.contextUsageFraction(), 1e-9);
+    }
+
+    @Test
+    void contextUsageFractionZeroWhenWindowNotPositive() {
+        assertEquals(0.0, new Conversation("m", false, 4096, 0).contextUsageFraction(), 1e-9);
+        assertEquals(0.0, new Conversation("m", false, 4096, -1).contextUsageFraction(), 1e-9);
+    }
+
+    @Test
+    void clearResetsRealPromptTokensBackToEstimate() {
+        Conversation c = conversation();
+        c.recordPromptTokens(1000);
+        assertEquals(0.5, c.contextUsageFraction(), 1e-9);
+        c.clear();
+        assertEquals(0.0, c.contextUsageFraction(), 1e-9, "历史清空后页脚不该还显示清空前的占用");
+    }
+
+    @Test
+    void clearKeepsSystemPromptEstimateAfterResettingRealTokens() {
+        Conversation c = conversation();
+        c.setSystemPrompt("a".repeat(400)); // 100 token，会话状态不随 /clear 丢失
+        c.recordPromptTokens(1000);
+        c.clear();
+        assertEquals(0.05, c.contextUsageFraction(), 1e-9);
+    }
 }

@@ -211,17 +211,46 @@ public class ConversationController {
                 live.appendCommitted(writer, msg);
                 startCCSwitchWatcher();
             }
-            String modeName = config.getPermissionMode() != null ? config.getPermissionMode() : "default";
-            output.appendLine("权限模式: " + modeName + " · 输入 /help 查看命令，/quit 退出");
-            live.appendCommitted(writer, "权限模式: " + modeName + " · 输入 /help 查看命令，/quit 退出");
+            int width = tui.width();
+            String div = com.acode.ui.StatusBar.divider(width);
+            output.appendLine(div);
+            live.appendCommitted(writer, div);
+            String hint = "输入 /help 查看命令，/quit 退出";
+            output.appendLine(hint);
+            live.appendCommitted(writer, hint);
+            // 恢复会话内容须在等待帧之前提交，否则会写在预留提示符行上、冲掉页脚
             restoreIfResume();
-            commandProcessor().mainLoop();
+            // 初始等待帧：模式提示 + 分隔线（提示符上方）+ 页脚分隔线 + 模型信息（提示符下方）
+            String modeName = config.getPermissionMode() != null ? config.getPermissionMode() : "default";
+            PermissionMode mode = PermissionMode.fromConfig(modeName);
+            if (mode == null) mode = PermissionMode.DEFAULT;
+            renderWaitingFrame(live, writer, mode);
+            CommandProcessor cp = commandProcessor();
+            cp.setFramePrinter(() -> renderWaitingFrame(live, writer, permissionChecker().mode()));
+            cp.mainLoop();
         } catch (IllegalStateException e) {
             System.err.println(e.getMessage());
         } finally {
             stopCCSwitchWatcher();
             closeMcpManager();
         }
+    }
+
+    /** 渲染等待输入帧：模式提示 + 分隔线（提示符上方）+ 页脚分隔线 + 模型信息（提示符下方）。
+     *  光标停在预留提示符行，由 JLine 绘制 >*；供启动与 /clear 后重绘复用。 */
+    private void renderWaitingFrame(LiveRegionRenderer live, Writer writer, PermissionMode mode) {
+        int width = tui.width();
+        String modeHint = com.acode.ui.StatusBar.modeLine(
+                mode.configValue(), com.acode.ui.StatusBar.nextModeName(mode), width);
+        String divider = com.acode.ui.StatusBar.divider(width);
+        String model = conversation.getModel();
+        double ctxFraction = conversation.contextUsageFraction();
+        String footerModel = com.acode.ui.StatusBar.infoLine(model, ctxFraction, projectRoot.toString(), width);
+        output.appendLine(modeHint);
+        output.appendLine(divider);
+        output.appendLine(divider);
+        output.appendLine(footerModel);
+        live.renderWaitingFrame(writer, modeHint, divider, divider, footerModel);
     }
 
     /** 清理 MCP 连接（stdio 子进程销毁、HTTP 会话释放）；幂等。测试亦可直接调用避免残留子进程。 */

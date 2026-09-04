@@ -501,7 +501,7 @@ class ConversationControllerTest {
         controller.handleExchange("你好", () -> false, () -> { });
 
         String joined = String.join("\n", output.lines());
-        assertTrue(joined.contains("[default] usage: in 100 · out 20"),
+        assertTrue(joined.contains("usage: in 100 · out 20"),
                 "TurnComplete 应输出 usage 脚注行：" + joined);
     }
 

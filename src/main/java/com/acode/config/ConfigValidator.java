@@ -9,7 +9,7 @@ import java.util.Set;
  */
 public class ConfigValidator {
 
-    public static final int DEFAULT_MAX_CONTEXT_TOKENS = 128_000;
+    public static final int DEFAULT_MAX_CONTEXT_TOKENS = 200_000;
     public static final int DEFAULT_MAX_ITERATIONS = 20;
     private static final Set<String> PROTOCOLS = Set.of("anthropic", "openai");
     static final Set<String> PERMISSION_MODES =

@@ -2,7 +2,7 @@
 
 > 最后更新：2026-09-03
 > 依赖关系：`T1→T2/T4`；`T2→T3`；`T4→T5`；`T5→T6/T7/T8`；`T3/T5→T8 装配`；`T8→T9`；`T9→T10`。T3/T6/T7 都改 `Agent`，注意按顺序避免行号错位。
-> 源码依据：ACode 现有实现（`Conversation` 最旧裁剪 + `Agent` 工具结果 2000 字符截断 + Anthropic cache_control）。数值口径见 `checklist.md` 顶部「默认值说明」。
+> 源码依据：ACode 现有实现（`Conversation` 现有"最旧裁剪"与 `Agent` 工具结果 2000 字符截断——本阶段分别**移除/替换**为大结果落盘 + 结构化压缩；Anthropic cache_control 沿用）。数值口径见 `checklist.md` 顶部「默认值说明」。
 
 ## 约定
 
@@ -25,13 +25,15 @@
   - 新增整体估算：系统提示 + 环境快照 + 历史（沿用现有 `estimateTokens` 分块口径）加总；暴露 `maxContextTokens`
   - 新增 `replaceAll(List<ChatMessage>)`：加锁原子替换整段历史（重建/压缩用），与 `nextEpoch`/带代次写入同锁
   - `clear()`（`L94-97`）改为同时触发已注册的 Runnable 钩子（`addClearHook`），供状态重置（T9 用）
-- `ConversationContextTest.java`（新）— 估算含系统/环境；`replaceAll` 原子性；clear 钩子被调用
+  - **移除 `buildRequest` 的运行时最旧裁剪**：`trim`/`estimateTotal` 不再在组装请求时静默丢消息（超窗交给本阶段的压缩守卫；残余单条超窗走可见错误）——`buildRequest` 改为原样带出整体消息（仍过 `sanitize`）；`trim` 删除；`removeTurnUnit` 的"轮次单元成对切分"逻辑保留，必要时提为包可访问静态助手（T4 planner 复用）
+- `conversation/ConversationTest.java`（改）— 删除/改写针对"最旧裁剪"的既有用例（随 trim 移除）
+- `ConversationContextTest.java`（新）— 估算含系统/环境；`replaceAll` 原子性；clear 钩子被调用；预填超窗历史 → buildRequest 不裁剪（请求消息数与历史一致）
 
 **依赖**：无
 
 **参考资料**
 - Conversation 现有结构：`messages` L24、system `L34`、environment `L37`、构造 L39-44、`estimateTokens` L103-119、私有 `estimateTotal` L158、`trim`/`removeTurnUnit` L147-175、`sanitize` L181-220、`clear` L94-97、`nextEpoch` L71-73
-- 窗口默认：`config/ConfigValidator.java:12`（DEFAULT 128K）；`AppConfig.getMaxContextTokens` `config/AppConfig.java:54`
+- 窗口默认：`config/ConfigValidator.java:12`（DEFAULT 200K）；`AppConfig.getMaxContextTokens` `config/AppConfig.java:54`
 - token 估算口径（字符÷4）已存在 `Conversation.java:103-106`
 
 ---
@@ -44,7 +46,9 @@
 - `context/SpillStore.java` — 幂等落盘：写入 `<工作目录>/.acode/tool-results/<toolUseId>.txt`，文件已存在即跳过并返回既有（写 `wx` 语义）；自动建目录；返回路径字符串
 - `context/ContentReplacementState.java` — 两个记账结构：已决定集合（seen）与"已替换 id → 预览串"映射；提供决策记录、按 id 重放预览、`reset()`
 - `context/ToolResultBudget.java` — 对**一批新产生的工具结果**（带 id/正文/是否错误）返回应入历史的内容列表：单条超过保留上限 → 落盘并用预览替换；同批合计（字符）超过聚合上限 → 从未落盘的最大者开始补落盘直至回落；同 id 重复传入原样重放已存预览、不重写文件不重新决策；≤ 上限的全文保留
+- `context/ContextManager.java`（新）— Layer-1 组合门面：持有 ContextPolicy、SpillStore、ContentReplacementState、ToolResultBudget，暴露 `reset()`（清空冻结/熔断等运行期状态，T9 联动用）；T5 再把 CompactExecutor 挂入，成为装配层单入口（T3/T6/T7 注入 Agent、T8 注入手动命令两处都拿它）
 - `SpillStoreTest.java` / `ContentReplacementStateTest.java` / `ToolResultBudgetTest.java`（新）— 阈值边界（恰好等于上限不落盘、超过才落盘）；同批聚合从大到小替换直到回落；同 id 二次调用返回同一预览且磁盘文件不重写；预览文本含路径与省略标记；错误结果同规则；`reset` 清空
+- `ContextManagerTest.java`（新）— 组合门面的 reset()：先在冻结状态/各部件记一笔，reset 后断言运行期状态清空（落盘文件不删，见 spec Out of Scope）
 
 **依赖**：T1（取常量）
 
@@ -79,9 +83,9 @@
 
 **影响文件（新建 + 修改）**
 - `context/SummaryPrompt.java`（新）— 生成摘要系统指令：9 段结构（意图/技术点/文件与关键代码/错误修复/解决过程/所有用户消息尽量原文/待办/当前工作最详细/下一步）、两阶段产出（草稿丢弃、只留正文）、禁止工具调用只输出纯文本、用户消息原文优先
-- `context/CompactionPlanner.java`（新）— 给定完整历史与预算，从尾部按"完整轮次单元"回溯选出保留区、其余为摘要区；保证 assistant tool_use 与其后 tool_result 成对不被拆、重建后首条用户角色边界合法；预算装不下最近一个完整轮次时保留区为空
+- `context/CompactionPlanner.java`（新）— 给定完整历史与预算，从尾部按"完整轮次单元"回溯选出保留尾（预算内）、其余为摘要区；保证 assistant tool_use 与其后 tool_result 成对不被拆；**不可压缩（逐字保留）仅限未闭环步**：最新一条未答复 user 原文 + 最末尚无结果的 assistant tool_use（tool_result 已入历史则整对保留）——压缩不得把正要回答的问题或正在执行的工具结果压进摘要；**已闭环轮次**（结果已回填、流程已推进）一律视为普通历史，可进保留尾预算或摘要区——单个长请求内连续多轮也可中途压缩；重建不写死首条角色，只保证不变量：整段角色相邻合法（摘要 user → 边界 assistant → 保留尾衔接无同角色相邻）、请求以 user 结尾、无悬空 tool_use/tool_result、重建后整体估算 ≤ 触发点；预算连一个完整轮次都装不下时保留尾为空（仅含未闭环步）
 - `conversation/Conversation.java`（改）— 暴露 `rebuildTo(List<ChatMessage>)`（即 T1 的 `replaceAll` 语义，压缩专用入口），供摘要成功后原子替换
-- `SummaryPromptTest.java` / `CompactionPlannerTest.java`（新）— 9 段与原文优先、两阶段、禁工具；分区：预算内保留最近完整轮次、预算不足保留空、轮次不拆散、边界合法；重建后经既有 `sanitize`（`Conversation.java:181`）无孤儿工具块
+- `SummaryPromptTest.java` / `CompactionPlannerTest.java`（新）— 9 段与原文优先、两阶段、禁工具；分区：预算内保留最近完整轮次、预算不足保留尾为空（仅未闭环步）、轮次不拆散、未闭环步（末尾未答复 user / 尚无结果的 tool_use）逐字保留不吞、**已闭环轮次（含当前长请求更早轮次）可进摘要区**；重建满足不变量：无同角色相邻、请求以 user 结尾、经既有 `sanitize`（`Conversation.java:181`）无孤儿工具块、重建后整体估算 ≤ 触发点
 
 **依赖**：T1
 
@@ -96,12 +100,13 @@
 **目标**：把模型调用、两阶段解析、熔断、降级、重建串成一个可复用执行器；提供自动触发判断。
 
 **影响文件（新建）**
-- `context/ContextTooLong.java`（新）— 把 provider 异常判为"上下文超长"：匹配 Anthropic/OpenAI 错误文案中的典型短语（容错、不抛错返回 false）
+- `context/ContextTooLong.java`（新）— 把 provider 异常判为"上下文超长"：匹配异常文案中的典型短语（容错、不抛错返回 false）。注意 `ProviderHttpClient.classify` 只透传 `error.message`、不带错误码——按 Anthropic message 含 `prompt is too long`、OpenAI/DeepSeek message 含 `maximum context length` 判；若想按错误码（`prompt_is_too_long`/`context_length_exceeded`）判，先扩展 ProviderHttpClient 透传 `error.code`/`type`（属额外改动点）
 - `context/CompactExecutor.java`（新）— 构造取 provider/conversation/policy/planner；方法：
-  - `needsAutoCompact()`：整体估算 ≥ 触发点（窗口 − 摘要输出预留 − 安全余量）
-  - `run(manual)`：manual=true 时无条件压缩（历史过短无可压缩则返回"无需"）；摘要请求 = 系统摘要指令 + 摘要区历史、**不携带工具**；解析只取正式正文（草稿丢弃，无标签则整段兜底）；成功 → `rebuildTo`（摘要消息含边界提醒 + 保留区）；摘要请求自身超长 → 按分组丢最旧重试，次数与降级比例见 checklist；连续失败计数到阈值即熔断（此后 `needsAutoCompact` 恒 false，直到手动成功或会话重置）
+  - `needsAutoCompact()`：整体估算 ≥ 触发点（窗口 − 摘要输出预留 − 安全余量）**且存在早于保留尾的可压缩摘要区且压后整体估算 < 触发点**（自动触发守卫；不满足则不触发、不发摘要请求）
+  - `run(manual)`：manual=true 时无条件压缩（历史无可压缩摘要区则返回"无需"）；摘要请求 = 摘要系统指令 + 摘要区消息，**不携带工具、thinking 关闭、max_tokens 独立给足**，直接经 `ChatRequest.builder` 构造（不经 `Conversation.buildRequest`，避免被裁剪/注入轮次级提醒）；解析只取正式正文（草稿丢弃，无标签则整段兜底）；成功 → `rebuildTo` 重建为「摘要(user) + 边界提醒(assistant 独立消息) + 保留尾」，重建后整体估算（与触发同一口径）≤ 触发点；摘要请求自身超长 → 按分组丢最旧重试，次数与降级比例见 checklist；连续失败计数到阈值即熔断（此后 `needsAutoCompact` 恒 false，直到任一次成功压缩——含自动与手动 /compact——或会话经 clear 钩子重置）
   - 返回结果带压缩前后估算（供 UI/命令展示）
-- `context/CompactExecutorTest.java`（新）— FakeProvider 分别返回带标签/不带标签文本；超长一次后成功（丢最旧）；连续失败达阈值熔断、后续不再自动触发；手动成功清零熔断；失败时历史原样不动
+- `ContextManager`（T2 已建）— 本任务把 CompactExecutor 挂入：门面补齐摘要执行器，T3 注入 Agent 的同一实例在此扩展为可压缩（reset() 仍清冻结/熔断/触发器状态）
+- `context/CompactExecutorTest.java`（新）— FakeProvider 分别返回带标签/不带标签文本；超长一次后成功（丢最旧）；连续失败达阈值熔断、后续不再自动触发；成功（含自动与手动）清零熔断计数；失败时历史原样不动；**守卫**：无可压缩摘要区（历史全落在保留预算内）→ `needsAutoCompact` 为 false、不产生摘要请求；**摘要请求断言**：tools 为空、thinking=false、max_tokens = ContextPolicy 的摘要输出预算常量（默认 20_000，非对话级 8_192）
 
 **依赖**：T4
 
@@ -120,7 +125,7 @@
 - `agent/Agent.java`（改）— 注入 `ContextManager`（含 CompactExecutor）；`runTurn` 构建请求前调用执行器自动触发（manual=false）；若触发且失败则照常继续（下一轮按熔断不再尝试）
 - `agent/AgentEvent.java`（改）— 按现有 record 风格新增"提示类"事件（携带文本，如"正在自动压缩…"）
 - `ExchangeRunner.java`（改）— 事件分发加该事件分支 → 输出行（参考现 StreamText/RetryEvent 渲染 L136-160）
-- `context/AutoCompactAgentTest.java`（新）— 预填逼近触发点的历史 + FakeProvider（先回摘要）→ 断言：压缩后该轮请求消息以摘要消息开头且含边界提醒；熔断：摘要连续失败达阈值 → 不再自动触发、后续请求用原历史、Notice 事件出现
+- `context/AutoCompactAgentTest.java`（新）— 预填逼近触发点的历史（末尾留一条未答复 user）+ FakeProvider（先回摘要）→ 断言：压缩后该轮请求自摘要(user)起、边界提醒为独立 assistant 消息、末尾仍含该未答复 user 原文、请求消息数 = 重建后消息数；熔断：摘要连续失败达阈值 → 不再自动触发、后续请求用原历史、Notice 事件出现；守卫：预填内容全落在保留预算内 → 不触发自动压缩、无摘要请求；**长任务中途压缩**：单个 user 请求驱动连续多轮工具往返逼近触发点 → 中途自动压缩一次后继续、任务不中断、请求不超窗
 
 **依赖**：T5、T3（Agent 注入模式）
 
@@ -135,13 +140,13 @@
 **目标**：正常请求被"上下文超长"拒绝时，就地压缩一次并重试原请求一次。
 
 **影响文件（修改）**
-- `agent/Agent.java`（改）— `runTurn` 错误处理路径（现 L231-246：可重试分支、否则 ErrorEvent + error 终止）插入：不可重试且判定为"上下文超长"且本处尚未强制压缩 → 执行一次压缩 → 用新历史重试当前请求一次（走回循环内同一 turn）；仍超长则走既有错误终止，不无限重试
-- `context/ForceCompactAgentTest.java`（新）— FakeProvider 首次抛"上下文超长"错误、其后成功 → 第二次请求历史含摘要、恰好重试一次；持续超长 → 只压缩一次，随后走正常错误终止
+- `agent/Agent.java`（改）— `runTurn` 错误处理路径（现 L231-246：可重试分支、否则 ErrorEvent + error 终止）插入：不可重试且判定为"上下文超长"且本处尚未强制压缩 → 执行一次压缩 → 用新历史重试当前请求一次（走回循环内同一 turn）；仍超长则走既有错误终止，不无限重试；压缩走 T5 执行器，未闭环步保留在尾部，重试请求仍含本轮用户输入原文
+- `context/ForceCompactAgentTest.java`（新）— FakeProvider 首次抛"上下文超长"错误、其后成功 → 第二次请求历史含摘要、仍含该轮用户输入原文、恰好重试一次；持续超长 → 只压缩一次，随后走正常错误终止；单条消息自身超窗（超大 user 长文）→ 强制压缩一次仍超 → 走正常错误终止（可见错误、历史不变）
 
 **依赖**：T5、T6（共享 ContextManager/判定）
 
 **参考资料**
-- `Agent.runTurn` 错误路径 L231-246；重试上限/策略 `RetryPolicy.java:10,17-21`；错误分类 `ProviderHttpClient.classify` L92-101
+- `Agent.runTurn` 错误路径 L231-246；重试上限/策略 `RetryPolicy.java:10,17-21`（runTurn 内流错误重试上限实为 Agent 自身 `MAX_RETRIES`=2，见 L53/L233；RetryPolicy 只判可否重试）；错误分类 `ProviderHttpClient.classify` L92-101
 - "只压缩一次"用 Agent 内实例标志（不跨轮重置），防死循环
 
 ---
@@ -152,14 +157,14 @@
 
 **影响文件（修改）**
 - `ui/CommandRouter.java`（改）— `Action` 枚举（L10）增 `COMPACT`；`HELP_TEXT`（L13-22）补 `/compact` 行；`route`（L41-49）增 `/compact` 分支
-- `CommandProcessor.java`（改）— 构造（L23-44）增一个"手动压缩处理"回调参数；`mainLoop` switch（L58-90）`COMPACT` → 同步执行该回调
-- `ConversationController.java`（改）— 装配一次 `ContextManager`（provider/conversation/工作目录/策略）；经 `ExchangeRunner`（L332-337）注入 Agent；在 `commandProcessor()`（L235-242）把手动回调接上（空闲态同步跑 `CompactExecutor.run(true)`：先输出"正在压缩…"，成功输出前后估算与结果行，失败输出原因且历史不变，无可压缩内容输出提示）；把 contextManager 的清空钩子接到 Conversation（配合 T9 由 clear 触发重置）
+- `CommandProcessor.java`（改）— 构造（L32-44）增一个"手动压缩处理"回调参数；`mainLoop` switch（L58-90）`COMPACT` → 同步执行该回调
+- `ConversationController.java`（改）— 装配一次 `ContextManager`（provider/conversation/工作目录/策略）；经 `ExchangeRunner`（L332-337）注入 Agent；在 `commandProcessor()`（L235-242）把手动回调接上（空闲态同步跑 `CompactExecutor.run(true)`：先输出"正在压缩…"，成功输出前后估算与结果行，失败输出原因且历史不变，无可压缩内容输出提示）；并在同一装配点把 `contextManager.reset()` 注册进 conversation 的 clear 钩子（T1 已加）——`/clear`、加载会话触发时联动重置冻结与熔断（T9 验证）
 - 测试：`ui/CommandRouterTest.java`（或既有 router 测试文件）补 `/compact → COMPACT`、HELP 含 `/compact`；`context/ManualCompactCommandTest.java`（FakeProvider + `@TempDir`）断言命令触发后历史被重建、输出含压缩前后估算数字；历史过短时输出"无需压缩"提示且历史不动
 
 **依赖**：T5；装配还需 T3 已完成（Agent 注入走同一 ContextManager）
 
 **参考资料**
-- `CommandProcessor` 构造与 switch：L23-44、L58-90；`handlePermissionMode` 委托先例（L98）说明"控制器注入回调"的既有风格
+- `CommandProcessor` 构造与 switch：L32-44、L58-90；`handlePermissionMode` 委托先例（L98）说明"控制器注入回调"的既有风格
 - `ConversationController`：`commandProcessor()` L235-242、`exchangeRunner()` L332-337、`handleChat` L261-263、字段 L101-110
 - 状态/输出：`OutputPane`/`LiveRegionRenderer.appendCommitted`（既有渲染路径）；估算展示用 T1 的整体估算
 
@@ -170,7 +175,7 @@
 **目标**：压缩后历史随会话正常存档/恢复；/clear 与恢复会话等历史重置点联动重置冻结/熔断；补文档。
 
 **影响文件（修改）**
-- `Conversation.java`（改）— 已由 T1 加 clear 钩子；此任务把 contextManager.reset() 注册进去（在 ConversationController 装配处挂），重置冻结/熔断/触发器状态（落盘文件不删，见 spec Out of Scope）
+- `Conversation.java` — 无需再改（clear 钩子已在 T1 加、reset 注册已在 T8 装配处挂）；本任务由测试断言 `/clear`、加载会话等清空点触发钩子后冻结/熔断被重置（落盘文件不删，见 spec Out of Scope）
 - `SessionManager.java`（改，视需要）— 恢复/加载已走 `conversation.clear()`（L108）触发钩子；`restoreIfResume`（L46-66）不 clear，但新进程内会话本就新建，无需额外处理；确认 `isUnchangedReload`（L152-167）语义在"压缩后未新增消息"下不产生异常重复存档（可接受：压缩即内容变化，视为新内容存档一次）
 - `docs/manual-test.md`（改）— 追加「阶段七」手测小节（空 ⚑ 项，T10 填）
 - `README.md`（改）— 简述上下文管理能力与 `/compact` 命令（可选，跟随 ch06 先例）
@@ -192,9 +197,10 @@
 **影响文件（新建 + 修改）**
 - `context/ContextManagementEndToEndTest.java`（新）— 假 Provider + 真 Conversation/ContextManager/Agent 链路（`@TempDir` 工作目录）：
   1. 超大工具结果 → 工作目录 `.acode/tool-results/` 生成文件、历史含预览+路径、不含旧截断后缀
-  2. 多轮逼近触发点 → 自动压缩 → 后续请求自摘要消息起、含边界提醒；压缩后不再被最旧裁剪静默删（断言请求消息数 = 重建后消息数）
-  3. 撞墙"上下文超长" → 强制压缩一次并重试成功
-  4. 手动 /compact 路径（controller 触发）→ 历史重建且输出含前后估算
+  2. 多轮逼近触发点 → 自动压缩 → 后续请求自摘要消息起、含边界提醒；请求消息数 = 重建后消息数（不再有最旧裁剪静默删）
+  3. **单请求长任务**：一个 user 请求驱动连续多轮（40+）工具往返逼近触发点 → 中途自动压缩一次、任务不中断继续完成、请求不超窗
+  4. 撞墙"上下文超长" → 强制压缩一次并重试成功
+  5. 手动 /compact 路径（controller 触发）→ 历史重建且输出含前后估算
 - `docs/manual-test.md`（改）— 填阶段七 ⚑ 手测勾选（真实窗口下长任务观察压缩触发与 usage 变化；`/compact` 手测）
 - **统一收尾**：`JAVA_HOME="D:\java\jdk21" mvn test` 全套全绿，记录总用例数（新增均无外部网络；FakeProvider 本地注入）
 

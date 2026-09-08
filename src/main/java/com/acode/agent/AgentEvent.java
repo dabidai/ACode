@@ -50,6 +50,9 @@ public sealed interface AgentEvent {
     /** 不可恢复错误 */
     record ErrorEvent(String message) implements AgentEvent {}
 
+    /** 提示类事件（自动/紧急压缩等过程提示；文本直接作为一行输出） */
+    record Notice(String message) implements AgentEvent {}
+
     /** 重试预告（UI 显示等待状态） */
     record RetryEvent(String reason, long waitMs) implements AgentEvent {}
 

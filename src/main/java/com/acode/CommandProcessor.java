@@ -17,7 +17,7 @@ import java.io.Writer;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
-/** 主循环命令分发：读输入 → 路由 → 执行各命令（/clear /help /resume /plan /do /permission-mode /chat）。 */
+/** 主循环命令分发：读输入 → 路由 → 执行各命令（/clear /help /compact /resume /plan /do /permission-mode /chat）。 */
 public class CommandProcessor {
 
     private final AcodeTerminal tui;
@@ -28,6 +28,9 @@ public class CommandProcessor {
     private final Supplier<PermissionChecker> checkerSupplier;
     private final Consumer<String> chatHandler;
     private final Consumer<Boolean> planModeSetter;
+
+    /** 手动压缩处理回调（ConversationController 装配时注入；缺省空操作，存量构造/测试兼容） */
+    private Runnable compactHandler = () -> { };
 
     public CommandProcessor(AcodeTerminal tui, OutputPane output, RenderContext renderContext,
                             Conversation conversation, SessionManager sessionManager,
@@ -41,6 +44,13 @@ public class CommandProcessor {
         this.checkerSupplier = checkerSupplier;
         this.chatHandler = chatHandler;
         this.planModeSetter = planModeSetter;
+    }
+
+    /** 注入手动 /compact 处理回调（上下文管理装配后调用；空闲态同步执行压缩）。 */
+    public void setCompactHandler(Runnable compactHandler) {
+        if (compactHandler != null) {
+            this.compactHandler = compactHandler;
+        }
     }
 
     public void mainLoop() {
@@ -82,6 +92,7 @@ public class CommandProcessor {
                     output.appendLine("（已退出规划模式，开始执行）");
                     live.appendCommitted(writer, "（已退出规划模式，开始执行）");
                 }
+                case COMPACT -> compactHandler.run();
                 case PERMISSION_MODE -> handlePermissionMode(line.trim().substring("/permission-mode".length()).trim(), live, writer);
                 case SKIP -> {
                     // 空白输入，忽略

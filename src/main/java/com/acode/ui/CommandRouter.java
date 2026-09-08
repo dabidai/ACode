@@ -7,12 +7,13 @@ package com.acode.ui;
 public final class CommandRouter {
 
     /** 命令动作。 */
-    public enum Action { QUIT, CLEAR, HELP, RESUME, PLAN, DO, PERMISSION_MODE, CHAT, SKIP }
+    public enum Action { QUIT, CLEAR, HELP, RESUME, PLAN, DO, COMPACT, PERMISSION_MODE, CHAT, SKIP }
 
     /** /help 展示的命令说明；补齐 /clear 文案时同步更新。 */
     public static final String HELP_TEXT = """
             /quit   退出程序
             /clear  清空界面与对话上下文
+            /compact  立即压缩对话上下文为摘要（空闲态可用）
             /plan   进入规划模式（只读探索，计划落盘到 .acode/plans/）
             /do     退出规划模式，按已交付计划开始执行
             /permission-mode  查看/切换权限模式（default/acceptEdits/plan/bypassPermissions）
@@ -45,6 +46,7 @@ public final class CommandRouter {
             case "/resume" -> Action.RESUME;
             case "/plan" -> Action.PLAN;
             case "/do" -> Action.DO;
+            case "/compact" -> Action.COMPACT;
             default -> Action.CHAT;
         };
     }

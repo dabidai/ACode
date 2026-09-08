@@ -270,8 +270,8 @@ class ConversationControllerTest {
         List<ChatMessage> round2 = provider.receivedRequests().get(1).messages();
         ChatMessage last = round2.get(round2.size() - 1);
         ToolResultBlock block = (ToolResultBlock) last.blocks().get(0);
-        assertTrue(block.content().contains("已截断"), "超长结果入历史应带截断提示");
-        assertTrue(block.content().length() < 5000, "结果应被截断");
+        assertFalse(block.content().contains("已截断"), "ch07：移除旧的一刀切截断后缀");
+        assertTrue(block.content().length() >= 4000, "结果不再被截断到 2000 上限，应保留全文");
     }
 
     @Test

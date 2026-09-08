@@ -19,6 +19,8 @@ import com.acode.config.AppConfig;
 import com.acode.config.ConfigException;
 import com.acode.config.ConfigLoader;
 import com.acode.config.ConfigValidator;
+import com.acode.context.CompactExecutor;
+import com.acode.context.ContextManager;
 import com.acode.conversation.Conversation;
 import com.acode.mcp.McpManager;
 import com.acode.permission.PermissionChecker;
@@ -129,6 +131,9 @@ public class ConversationController {
     private ExchangeRunner exchangeRunner;
     private CommandProcessor commandProcessor;
 
+    /** 上下文管理门面（每会话一次装配；懒构造，捕获当时 projectRoot） */
+    private ContextManager contextManager;
+
     /** 权限沙箱根：生产为当前工作目录；测试可注入 @TempDir 避免文件路径被沙箱拦截。 */
     private Path projectRoot = Path.of(System.getProperty("user.dir"));
 
@@ -169,7 +174,14 @@ public class ConversationController {
         this.sessionManager = new SessionManager(new SessionStore(SessionStore.defaultDir()), conversation);
         this.resume = resume;
         this.renderContext = new RenderContext(config);
+        // /clear、加载会话等清空点联动重置上下文管理的运行期状态（冻结记账/熔断；落盘文件不删）
+        conversation.addClearHook(this::resetContextStateOnClear);
         initSessionState();
+    }
+
+    /** 清空点钩子：懒装配 ContextManager 并复位运行期状态（首次清空时可能尚未有任何状态，复位为空操作） */
+    private void resetContextStateOnClear() {
+        contextManager().reset();
     }
 
     /**
@@ -237,8 +249,43 @@ public class ConversationController {
             commandProcessor = new CommandProcessor(tui, output, renderContext, conversation,
                     sessionManager(), this::permissionChecker, this::handleChat,
                     planMode -> this.planMode = planMode);
+            commandProcessor.setCompactHandler(this::handleManualCompact);
         }
         return commandProcessor;
+    }
+
+    /** 上下文管理门面：懒装配一次（provider/conversation/工作目录/预算策略）；clear 钩子已挂 conversation */
+    private ContextManager contextManager() {
+        if (contextManager == null) {
+            contextManager = new ContextManager(projectRoot, provider, conversation);
+        }
+        return contextManager;
+    }
+
+    /** 手动 /compact：空闲态同步压缩一次并展示压缩前后预算（历史过短/失败/成功三类提示） */
+    void handleManualCompact() {
+        LiveRegionRenderer live = renderContext.liveRenderer();
+        Writer writer = renderContext.screenWriter();
+        output.appendLine("正在压缩…");
+        live.appendCommitted(writer, "正在压缩…");
+        try {
+            CompactExecutor.Result result = contextManager().executor().run(true);
+            String line;
+            if (result.noChange()) {
+                line = "（没有需要压缩的内容）";
+            } else if (result.failed()) {
+                line = "压缩失败：" + result.reason();
+            } else {
+                line = "压缩完成：压缩前约 " + result.beforeEstimate()
+                        + " token → 压缩后约 " + result.afterEstimate() + " token";
+            }
+            output.appendLine(line);
+            live.appendCommitted(writer, line);
+        } catch (RuntimeException e) {
+            String line = "压缩失败：" + e.getMessage();
+            output.appendLine(line);
+            live.appendCommitted(writer, line);
+        }
     }
 
     /** /permission-mode 切档（委托 CommandProcessor；测试直接调用）。 */
@@ -333,6 +380,7 @@ public class ConversationController {
         if (exchangeRunner == null) {
             exchangeRunner = new ExchangeRunner(provider, config, conversation, toolRegistry,
                     output, renderContext, confirmAnswerer, choiceAnswerer, projectRoot, this::permissionChecker);
+            exchangeRunner.setContextManager(contextManager());
         }
         return exchangeRunner;
     }

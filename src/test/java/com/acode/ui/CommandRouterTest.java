@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import static com.acode.ui.CommandRouter.Action.CHAT;
 import static com.acode.ui.CommandRouter.Action.CLEAR;
+import static com.acode.ui.CommandRouter.Action.COMPACT;
 import static com.acode.ui.CommandRouter.Action.DO;
 import static com.acode.ui.CommandRouter.Action.HELP;
 import static com.acode.ui.CommandRouter.Action.PERMISSION_MODE;
@@ -106,6 +107,17 @@ class CommandRouterTest {
         assertTrue(CommandRouter.HELP_TEXT.contains("/plan"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/do"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/permission-mode"));
+        assertTrue(CommandRouter.HELP_TEXT.contains("/compact"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/help"));
+    }
+
+    @Test
+    void compactCommandRoutesToCompact() {
+        assertEquals(COMPACT, CommandRouter.route("/compact"));
+    }
+
+    @Test
+    void compactWithTrailingWhitespaceStillRoutesToCompact() {
+        assertEquals(COMPACT, CommandRouter.route("/compact   "));
     }
 }

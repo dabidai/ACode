@@ -2,8 +2,13 @@ package com.acode.agent;
 
 import com.acode.agent.AgentEvent.ErrorEvent;
 import com.acode.agent.AgentEvent.LoopComplete;
+import com.acode.agent.AgentEvent.Notice;
 import com.acode.agent.AgentEvent.RetryEvent;
 import com.acode.agent.AgentEvent.TurnComplete;
+import com.acode.context.CompactExecutor;
+import com.acode.context.ContextManager;
+import com.acode.context.ContextTooLong;
+import com.acode.context.ToolResultBudget;
 import com.acode.conversation.Conversation;
 import com.acode.permission.PermissionChecker;
 import com.acode.prompt.SystemReminder;
@@ -43,9 +48,6 @@ public class Agent {
     /** 五种循环终止原因 */
     public enum Termination { NORMAL, MAX_ITERATIONS, CANCELED, PLAN_DELIVERED, ERROR }
 
-    /** 工具结果入历史前的截断上限（字符） */
-    static final int MAX_TOOL_RESULT_HISTORY_CHARS = 2000;
-
     /** 输出截断恢复次数上限（超出按正常终止） */
     private static final int MAX_TRUNCATION_RECOVERY = 3;
 
@@ -65,6 +67,12 @@ public class Agent {
     private final PlanWriter planWriter = new PlanWriter();
     private final ExitPlanModeTool exitPlanMode = new ExitPlanModeTool();
     private final int maxIterations;
+
+    /** 上下文管理门面（可空：存量构造/测试不装配则"超长结果全文直存进历史"；新流程必有） */
+    private final ContextManager contextManager;
+
+    /** 本 exchange 内是否已强制压缩过（紧急压缩只做一次，防死循环） */
+    private boolean forceCompacted;
 
     private final BlockingQueue<AgentEvent> events =
             new ArrayBlockingQueue<>(AgentEvent.QUEUE_CAPACITY);
@@ -100,6 +108,12 @@ public class Agent {
 
     public Agent(ChatProvider provider, Conversation conversation,
                  ToolRegistry registry, ToolContext context, int maxIterations) {
+        this(provider, conversation, registry, context, maxIterations, null);
+    }
+
+    public Agent(ChatProvider provider, Conversation conversation,
+                 ToolRegistry registry, ToolContext context, int maxIterations,
+                 ContextManager contextManager) {
         if (maxIterations < 1) {
             throw new IllegalArgumentException("maxIterations 必须为正数：" + maxIterations);
         }
@@ -109,6 +123,7 @@ public class Agent {
         this.context = context;
         this.planContext = new ToolContext(context.workingDirectory(), true);
         this.maxIterations = maxIterations;
+        this.contextManager = contextManager;
         this.epoch = conversation.currentEpoch();
     }
 
@@ -212,6 +227,7 @@ public class Agent {
     }
 
     private TurnOutcome runTurn(int turn) {
+        autoCompactIfNeeded();
         int retries = 0;
         while (true) {
             if (cancelled.get()) {
@@ -239,6 +255,18 @@ public class Agent {
                         return TurnOutcome.cancelled();
                     }
                     continue; // 重试同一轮
+                }
+                // 紧急压缩：正常请求被"上下文超长"拒绝 → 就地压缩一次 → 用新历史重试原请求一次
+                if (!forceCompacted && contextManager != null && ContextTooLong.matches(error)) {
+                    forceCompacted = true;
+                    emit(new Notice("（请求过长，正在压缩上下文后重试一次…）"));
+                    CompactExecutor.Result compact = contextManager.executor().run(true);
+                    if (compact.changed()) {
+                        continue; // 重建后重试当前 turn（循环顶部重新 buildRequest 取新历史）
+                    }
+                    if (compact.failed()) {
+                        emit(new Notice("（紧急压缩失败：" + compact.reason() + "）"));
+                    }
                 }
                 emit(new ErrorEvent(error.getMessage() != null ? error.getMessage()
                         : error.getClass().getSimpleName()));
@@ -359,7 +387,26 @@ public class Agent {
         conversation.addMessage(epoch, new ChatMessage(ChatMessage.Role.ASSISTANT, blocks));
     }
 
-    /** 执行工具并把结果（按声明顺序、入历史前截断）回填为 user tool_result 消息 */
+    /** 每轮构建请求前自动触发压缩（守卫已由 executor.needsAutoCompact 把关，避免空跑） */
+    private void autoCompactIfNeeded() {
+        if (contextManager == null) {
+            return;
+        }
+        CompactExecutor executor = contextManager.executor();
+        if (!executor.needsAutoCompact()) {
+            return;
+        }
+        emit(new Notice("（上下文接近上限，正在自动压缩…）"));
+        CompactExecutor.Result result = executor.run(false);
+        if (result.changed()) {
+            emit(new Notice("（已自动压缩：压缩前约 " + result.beforeEstimate()
+                    + " → 压缩后约 " + result.afterEstimate() + "）"));
+        } else if (result.failed()) {
+            emit(new Notice("（自动压缩失败：" + result.reason() + "，本轮继续执行）"));
+        }
+    }
+
+    /** 执行工具并把结果（按声明顺序，经大结果预算闸门处理）回填为 user tool_result 消息 */
     private void executeTools(List<ToolUseBlock> toolUses) {
         if (toolUses.isEmpty()) {
             return;
@@ -367,11 +414,22 @@ public class Agent {
         StreamingToolExecutor executor =
                 new StreamingToolExecutor(registry, planMode ? planContext : context, permissionChecker, confirmationGate);
         List<ToolResult> results = executor.execute(toolUses, events, cancelled);
-        List<ToolResultBlock> blocks = new ArrayList<>(results.size());
-        for (int i = 0; i < toolUses.size(); i++) {
-            ToolResult result = results.get(i);
-            blocks.add(new ToolResultBlock(toolUses.get(i).id(),
-                    truncateForHistory(result.content()), result.isError()));
+        List<ToolResultBlock> blocks;
+        if (contextManager != null) {
+            // ch07 Layer-1：超长结果落盘 + 定长预览，同批聚合限流（信息不丢，模型可按路径读回）
+            List<ToolResultBudget.Item> items = new ArrayList<>(toolUses.size());
+            for (int i = 0; i < toolUses.size(); i++) {
+                ToolResult result = results.get(i);
+                items.add(new ToolResultBudget.Item(toolUses.get(i).id(), result.content(), result.isError()));
+            }
+            blocks = contextManager.budget().process(items);
+        } else {
+            // 存量构造/测试：全文直存（不再做旧的 2000 字符一刀切截断）
+            blocks = new ArrayList<>(results.size());
+            for (int i = 0; i < toolUses.size(); i++) {
+                ToolResult result = results.get(i);
+                blocks.add(new ToolResultBlock(toolUses.get(i).id(), result.content(), result.isError()));
+            }
         }
         conversation.addToolResults(epoch, blocks);
     }
@@ -419,14 +477,6 @@ public class Agent {
 
     private static boolean isTruncated(String stopReason) {
         return "max_tokens".equals(stopReason) || "length".equals(stopReason);
-    }
-
-    /** 超长工具结果入历史前截断 */
-    static String truncateForHistory(String text) {
-        if (text == null || text.length() <= MAX_TOOL_RESULT_HISTORY_CHARS) {
-            return text;
-        }
-        return text.substring(0, MAX_TOOL_RESULT_HISTORY_CHARS) + "\n…（结果过长，已截断）";
     }
 
     private void emit(AgentEvent event) {

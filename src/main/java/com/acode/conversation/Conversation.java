@@ -16,8 +16,9 @@ import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * 对话编排：维护完整消息历史，组装请求时按上下文窗口上限从最早消息开始丢弃。
- * token 估算按字符数 ÷ 4 粗略计算；兜底规则：当前问题本身超限时只保留该问题（避免死循环）。
+ * 对话编排：维护完整消息历史，组装请求时把「system → 环境 → 历史 → 轮次级」整体带出。
+ * 本阶段移除「组装请求时从最早消息静默裁剪」的兜底：超窗交给上下文管理的自动/紧急压缩守卫；
+ * 残余的单条消息自身超窗走可见错误，绝不静默丢历史。token 估算按字符数 ÷ 4 粗略计算。
  */
 public class Conversation {
 
@@ -36,6 +37,9 @@ public class Conversation {
     /** 会话级环境快照（渲染好的环境 system-reminder）：每轮作为 messages 首条注入、不进历史 */
     private ChatMessage environment;
 
+    /** clear 钩子：/clear、加载会话等清空点联动重置运行期状态（上下文管理冻结/熔断，见 ch07） */
+    private final List<Runnable> clearHooks = new CopyOnWriteArrayList<>();
+
     public Conversation(String model, boolean thinking, int maxTokens, int maxContextTokens) {
         this.model = model;
         this.thinking = thinking;
@@ -43,7 +47,7 @@ public class Conversation {
         this.maxContextTokens = maxContextTokens;
     }
 
-    /** 追加一条消息到完整历史；截断只发生在组装请求时，不改变已存历史 */
+    /** 追加一条消息到完整历史（不分代次，无条件写入） */
     public void addMessage(ChatMessage message) {
         messages.add(message);
     }
@@ -77,6 +81,12 @@ public class Conversation {
         return epoch;
     }
 
+    /** 原子替换整段历史（重建/压缩专用）：与 nextEpoch / 带代次写入同锁，重建期间旧线程迟到写入被忽略 */
+    public synchronized void replaceAll(List<ChatMessage> newMessages) {
+        messages.clear();
+        messages.addAll(newMessages);
+    }
+
     public int messageCount() {
         return messages.size();
     }
@@ -91,18 +101,38 @@ public class Conversation {
         this.environment = environment;
     }
 
+    /** 注册清空钩子：clear() 时在清空完成后触发（ch07 用于重置冻结/熔断等运行期状态） */
+    public void addClearHook(Runnable hook) {
+        if (hook != null) {
+            clearHooks.add(hook);
+        }
+    }
+
     /** 清空全部消息历史（/clear 用）。system prompt 与环境快照留在会话状态，下一轮仍注入。 */
     public void clear() {
         messages.clear();
+        for (Runnable hook : clearHooks) {
+            hook.run();
+        }
     }
 
     public List<ChatMessage> history() {
         return Collections.unmodifiableList(messages);
     }
 
+    /** 请求级模型名（摘要等独立请求复用同一模型） */
+    public String model() {
+        return model;
+    }
+
+    /** 上下文窗口上限（token）：由配置注入，压缩触发点据此计算 */
+    public int maxContextTokens() {
+        return maxContextTokens;
+    }
+
     /** 按字符数 ÷ 4 估算 token 数 */
     public static int estimateTokens(String text) {
-        return text.length() / 4;
+        return text == null ? 0 : text.length() / 4;
     }
 
     /** 估算一条消息的 token：遍历所有内容块（文本、工具参数、工具结果都计入） */
@@ -119,9 +149,30 @@ public class Conversation {
     }
 
     /**
-     * 组装请求：按「system → 环境 → 历史 → 轮次级」四段拼接，四段都在 trim 之外独立注入、不进历史。
-     * systemPrompt 非空时首位为 SYSTEM 消息；environment 非空时紧跟一条环境 system-reminder（会话状态）；
-     * turnReminder 非空时尾插为最后一条 user 消息（近因效应）。工具列表独立传递，不随历史裁剪。
+     * 整体估算「当前请求将携带的内容」token：系统提示 + 环境快照 + 全部历史消息加总。
+     * 供压缩触发判断、自动触发守卫与压缩前后对比展示统一使用（口径与 checklist 一致）。
+     */
+    public int estimateContextTokens() {
+        int sum = 0;
+        if (systemPrompt != null && !systemPrompt.isBlank()) {
+            sum += estimateTokens(systemPrompt);
+        }
+        if (environment != null) {
+            sum += estimateTokens(environment);
+        }
+        sum += estimateMessages(messages);
+        return sum;
+    }
+
+    private static int estimateMessages(List<ChatMessage> list) {
+        return list.stream().mapToInt(Conversation::estimateTokens).sum();
+    }
+
+    /**
+     * 组装请求：按「system → 环境 → 历史 → 轮次级」四段拼接。systemPrompt 非空时首位为 SYSTEM 消息；
+     * environment 非空时紧跟一条环境 system-reminder（会话状态）；turnReminder 非空时尾插为最后一条
+     * user 消息（近因效应）。历史整体原样带出（仅过 sanitize 清洗），不做运行时最旧裁剪——
+     * 超窗由上下文管理守卫处理（残余单条超窗走可见错误）。工具列表独立传递，不随历史裁剪。
      */
     public ChatRequest buildRequest(List<Tool> requestTools, ChatMessage turnReminder) {
         List<ChatMessage> requestMessages = new ArrayList<>();
@@ -131,7 +182,7 @@ public class Conversation {
         if (environment != null) {
             requestMessages.add(environment);
         }
-        requestMessages.addAll(trim());
+        requestMessages.addAll(sanitize(messages));
         if (turnReminder != null) {
             requestMessages.add(turnReminder);
         }
@@ -144,41 +195,12 @@ public class Conversation {
                 .build();
     }
 
-    private List<ChatMessage> trim() {
-        if (estimateTotal(messages) <= maxContextTokens) {
-            return sanitize(messages);
-        }
-        List<ChatMessage> result = new ArrayList<>(messages);
-        while (result.size() > 1 && estimateTotal(result) > maxContextTokens) {
-            removeTurnUnit(result);
-        }
-        return sanitize(result);
-    }
-
-    private static int estimateTotal(List<ChatMessage> list) {
-        return list.stream().mapToInt(Conversation::estimateTokens).sum();
-    }
-
-    /**
-     * 删除一个"轮次单元"：普通消息按单条删；若首条是 assistant 且含 tool_use，
-     * 连同其后紧邻的"全 tool_result 的 user 消息"一起删（Agent 同批结果合一为一条）。
-     * 避免拆散 tool_use/tool_result 配对导致孤儿 tool_result 触发 API 400。
-     */
-    private static void removeTurnUnit(List<ChatMessage> list) {
-        ChatMessage first = list.remove(0);
-        if (first.role() == ChatMessage.Role.ASSISTANT && containsToolUse(first) && !list.isEmpty()) {
-            ChatMessage next = list.get(0);
-            if (next.role() == ChatMessage.Role.USER && isAllToolResults(next)) {
-                list.remove(0);
-            }
-        }
-    }
-
     /**
      * 请求出口清洗：剔除无配对的 tool_use / tool_result 块，删空的消息整体丢弃。
      * 覆盖脏会话恢复与 epoch 拦截遗留的悬空 tool_use；干净时返回原列表引用、不改历史。
+     * 公开静态：摘要重建（ch07）也用同一清洗校验无孤儿工具块。
      */
-    private static List<ChatMessage> sanitize(List<ChatMessage> messages) {
+    public static List<ChatMessage> sanitize(List<ChatMessage> messages) {
         Set<String> useIds = new HashSet<>();
         Set<String> resultIds = new HashSet<>();
         for (ChatMessage m : messages) {
@@ -217,14 +239,5 @@ public class Conversation {
             }
         }
         return dirty ? cleaned : messages;
-    }
-
-    private static boolean containsToolUse(ChatMessage message) {
-        return message.blocks().stream().anyMatch(b -> b instanceof ToolUseBlock);
-    }
-
-    private static boolean isAllToolResults(ChatMessage message) {
-        return !message.blocks().isEmpty()
-                && message.blocks().stream().allMatch(b -> b instanceof ToolResultBlock);
     }
 }

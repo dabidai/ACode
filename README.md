@@ -16,7 +16,7 @@ ACode 按阶段迭代构建，每阶段有独立设计文档（`docs/chXX/`）�
 | 阶段四 | Prompt 工程体系（System Prompt 设计） | `docs/ch04/` | ✅ 已完成 |
 | 阶段五 | 权限系统 | `docs/ch05/` | ✅ 已完成 |
 | 阶段六 | MCP 工具生态（MCP 协议） | `docs/ch06/` | ✅ 已完成 |
-| 阶段七 | 上下文管理 | `docs/ch07/`（仅参考摘记） | 🚧 规划中 |
+| 阶段七 | 上下文管理 | `docs/ch07/` | ✅ 已完成 |
 | 阶段八 | 记忆系统 | `docs/ch08/`（待建） | 🚧 规划中 |
 | 阶段九 | Slash Command | `docs/ch09/`（待建） | 🚧 规划中 |
 | 阶段十 | Skill 系统 | `docs/ch10/`（待建） | 🚧 规划中 |
@@ -38,6 +38,7 @@ ACode 按阶段迭代构建，每阶段有独立设计文档（`docs/chXX/`）�
 - 🔗 **MCP 工具生态**：接入社区 MCP Server（GitHub / 数据库 / Slack 等），配置声明即自动连接并注册其工具（stdio / Streamable HTTP 双传输、子进程环境白名单隔离）
 - 🧠 **Prompt 工程**：七模块 System Prompt、环境快照注入、Prompt Cache 断点，每轮 usage 脚注（含 cache_read）
 - 💬 **对话保存与恢复**：退出自动保存到 `~/.acode/sessions/`，`--resume` 或 `/resume` 恢复
+- 🧠 **上下文管理**：超长工具结果全文落盘 + 定长预览（信息不丢、可读回）；对话逼近窗口上限时自动结构化摘要压缩（`/compact` 可手动触发），压缩后带边界提醒、失败熔断不误伤主流程
 - ⚙️ **三级配置加载**：内置默认 → 全局配置 → 项目级配置，逐级覆盖
 - 📝 **纯文件日志**：日志只写文件，不污染终端输出
 
@@ -71,6 +72,7 @@ java -jar target/acode.jar --resume # 恢复上次会话
 |---|---|
 | `/quit` | 退出程序 |
 | `/clear` | 清空界面与对话上下文 |
+| `/compact` | 立即把对话历史压缩为结构化摘要（空闲态可用） |
 | `/plan` | 进入规划模式（只读探索，计划落盘到 `.acode/plans/`） |
 | `/do` | 退出规划模式，按已交付计划开始执行 |
 | `/permission-mode` | 查看/切换权限模式（default/acceptEdits/plan/bypassPermissions） |
@@ -154,9 +156,10 @@ mvn test   # 565 个用例；本机内存偏紧时建议 MAVEN_OPTS="-Xmx768m" m
 src/main/java/com/acode/
 ├── App.java                    # 入口：--resume 参数解析、委托主流程
 ├── ConversationController.java # 主循环：输入分流、Agent 编排、事件渲染、会话持久化
+├── context/                    # 上下文管理（大结果落盘 + 结构化摘要压缩 + 熔断/守卫）
 ├── agent/                      # ReAct 循环、事件模型、工具执行器、交互确认门
 ├── config/                     # 配置加载与校验（三级加载链）
-├── conversation/               # 会话历史与请求组装（上下文裁剪、代次并发防护）
+├── conversation/               # 会话历史与请求组装（不静默裁剪、代次并发防护）
 ├── mcp/                        # MCP 客户端（JSON-RPC 编解码、stdio/HTTP 传输、工具适配、生命周期）
 ├── permission/                 # 权限系统（五层防线决策链、四档模式、黑名单、沙箱、规则）
 ├── prompt/                     # Prompt 工程（七模块 System Prompt、环境快照、提醒注入）

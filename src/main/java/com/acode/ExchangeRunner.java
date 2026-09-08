@@ -6,6 +6,7 @@ import com.acode.agent.AgentEvent.ChoiceRequestEvent;
 import com.acode.agent.AgentEvent.ConfirmationRequestEvent;
 import com.acode.agent.AgentEvent.ErrorEvent;
 import com.acode.agent.AgentEvent.LoopComplete;
+import com.acode.agent.AgentEvent.Notice;
 import com.acode.agent.AgentEvent.RetryEvent;
 import com.acode.agent.AgentEvent.StreamText;
 import com.acode.agent.AgentEvent.ToolResultEvent;
@@ -15,6 +16,7 @@ import com.acode.agent.AgentEvent.UsageEvent;
 import com.acode.agent.EventConfirmationGate;
 import com.acode.config.AppConfig;
 import com.acode.config.ConfigValidator;
+import com.acode.context.ContextManager;
 import com.acode.conversation.Conversation;
 import com.acode.permission.PermissionChecker;
 import com.acode.permission.PermissionResponse;
@@ -66,6 +68,9 @@ public class ExchangeRunner {
     private final Path projectRoot;
     private final Supplier<PermissionChecker> permissionCheckerSupplier;
 
+    /** 上下文管理门面（T8 装配注入）：大结果落盘 + 自动/紧急压缩随 Agent 每轮生效；null 则跳过 */
+    private ContextManager contextManager;
+
     public ExchangeRunner(ChatProvider provider, AppConfig config, Conversation conversation,
                           ToolRegistry toolRegistry, OutputPane output, RenderContext renderContext,
                           Function<ConfirmationRequestEvent, PermissionResponse> confirmAnswerer,
@@ -83,6 +88,11 @@ public class ExchangeRunner {
         this.permissionCheckerSupplier = permissionCheckerSupplier;
     }
 
+    /** 注入上下文管理门面（会话装配时一次调用；测试可缺省）。 */
+    void setContextManager(ContextManager contextManager) {
+        this.contextManager = contextManager;
+    }
+
     /**
      * 单次输入触发 Agent 循环：追加 user 消息 → new Agent(...).run() 在虚拟线程跑 ReAct 循环 →
      * 主线程订阅事件队列逐条渲染（流式文本 / 工具卡片 / 轮次收尾 / 重试 / 错误 / 循环结束提示）。
@@ -98,7 +108,7 @@ public class ExchangeRunner {
         live.appendCommitted(writer, "● " + input);
 
         Agent agent = new Agent(provider, conversation, toolRegistry,
-                new ToolContext(projectRoot), maxIterations());
+                new ToolContext(projectRoot), maxIterations(), contextManager);
         agent.setPlanMode(planMode);
         agent.setConfirmationGate(new EventConfirmationGate());
         agent.setPermissionChecker(permissionCheckerSupplier.get());
@@ -157,6 +167,9 @@ public class ExchangeRunner {
             } else if (event instanceof RetryEvent retry) {
                 output.appendLine("（重试中：" + retry.reason() + "）");
                 live.appendCommitted(writer, "（重试中：" + retry.reason() + "）");
+            } else if (event instanceof Notice notice) {
+                output.appendLine(notice.message());
+                live.appendCommitted(writer, notice.message());
             } else if (event instanceof ErrorEvent error) {
                 printer.onError(new ProviderException(error.message()));
             } else if (event instanceof ConfirmationRequestEvent confirm) {

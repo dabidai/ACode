@@ -22,7 +22,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public class Conversation {
 
     private final List<ChatMessage> messages = new CopyOnWriteArrayList<>();
-    private final String model;
+    private volatile String model;
     private final boolean thinking;
     private final int maxTokens;
     private final int maxContextTokens;
@@ -36,11 +36,60 @@ public class Conversation {
     /** 会话级环境快照（渲染好的环境 system-reminder）：每轮作为 messages 首条注入、不进历史 */
     private ChatMessage environment;
 
+    /** 最近一次 provider 回传的真实 prompt token 数；0 表示还没拿到，ctx 占用退回字符估算 */
+    private volatile long lastPromptTokens = 0;
+
     public Conversation(String model, boolean thinking, int maxTokens, int maxContextTokens) {
         this.model = model;
         this.thinking = thinking;
         this.maxTokens = maxTokens;
         this.maxContextTokens = maxContextTokens;
+    }
+
+    public String getModel() {
+        return model;
+    }
+
+    public void setModel(String model) {
+        this.model = model;
+    }
+
+    public int maxContextTokens() {
+        return maxContextTokens;
+    }
+
+    /** 上下文占用比例 [0,1]：优先用 provider 回传的真实 prompt token，尚未拿到时退回字符估算。 */
+    public double contextUsageFraction() {
+        if (maxContextTokens <= 0) {
+            return 0;
+        }
+        long tokens = lastPromptTokens > 0 ? lastPromptTokens : estimateContextTokens();
+        return Math.min(1.0, (double) tokens / maxContextTokens);
+    }
+
+    /**
+     * 记录 provider 回传的真实上下文占用（{@link com.acode.provider.Usage#promptTokens()}，
+     * 已按协议口径归一：Anthropic 含缓存读/写，OpenAI 的 prompt_tokens 本就含缓存）。
+     */
+    public void recordPromptTokens(long promptTokens) {
+        if (promptTokens > 0) {
+            lastPromptTokens = promptTokens;
+        }
+    }
+
+    /** 估算上下文占用：历史 + 会话级 system 提示词 + 环境快照（后两者不进历史，但每轮都发）。 */
+    private long estimateContextTokens() {
+        long total = 0;
+        for (ChatMessage msg : messages) {
+            total += estimateTokens(msg);
+        }
+        if (systemPrompt != null) {
+            total += estimateTokens(systemPrompt);
+        }
+        if (environment != null) {
+            total += estimateTokens(environment);
+        }
+        return total;
     }
 
     /** 追加一条消息到完整历史；截断只发生在组装请求时，不改变已存历史 */
@@ -94,6 +143,7 @@ public class Conversation {
     /** 清空全部消息历史（/clear 用）。system prompt 与环境快照留在会话状态，下一轮仍注入。 */
     public void clear() {
         messages.clear();
+        lastPromptTokens = 0; // 真实用量随历史一起作废，否则页脚还显示清空前的 ctx 占用
     }
 
     public List<ChatMessage> history() {

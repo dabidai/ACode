@@ -16,6 +16,9 @@ import com.acode.agent.AskUserTool;
 import com.acode.agent.EventConfirmationGate;
 import com.acode.agent.ExitPlanModeTool;
 import com.acode.config.AppConfig;
+import com.acode.config.CCSwitchConfig;
+import com.acode.config.CCSwitchConfigReader;
+import com.acode.config.CCSwitchWatcher;
 import com.acode.config.ConfigException;
 import com.acode.config.ConfigLoader;
 import com.acode.config.ConfigValidator;
@@ -71,7 +74,9 @@ import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -98,13 +103,14 @@ public class ConversationController {
                           ACode v0.1.0
             """;
 
-    private final ChatProvider provider;
-    private final AppConfig config;
+    private volatile ChatProvider provider;
+    private volatile AppConfig config;
     private final Conversation conversation;
     private final ToolRegistry toolRegistry;
     private final SessionManager sessionManager;
     private final boolean resume;
     private boolean sessionManagerAttached;
+    private CCSwitchWatcher ccSwitchWatcher;
 
     /** plan 模式开关：/plan 进入、/do 退出；作用于下一次 exchange 新建的 Agent */
     private boolean planMode = false;
@@ -199,22 +205,105 @@ public class ConversationController {
             Writer writer = screenWriter();
             output.append(BANNER);
             live.appendCommitted(writer, BANNER);
-            output.appendLine("输入 /help 查看命令，/quit 退出");
-            live.appendCommitted(writer, "输入 /help 查看命令，/quit 退出");
+            if (config.isCcSwitchDetected()) {
+                String msg = "已自动检测 CC Switch 配置（代理: " + config.getBaseUrl() + "）";
+                output.appendLine(msg);
+                live.appendCommitted(writer, msg);
+                startCCSwitchWatcher();
+            }
+            int width = tui.width();
+            String div = com.acode.ui.StatusBar.divider(width);
+            output.appendLine(div);
+            live.appendCommitted(writer, div);
+            String hint = "输入 /help 查看命令，/quit 退出";
+            output.appendLine(hint);
+            live.appendCommitted(writer, hint);
+            // 恢复会话内容须在等待帧之前提交，否则会写在预留提示符行上、冲掉页脚
             restoreIfResume();
-            commandProcessor().mainLoop();
+            // 初始等待帧：模式提示 + 分隔线（提示符上方）+ 页脚分隔线 + 模型信息（提示符下方）
+            String modeName = config.getPermissionMode() != null ? config.getPermissionMode() : "default";
+            PermissionMode mode = PermissionMode.fromConfig(modeName);
+            if (mode == null) mode = PermissionMode.DEFAULT;
+            renderWaitingFrame(live, writer, mode);
+            CommandProcessor cp = commandProcessor();
+            cp.setFramePrinter(() -> renderWaitingFrame(live, writer, permissionChecker().mode()));
+            cp.mainLoop();
         } catch (IllegalStateException e) {
             System.err.println(e.getMessage());
         } finally {
-            // /quit 与异常退出都清理 MCP 子进程，避免残留
+            stopCCSwitchWatcher();
             closeMcpManager();
         }
+    }
+
+    /** 渲染等待输入帧：模式提示 + 分隔线（提示符上方）+ 页脚分隔线 + 模型信息（提示符下方）。
+     *  光标停在预留提示符行，由 JLine 绘制 >*；供启动与 /clear 后重绘复用。 */
+    private void renderWaitingFrame(LiveRegionRenderer live, Writer writer, PermissionMode mode) {
+        int width = tui.width();
+        String modeHint = com.acode.ui.StatusBar.modeLine(
+                mode.configValue(), com.acode.ui.StatusBar.nextModeName(mode), width);
+        String divider = com.acode.ui.StatusBar.divider(width);
+        String model = conversation.getModel();
+        double ctxFraction = conversation.contextUsageFraction();
+        String footerModel = com.acode.ui.StatusBar.infoLine(model, ctxFraction, projectRoot.toString(), width);
+        output.appendLine(modeHint);
+        output.appendLine(divider);
+        output.appendLine(divider);
+        output.appendLine(footerModel);
+        live.renderWaitingFrame(writer, modeHint, divider, divider, footerModel);
     }
 
     /** 清理 MCP 连接（stdio 子进程销毁、HTTP 会话释放）；幂等。测试亦可直接调用避免残留子进程。 */
     void closeMcpManager() {
         if (mcpManager != null) {
             mcpManager.closeAll();
+        }
+    }
+
+    private void startCCSwitchWatcher() {
+        ccSwitchWatcher = CCSwitchWatcher.startDefault(this::reloadCCSwitchConfig);
+    }
+
+    private void stopCCSwitchWatcher() {
+        if (ccSwitchWatcher != null) {
+            ccSwitchWatcher.stop();
+        }
+    }
+
+    void reloadCCSwitchConfig() {
+        try {
+            CCSwitchConfig newConfig = CCSwitchConfigReader.read().orElse(null);
+            if (newConfig == null) {
+                log.warn("CC Switch 配置文件已删除或不可读，保留当前配置");
+                if (output != null) {
+                    output.appendLine("CC Switch 配置已不可用，保留当前配置");
+                }
+                return;
+            }
+
+            String oldBaseUrl = config.getBaseUrl();
+            Path global = Path.of(System.getProperty("user.home"), ".acode/config.yaml");
+            Path projectDir = Path.of("").toAbsolutePath();
+            AppConfig reloaded = ConfigLoader.reloadWithCCSwitch(global, projectDir, newConfig);
+
+            boolean providerChanged = !reloaded.getBaseUrl().equals(oldBaseUrl)
+                    || !reloaded.getApiKey().equals(config.getApiKey())
+                    || !reloaded.getProtocol().equals(config.getProtocol());
+
+            this.config = reloaded;
+            if (providerChanged) {
+                this.provider = buildProvider(reloaded);
+                this.exchangeRunner = null;
+            }
+
+            if (output != null) {
+                output.appendLine("CC Switch 配置已更新（代理: " + reloaded.getBaseUrl() + "）");
+            }
+        } catch (Exception e) {
+            log.warn("CC Switch 配置热更新失败，保留当前配置", e);
+            if (output != null) {
+                output.appendLine("CC Switch 配置热更新失败，保留当前配置");
+            }
         }
     }
 
@@ -236,7 +325,8 @@ public class ConversationController {
         if (commandProcessor == null) {
             commandProcessor = new CommandProcessor(tui, output, renderContext, conversation,
                     sessionManager(), this::permissionChecker, this::handleChat,
-                    planMode -> this.planMode = planMode);
+                    planMode -> this.planMode = planMode,
+                    this::modelOptions, this::switchModel);
         }
         return commandProcessor;
     }
@@ -244,6 +334,11 @@ public class ConversationController {
     /** /permission-mode 切档（委托 CommandProcessor；测试直接调用）。 */
     void handlePermissionMode(String arg, LiveRegionRenderer live, Writer writer) {
         commandProcessor().handlePermissionMode(arg, live, writer);
+    }
+
+    /** /model 切模型（委托 CommandProcessor；测试直接调用）。 */
+    void handleModel(String arg, LiveRegionRenderer live, Writer writer) {
+        commandProcessor().handleModel(arg, live, writer);
     }
 
     /**
@@ -260,6 +355,47 @@ public class ConversationController {
 
     private void handleChat(String input) {
         handleExchange(input, this::ctrlCPressed, () -> { });
+    }
+
+    /**
+     * /model 菜单数据：从 CC Switch 模型映射构建选项列表。
+     * 只取 tier 名称键（如 opus/sonnet/haiku），跳过 Claude 全名键（含 claude- 前缀）。
+     * 格式："tier → actualModel"，无 CC Switch 时返回空列表。
+     */
+    List<String> modelOptions() {
+        CCSwitchConfig ccSwitch = config.getCcSwitchConfig();
+        if (ccSwitch == null) {
+            return List.of();
+        }
+        Map<String, String> mapping = ccSwitch.modelMapping();
+        if (mapping.isEmpty()) {
+            return List.of();
+        }
+        Map<String, String> tierOnly = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : mapping.entrySet()) {
+            String key = entry.getKey();
+            if (!key.contains("claude") && !key.contains("-")) {
+                tierOnly.put(key, entry.getValue());
+            }
+        }
+        if (tierOnly.isEmpty()) {
+            return List.of();
+        }
+        List<String> options = new ArrayList<>();
+        for (Map.Entry<String, String> entry : tierOnly.entrySet()) {
+            options.add(entry.getKey() + "  →  " + entry.getValue());
+        }
+        return options;
+    }
+
+    /**
+     * /model 切换模型：更新 conversation、config 和环境提醒，清空 exchangeRunner 懒重建。
+     */
+    void switchModel(String newModel) {
+        conversation.setModel(newModel);
+        config.setModel(newModel);
+        conversation.setEnvironment(SystemReminder.environment(EnvironmentDetector.detect(newModel)));
+        this.exchangeRunner = null;
     }
 
     /** 测试用：注入输出面板（真实流程在 start() 中创建） */

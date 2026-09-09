@@ -222,6 +222,7 @@ class OpenAiSseParserTest {
         assertEquals(20, u.outputTokens());
         assertEquals(50, u.cacheReadTokens());
         assertEquals(0, u.cacheCreationTokens());
+        assertEquals(150, u.promptTokens(), "OpenAI 的 prompt_tokens 已含 cached_tokens，再加一次会双计");
     }
 
     @Test

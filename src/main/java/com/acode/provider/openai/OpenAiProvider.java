@@ -91,6 +91,7 @@ public class OpenAiProvider implements ChatProvider {
             ObjectNode root = JSON.createObjectNode();
             root.put("model", request.model());
             root.put("stream", true);
+            root.putObject("stream_options").put("include_usage", true);
             root.put("max_tokens", request.maxTokens());
             ArrayNode messages = root.putArray("messages");
             for (ChatMessage message : request.messages()) {

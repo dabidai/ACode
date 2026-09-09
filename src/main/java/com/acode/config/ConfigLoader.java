@@ -40,8 +40,32 @@ public class ConfigLoader {
     /** 显式路径入口，供测试与外部调用 */
     // TODO 不只是服务于Java
     public static AppConfig load(Path globalConfig, Path projectDir) {
+        return load(globalConfig, projectDir, CCSwitchConfigReader.read());
+    }
+
+    /** 测试入口：可指定 CC Switch settings 文件路径，不存在则跳过 CC Switch 层 */
+    public static AppConfig load(Path globalConfig, Path projectDir, Path ccSwitchSettingsFile) {
+        return load(globalConfig, projectDir, CCSwitchConfigReader.read(ccSwitchSettingsFile));
+    }
+
+    /** 热更新入口：用新的 CC Switch 配置重新加载，保留手动配置路径 */
+    public static AppConfig reloadWithCCSwitch(Path globalConfig, Path projectDir, CCSwitchConfig newCCSwitch) {
+        return load(globalConfig, projectDir, java.util.Optional.ofNullable(newCCSwitch));
+    }
+
+    private static AppConfig load(Path globalConfig, Path projectDir, java.util.Optional<CCSwitchConfig> ccSwitchOpt) {
+        CCSwitchConfig ccSwitch = ccSwitchOpt.orElse(null);
+        return loadInternal(globalConfig, projectDir, ccSwitch);
+    }
+
+    private static AppConfig loadInternal(Path globalConfig, Path projectDir, CCSwitchConfig ccSwitch) {
         AppConfig config = new AppConfig();
         apply(config, readResourceMap(BUILTIN_RESOURCE), "classpath:" + BUILTIN_RESOURCE);
+
+        if (ccSwitch != null) {
+            applyCCSwitch(config, ccSwitch);
+        }
+
         Path projectConfig = projectDir.resolve(PROJECT_FILE);
         if (Files.exists(globalConfig)) {
             apply(config, readYamlMap(globalConfig), globalConfig.toString());
@@ -51,7 +75,26 @@ public class ConfigLoader {
             apply(config, readYamlMap(projectConfig), projectConfig.toString());
             ConfigValidator.validate(config, projectConfig.toString());
         }
+
+        if (ccSwitch != null && config.getModel() != null) {
+            String mapped = ccSwitch.modelMapping().get(config.getModel());
+            if (mapped != null) {
+                config.setModel(mapped);
+            }
+        }
+
         return config;
+    }
+
+    private static void applyCCSwitch(AppConfig config, CCSwitchConfig ccSwitch) {
+        config.setBaseUrl(ccSwitch.baseUrl());
+        config.setApiKey(ccSwitch.apiKey());
+        config.setProtocol("anthropic");
+        if (ccSwitch.model() != null && !ccSwitch.model().isBlank()) {
+            config.setModel(ccSwitch.model());
+        }
+        config.setCcSwitchDetected(true);
+        config.setCcSwitchConfig(ccSwitch);
     }
 
     private static Map<String, Object> readYamlMap(Path file) {

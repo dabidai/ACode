@@ -31,6 +31,11 @@ public final class AnthropicSseParser {
     /** message_delta 下发的流结束原因（end_turn / max_tokens 等），message_stop 时透传 */
     private String stopReason;
 
+    /** message_start 的初始 usage（含 input_tokens / cache tokens），message_delta 补充 output_tokens */
+    private long inputTokens;
+    private long cacheReadTokens;
+    private long cacheCreationTokens;
+
     public void handle(String data, ChatListener listener) {
         try {
             JsonNode node = JSON.readTree(data);
@@ -39,12 +44,7 @@ public final class AnthropicSseParser {
                 case "content_block_delta" -> handleDelta(node, listener);
                 case "content_block_stop" -> handleBlockStop(node, listener);
                 case "error" -> throw classify(node.path("error"));
-                case "message_delta" -> {
-                    String reason = node.path("delta").path("stop_reason").asText("");
-                    if (!reason.isEmpty()) {
-                        stopReason = reason;
-                    }
-                }
+                case "message_delta" -> handleMessageDelta(node, listener);
                 case "message_stop" -> listener.onComplete(stopReason);
                 case "message_start" -> handleMessageStart(node, listener);
                 default -> {
@@ -61,11 +61,26 @@ public final class AnthropicSseParser {
     private void handleMessageStart(JsonNode node, ChatListener listener) {
         JsonNode usage = node.path("message").path("usage");
         if (usage.isObject()) {
+            inputTokens = usage.path("input_tokens").asLong(0);
+            cacheReadTokens = usage.path("cache_read_input_tokens").asLong(0);
+            cacheCreationTokens = usage.path("cache_creation_input_tokens").asLong(0);
             listener.onUsage(new Usage(
-                    usage.path("input_tokens").asLong(0),
+                    inputTokens,
                     usage.path("output_tokens").asLong(0),
-                    usage.path("cache_read_input_tokens").asLong(0),
-                    usage.path("cache_creation_input_tokens").asLong(0)));
+                    cacheReadTokens,
+                    cacheCreationTokens));
+        }
+    }
+
+    private void handleMessageDelta(JsonNode node, ChatListener listener) {
+        String reason = node.path("delta").path("stop_reason").asText("");
+        if (!reason.isEmpty()) {
+            stopReason = reason;
+        }
+        JsonNode usage = node.path("usage");
+        if (usage.isObject()) {
+            long outputTokens = usage.path("output_tokens").asLong(0);
+            listener.onUsage(new Usage(inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens));
         }
     }
 
@@ -117,7 +132,7 @@ public final class AnthropicSseParser {
             case "authentication_error", "permission_error" -> new AuthException("认证失败：" + message);
             case "rate_limit_error" -> new RateLimitException("限流：" + message);
             case "overloaded_error", "api_error" -> new ServerException("服务端错误：" + message);
-            default -> new InvalidRequestException("请求错误（" + type + "）：" + message);
+            default -> new InvalidRequestException("请求错误（" + type + "）" + message);
         };
     }
 }

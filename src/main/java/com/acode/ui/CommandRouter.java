@@ -7,7 +7,7 @@ package com.acode.ui;
 public final class CommandRouter {
 
     /** 命令动作。 */
-    public enum Action { QUIT, CLEAR, HELP, RESUME, PLAN, DO, PERMISSION_MODE, CHAT, SKIP }
+    public enum Action { QUIT, CLEAR, HELP, RESUME, PLAN, DO, PERMISSION_MODE, MODEL, CHAT, SKIP }
 
     /** /help 展示的命令说明；补齐 /clear 文案时同步更新。 */
     public static final String HELP_TEXT = """
@@ -16,6 +16,7 @@ public final class CommandRouter {
             /plan   进入规划模式（只读探索，计划落盘到 .acode/plans/）
             /do     退出规划模式，按已交付计划开始执行
             /permission-mode  查看/切换权限模式（default/acceptEdits/plan/bypassPermissions）
+            /model  查看/切换当前模型
             /resume 加载历史会话（↑/↓ 选择）
             /help   显示本帮助
             PageUp/PageDown 滚动查看完整聊天
@@ -37,6 +38,9 @@ public final class CommandRouter {
         }
         if (trimmed.equals("/permission-mode") || trimmed.startsWith("/permission-mode ")) {
             return Action.PERMISSION_MODE;
+        }
+        if (trimmed.equals("/model") || trimmed.startsWith("/model ")) {
+            return Action.MODEL;
         }
         return switch (trimmed) {
             case "/quit" -> Action.QUIT;

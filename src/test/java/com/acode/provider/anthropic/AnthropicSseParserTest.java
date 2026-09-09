@@ -232,6 +232,7 @@ class AnthropicSseParserTest {
         assertEquals(1, u.outputTokens());
         assertEquals(80, u.cacheReadTokens());
         assertEquals(20, u.cacheCreationTokens());
+        assertEquals(200, u.promptTokens(), "Anthropic 的 input_tokens 不含缓存，总量须为三者之和");
     }
 
     @Test

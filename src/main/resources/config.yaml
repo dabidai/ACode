@@ -7,10 +7,10 @@
 protocol: openai
 
 # 模型名称
-model: deepseek-v4-flash
+model: agnes-2.0-flash
 
 # API 请求地址
-base_url: https://api.deepseek.com/v1
+base_url: https://apihub.agnes-ai.com/v1
 
 # API 密钥（占位符；请在外部配置 ~/.acode/config.yaml 或 .acode/config.yaml 覆盖真实密钥）
 api_key: sk-请填入你的API密钥
@@ -49,4 +49,3 @@ tee: false
 #     # timeout: 60                        # 可选：超时秒数，默认 60
 #     # permission: read                   # 可选：声明 read 则该 server 工具在 /plan 模式可见
 #     # enabled: true                      # 可选：开关，默认开
-

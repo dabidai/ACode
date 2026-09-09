@@ -17,7 +17,8 @@ import java.util.List;
 /**
  * 把流式 ChatListener 回调双写：内容模型（OutputPane，已提交内容快照）+ 追加式写屏。
  * 追加式：每个完成的渲染行（以换行结尾）经 appendCommitted 写屏一次，原生折行进回滚、
- * 可划选、永不再改——不发射任何光标操作序列，宽度失配/终端差异不可能造成错位。
+ * 可划选、永不再改——本类自身不发射任何光标操作序列，宽度失配/终端差异不可能造成错位
+ * （appendCommitted 在存在计时尾行时会先抬起、写完再贴回，那是渲染器的职责）。
  * 未完成尾行暂不显示，等换行到达（或 finishTurn 定稿）再提交；
  * onError 时丢弃（本就没写屏，无需清理）。工具卡片为静态多行：先「● 工具名(参数)」，
  * 结果到达后追加输出块（首行 ⎿ 着色 + 后续行缩进 + 耗时脚注）。内容模型行为不变（运行中卡片不进模型、终态卡片进模型）。
@@ -97,7 +98,7 @@ public class StreamPrinter {
         live.appendCommitted(writer, errorLine);
     }
 
-    /** 轮次收尾：剩余尾行与卡片转正进回滚，状态归零（供下一轮复用）。 */
+    /** 轮次收尾：剩余尾行与卡片转正进回滚，全部每轮状态复位，同一实例可直接服务下一轮。 */
     public void finishTurn() {
         textFinalized = true;
         flushCompletedLines();

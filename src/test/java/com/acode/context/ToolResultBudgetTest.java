@@ -11,6 +11,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /** ch07 T2：ToolResultBudget 阈值边界 / 同批聚合 / 冻结重放。 */
 class ToolResultBudgetTest {
@@ -90,5 +91,25 @@ class ToolResultBudgetTest {
         assertEquals(first.get(0).content(), second.get(0).content(),
                 "同 id 二次传入 → 返回同一预览串（不重新决策）");
         assertEquals(original, Files.readString(file), "不重写磁盘文件（冻结成立）");
+    }
+
+    @Test
+    void persistentSpillFailureInAggregateDegradesInsteadOfSpinning() throws Exception {
+        // 让工作目录下的 .acode 成为普通文件 → SpillStore 每次 createDirectories 都抛 IOException（落盘持续失败）
+        Files.writeString(tempDir.resolve(".acode"), "占位（使 tool-results 无法创建）");
+        ToolResultBudget b = new ToolResultBudget(new ContextPolicy(), new SpillStore(tempDir), new ContentReplacementState());
+        // 3×70_000=210_000 > 200_000 触发聚合补落盘；各条又都 > 50_000 单条上限 → 全走落盘且全部失败
+        List<ToolResultBudget.Item> items = List.of(
+                item("a", 70_000, false), item("b", 70_000, false), item("c", 70_000, false));
+        List<ToolResultBlock>[] out = new List[1];
+        Thread worker = new Thread(() -> out[0] = b.process(items));
+        worker.setDaemon(true); // 若死循环，断言失败后不阻塞 JVM 退出
+        worker.start();
+        worker.join(1_000);
+        if (worker.isAlive()) {
+            worker.interrupt();
+            fail("落盘持续失败时 reduceAggregate 未退出——死循环（应降级保留全文入历史，而非空转）");
+        }
+        assertEquals(3, out[0].size(), "聚合无法回落 → 降级保留全部结果（不丢信息、不死循环）");
     }
 }

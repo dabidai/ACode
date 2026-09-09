@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static com.acode.provider.ChatMessage.Role.ASSISTANT;
 import static com.acode.provider.ChatMessage.Role.USER;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -131,5 +132,23 @@ class CompactExecutorTest {
         assertTrue(c.estimateContextTokens() >= ContextPolicy.triggerPointFor(c.maxContextTokens()),
                 "前提：整体估算已超触发点");
         assertFalse(ex.needsAutoCompact(), "仅剩不可压缩的未闭环步 → 不自动触发");
+    }
+
+    @Test
+    void overlongDropOfIsolatedLeadingUserLeavesAssistantFirstInRetriedSummaryRequest() {
+        // A3 前置触发确认：摘要区首条为孤立 user、被"丢最旧分组"丢走后，重试的摘要请求内容区以 assistant 开头。
+        // 是否被 provider 拒取决于实现（Anthropic 类要求 content 首条 user；OpenAI 类容忍）——此处只确认前置可触发。
+        Conversation c = new Conversation("m", false, 4096, 200_000);
+        c.addMessage(ChatMessage.of(USER, "x".repeat(40_000)));      // 摘要区首条：孤立 user（10_000 token）
+        c.addMessage(ChatMessage.of(ASSISTANT, "y".repeat(40_000))); // 摘要区次条：assistant 正文
+        c.addMessage(ChatMessage.of(USER, "当前问题"));               // 未闭环步 → 保留尾
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.error(new InvalidRequestException("prompt is too long"))),
+                List.of(FakeProvider.delta("<summary>ok</summary>"), FakeProvider.complete())));
+        CompactExecutor ex = executor(provider, c);
+        assertTrue(ex.run(true).changed(), "丢最旧分组后重试应成功");
+        assertEquals(2, provider.receivedRequests().size(), "首次超长 → 丢最旧分组重试一次");
+        assertEquals(ASSISTANT, provider.receivedRequests().get(1).messages().get(1).role(),
+                "丢走孤立 user 后，重试请求 content 首条为 assistant（前置成立）");
     }
 }

@@ -53,7 +53,12 @@ public class CompactionPlanner {
             return Partition.none();
         }
         int protectFrom = protectedFrom(history);
-        int maxCut = (protectFrom == size) ? size - 1 : protectFrom;
+        // 以纯 tool_result 收尾（已闭环轮）时 maxCut 不能落到 size-1：那会把 size-2 的 tool_use
+        // 压进摘要、让末条 tool_result 孤悬保留尾（rebuild 后 sanitize 会静默删掉最新结果）。
+        // 末尾是成对工具轮 → 整对留在保留尾（宁可略超预算，也不拆半/丢结果）。
+        int maxCut = (protectFrom == size)
+                ? (size >= 2 && unitSize(history, size - 2, size) == 2 ? size - 2 : size - 1)
+                : protectFrom;
         int cut = 0;
         while (cut < maxCut && estimateTail(history, cut) > policy.TAIL_BUDGET_TOKENS) {
             cut += unitSize(history, cut, size);

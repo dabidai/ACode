@@ -32,6 +32,7 @@ public class ToolResultBudget {
         final boolean isError;
         String effective;   // 全文或预览
         boolean spilled;    // 已落盘替换（历史放预览）
+        boolean spillFailed; // 尝试落盘但写盘失败：跳过不再重试（防死循环）
         final int originalLength;
 
         Pending(String id, String content, boolean isError, boolean spilled) {
@@ -85,38 +86,41 @@ public class ToolResultBudget {
         return blocks;
     }
 
-    /** 把单个未落盘结果落盘并换成预览（冻结决策） */
-    private void spill(Pending p) {
+    /** 把单个未落盘结果落盘并换成预览（冻结决策）；写盘失败返回 false、保留全文（不静默截断不丢信息） */
+    private boolean spill(Pending p) {
         String path;
         try {
             path = spillStore.store(p.id, p.effective);
         } catch (IOException e) {
             // 落盘失败：不回退到静默截断，保留全文入历史（宁可占预算也不丢信息）
-            p.spilled = false;
-            return;
+            p.spillFailed = true;
+            return false;
         }
         String preview = previewFor(path, p.effective);
         state.record(p.id, preview);
         p.effective = preview;
         p.spilled = true;
+        return true;
     }
 
-    /** 同批合计超过聚合上限 → 从未落盘的最大者开始补落盘，直到合计回落 */
+    /** 同批合计超过聚合上限 → 从未落盘的最大者开始补落盘，直到合计回落。
+     *  写盘失败的项跳过不再重试；全部尽力后仍超限则降级保留全文——绝不空转、绝不静默截断。 */
     private void reduceAggregate(List<Pending> pending) {
         long total = pending.stream().mapToLong(p -> p.effective.length()).sum();
         while (total > policy.BATCH_AGGREGATE_LIMIT_CHARS) {
-            Pending largest = null;
+            Pending candidate = null;
             for (Pending p : pending) {
-                if (!p.spilled && (largest == null || p.originalLength > largest.originalLength)) {
-                    largest = p;
+                if (!p.spilled && !p.spillFailed
+                        && (candidate == null || p.originalLength > candidate.originalLength)) {
+                    candidate = p;
                 }
             }
-            if (largest == null) {
-                break; // 全部已落盘仍超限：预览长度有界，理论上不会；防御性退出
+            if (candidate == null) {
+                break; // 全部已落盘或已落盘失败 → 降级：余下保留全文入历史
             }
-            long before = largest.effective.length();
-            spill(largest);
-            total += largest.effective.length() - before;
+            long before = candidate.effective.length();
+            spill(candidate);
+            total += candidate.effective.length() - before;
         }
     }
 

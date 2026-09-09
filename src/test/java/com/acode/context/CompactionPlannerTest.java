@@ -117,6 +117,26 @@ class CompactionPlannerTest {
         assertNoOrphans(rebuilt, "重建后无孤儿工具块（配对被保留或整体被摘）");
     }
 
+    @Test
+    void partitionDoesNotSplitTrailingClosedPairWhenResultAloneExceedsTailBudget() {
+        // 末条为已闭环 tool_result 且其单个估算 > 保留尾预算(8000 token)：planner 不得把 tool_use 压进摘要、
+        // tool_result 孤悬保留尾（否则 rebuild 后 Conversation.sanitize 会把最新结果静默删掉）。
+        List<ChatMessage> history = new ArrayList<>();
+        history.add(bigUser("old", 2_000)); // 旧大轮 → 摘要区
+        history.add(new ChatMessage(ASSISTANT, List.of(
+                new ToolUseBlock("tail1", "ReadFile",
+                        JSON.createObjectNode().put("file_path", "big.txt")))));
+        history.add(new ChatMessage(USER, List.of(
+                new ToolResultBlock("tail1", "C".repeat(36_000), false)))); // 36_000 字符 /4 ≈ 9000 token > 8000
+        CompactionPlanner.Partition plan = planner.plan(history);
+        assertTrue(plan.compressible(), "存在可压缩旧历史");
+        assertFalse(plan.cutIndex() == history.size() - 1,
+                "末对（tool_use+result）不得被拆散：cut=" + plan.cutIndex()
+                        + " 把 tool_use 压进摘要、tool_result 孤悬保留尾");
+        assertNoOrphans(planner.rebuild(history, plan, "摘要"),
+                "重建后末对要么整体保留、要么整体进摘要，不得丢结果");
+    }
+
     private static void assertNoSameRoleAdjacent(List<ChatMessage> messages) {
         for (int i = 1; i < messages.size(); i++) {
             assertFalse(messages.get(i).role() == messages.get(i - 1).role(),

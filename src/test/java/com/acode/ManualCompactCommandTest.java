@@ -26,6 +26,7 @@ class ManualCompactCommandTest {
         config.setProtocol("anthropic");
         config.setModel("test-model");
         config.setMaxContextTokens(8000);
+        config.setMemoryAuto(false);
         return config;
     }
 

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -16,6 +17,9 @@ import java.util.List;
 import static com.acode.provider.ChatMessage.Role.ASSISTANT;
 import static com.acode.provider.ChatMessage.Role.USER;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SessionManagerTest {
@@ -23,193 +27,149 @@ class SessionManagerTest {
     @TempDir
     Path tempDir;
 
+    private static final long NOW = 1_800_000_000L;
+
     private static Conversation conversation() {
         return new Conversation("m", false, 4096, 2000);
     }
 
     private SessionStore store() {
-        return new SessionStore(tempDir);
+        return new SessionStore(tempDir, () -> NOW);
     }
 
-    private static ChatMessage user(String content) {
-        return ChatMessage.of(USER, content);
-    }
-
-    private static ChatMessage assistant(String content) {
-        return ChatMessage.of(ASSISTANT, content);
-    }
-
-    /** 装配 manager：tui 传 null（本组测试不触碰终端交互路径）。 */
-    private SessionManager manager(Conversation conversation, OutputPane output, RenderContext rc) {
+    private SessionManager manager(Conversation conversation, OutputPane output) {
         SessionManager manager = new SessionManager(store(), conversation);
-        manager.attachUi(output, rc, null);
+        manager.attachUi(output, new RenderContext(new AppConfig()), null);
         return manager;
     }
 
-    @Test
-    void saveSessionSkipsEmptyConversation() {
-        SessionManager manager = new SessionManager(store(), conversation());
-        manager.saveSession();
-        assertEquals(0, countJsonFiles(), "空会话不应写出任何文件");
+    private static Session session(String id, long lastActive, boolean expired, String... contents) {
+        List<ChatMessage> messages = List.of(contents).stream()
+                .map(text -> ChatMessage.of(USER, text))
+                .toList();
+        return new Session(id, lastActive, messages, expired);
     }
 
     @Test
-    void saveSessionWritesNonEmptyHistory() {
+    void messagesAreWrittenToDiskAsTheyArrive() throws IOException {
         Conversation conversation = conversation();
-        conversation.addMessage(user("第一问"));
-        conversation.addMessage(assistant("第一答"));
-        SessionManager manager = new SessionManager(store(), conversation);
-        manager.saveSession();
+        manager(conversation, new OutputPane());
 
-        assertEquals(1, countJsonFiles(), "非空会话应写出恰好 1 个会话文件");
-        Session saved = store().readLatest().orElseThrow();
-        assertEquals(List.of("第一问", "第一答"),
-                saved.getMessages().stream().map(ChatMessage::content).toList(),
-                "落盘内容应为全部历史消息且顺序不变");
+        assertNull(sessionFiles(), "空会话不应写出任何文件");
+
+        conversation.addMessage(ChatMessage.of(USER, "第一问"));
+        conversation.addMessage(ChatMessage.of(ASSISTANT, "第一答"));
+
+        Path file = sessionFiles();
+        assertEquals(2, Files.readAllLines(file, StandardCharsets.UTF_8).size(),
+                "消息一进历史就应逐条落盘");
     }
 
     @Test
-    void restoreIfResumeFalseDoesNothing() {
+    void toolResultMessagesAreAlsoPersisted() throws IOException {
+        Conversation conversation = conversation();
+        manager(conversation, new OutputPane());
+
+        conversation.addMessage(ChatMessage.of(USER, "问"));
+        conversation.addToolResults(List.of(
+                new com.acode.provider.ToolResultBlock("u1", "结果", false)));
+
+        assertEquals(2, Files.readAllLines(sessionFiles(), StandardCharsets.UTF_8).size());
+    }
+
+    @Test
+    void rebuildListenerRewritesTheWholeFile() throws IOException {
+        Conversation conversation = conversation();
+        manager(conversation, new OutputPane());
+        conversation.addMessage(ChatMessage.of(USER, "旧一"));
+        conversation.addMessage(ChatMessage.of(USER, "旧二"));
+
+        conversation.replaceAll(List.of(ChatMessage.of(USER, "重建")));
+
+        assertEquals(List.of("重建"), SessionStore.readEntries(sessionFiles()).stream()
+                .map(e -> e.message().content()).toList());
+    }
+
+    @Test
+    void closeSessionIsIdempotentAndKeepsFile() throws IOException {
+        Conversation conversation = conversation();
+        SessionManager manager = manager(conversation, new OutputPane());
+        conversation.addMessage(ChatMessage.of(USER, "一"));
+
+        manager.closeSession();
+        manager.closeSession();
+
+        assertEquals(1, Files.readAllLines(sessionFiles(), StandardCharsets.UTF_8).size(),
+                "关闭句柄不应丢内容、也不应新建文件");
+    }
+
+    @Test
+    void diskWriteFailureKeepsMessagesInMemoryAndDoesNotThrow() throws IOException {
+        // 让 <项目根>/.acode 是普通文件：会话目录建不出来，落盘必然失败
+        Path blockedRoot = tempDir.resolve("blocked-proj");
+        Files.createDirectories(blockedRoot);
+        Files.writeString(blockedRoot.resolve(".acode"), "not a directory");
+        Conversation conversation = conversation();
+        SessionManager manager = new SessionManager(
+                new SessionStore(blockedRoot, () -> NOW), conversation);
+
+        conversation.addMessage(ChatMessage.of(USER, "写盘失败也不能丢"));
+        conversation.addMessage(ChatMessage.of(ASSISTANT, "仍应在内存历史里"));
+
+        assertEquals(List.of("写盘失败也不能丢", "仍应在内存历史里"),
+                conversation.history().stream().map(ChatMessage::content).toList(),
+                "写盘失败只记告警，内存历史仍更新（不丢消息、不中断对话）");
+        assertNull(manager.recorder().file(), "写盘失败不应留下半成品指向");
+        assertFalse(Files.isDirectory(blockedRoot.resolve(".acode").resolve("sessions")));
+    }
+
+    @Test
+    void selectWithoutSessionsPrintsExistingNotice() {
         OutputPane output = new OutputPane();
-        Conversation conversation = conversation();
-        SessionManager manager = manager(conversation, output, new RenderContext(new AppConfig()));
-
-        manager.restoreIfResume(false);
-
-        assertEquals(0, output.lineCount(), "resume=false 时不应输出任何内容");
-        assertEquals(0, conversation.messageCount(), "resume=false 时不应改动会话");
+        manager(conversation(), output).selectSession();
+        assertTrue(output.lines().contains("（没有可恢复的会话）"));
     }
 
     @Test
-    void restoreIfResumeTrueWithoutSessionsPrintsNotice() {
-        OutputPane output = new OutputPane();
-        SessionManager manager = manager(conversation(), output, new RenderContext(new AppConfig()));
+    void openDelegatesToInjectedLoader() {
+        SessionManager manager = manager(conversation(), new OutputPane());
+        Session[] captured = new Session[1];
+        manager.setLoader(session -> captured[0] = session);
+        Session target = session("20260101-000000-abcd", NOW, false, "内容");
 
-        manager.restoreIfResume(true);
+        manager.open(target);
 
-        assertTrue(output.lines().contains("（没有可恢复的会话）"),
-                "无可恢复会话时应提示「没有可恢复的会话」");
+        assertSame(target, captured[0], "选中会话应交给注入的加载动作");
     }
 
     @Test
-    void restoreIfResumeTrueRestoresMessagesAndBanner() {
-        store().save(new Session(null, System.currentTimeMillis(),
-                List.of(user("旧提问"), assistant("旧回答"))));
-        OutputPane output = new OutputPane();
-        Conversation conversation = conversation();
-        SessionManager manager = manager(conversation, output, new RenderContext(new AppConfig()));
+    void entryLabelsMarkExpiredSessions() {
+        List<String> labels = SessionManager.entryLabels(List.of(
+                session("20260101-000000-abcd", NOW, false, "活跃会话内容"),
+                session("20260201-000000-bbbb", NOW, true, "过期会话内容")));
 
-        manager.restoreIfResume(true);
-
-        assertEquals(2, conversation.messageCount(), "恢复后会话应包含全部消息");
-        assertEquals("旧提问", conversation.history().get(0).content(), "恢复顺序应保持");
-        assertTrue(output.lines().stream().anyMatch(l -> l.startsWith("● ") && l.contains("旧提问")),
-                "恢复后用户消息应渲染为带 ● 前缀（role 已正确序列化往返）");
-        assertTrue(output.lines().contains("旧回答"),
-                "恢复后应输出 assistant 消息内容（无前缀）");
-        assertTrue(output.lines().stream().anyMatch(l -> l.startsWith("（已恢复会话 ")),
-                "恢复后应输出「已恢复会话」提示行");
+        assertEquals(2, labels.size());
+        assertTrue(labels.get(0).startsWith("20260101-000000-abcd  1 条 · 活跃会话内容"), labels.get(0));
+        assertTrue(labels.get(1).contains("（已过期）"), labels.get(1));
+        assertFalse(labels.get(0).contains("（已过期）"));
     }
 
     @Test
-    void loadSessionReplacesConversation() {
-        Conversation conversation = conversation();
-        conversation.addMessage(user("旧历史"));
-        OutputPane output = new OutputPane();
-        SessionManager manager = manager(conversation, output, new RenderContext(new AppConfig()));
-
-        Session session = new Session("target", 1L, List.of(user("新提问"), assistant("新回答")));
-        manager.loadSession(session);
-
-        assertEquals(2, conversation.messageCount(), "加载后会话应替换为会话内容");
-        assertEquals("新提问", conversation.history().get(0).content(), "加载后首条应为新会话消息");
-        assertTrue(output.lines().stream().anyMatch(l -> l.startsWith("（已加载会话 target")),
-                "加载后应输出「已加载会话」提示行");
+    void previewFallsBackWhenNoUserMessage() {
+        List<String> labels = SessionManager.entryLabels(List.of(
+                new Session("20260101-000000-abcd", NOW,
+                        List.of(ChatMessage.of(ASSISTANT, "只有助手消息")), false)));
+        assertTrue(labels.get(0).contains("（无用户消息）"), labels.get(0));
     }
 
-    @Test
-    void selectSessionWithoutSessionsPrintsNotice() {
-        OutputPane output = new OutputPane();
-        SessionManager manager = manager(conversation(), output, new RenderContext(new AppConfig()));
-
-        manager.selectSession();
-
-        assertTrue(output.lines().contains("（没有可恢复的会话）"),
-                "无历史会话时选择菜单应提示「没有可恢复的会话」");
-    }
-
-    @Test
-    void saveSessionAfterVerbatimReloadSkipsDuplicate() {
-        SessionStore store = store();
-        store.save(new Session(null, System.currentTimeMillis(),
-                List.of(user("旧问"), assistant("旧答"))));
-        Conversation conversation = conversation();
-        SessionManager manager = manager(conversation, new OutputPane(), new RenderContext(new AppConfig()));
-
-        manager.loadSession(store.readLatest().orElseThrow());
-        assertEquals(2, conversation.messageCount(), "加载后会话应包含全部历史");
-
-        manager.saveSession();
-
-        assertEquals(1, countJsonFiles(), "resume 后未新增消息直接退出，不应再存一份重复会话");
-    }
-
-    @Test
-    void saveSessionAfterRestoreWithoutNewMessagesSkipsDuplicate() {
-        SessionStore store = store();
-        store.save(new Session(null, System.currentTimeMillis(),
-                List.of(user("旧问"), assistant("旧答"))));
-        Conversation conversation = conversation();
-        SessionManager manager = manager(conversation, new OutputPane(), new RenderContext(new AppConfig()));
-
-        manager.restoreIfResume(true);
-        assertEquals(2, conversation.messageCount());
-
-        manager.saveSession();
-
-        assertEquals(1, countJsonFiles(), "--resume 启动后未新增消息直接退出，不应重复存档");
-    }
-
-    @Test
-    void saveSessionAfterReloadWithNewMessagesSavesContinuation() {
-        SessionStore store = store();
-        store.save(new Session(null, System.currentTimeMillis(),
-                List.of(user("旧问"), assistant("旧答"))));
-        Conversation conversation = conversation();
-        SessionManager manager = manager(conversation, new OutputPane(), new RenderContext(new AppConfig()));
-        manager.loadSession(store.readLatest().orElseThrow());
-        conversation.addMessage(user("追问"));
-
-        manager.saveSession();
-
-        assertEquals(2, countJsonFiles(), "resume 后新增消息，退出应另存续写会话");
-        assertEquals(List.of("旧问", "旧答", "追问"),
-                store.readLatest().orElseThrow().getMessages().stream().map(ChatMessage::content).toList(),
-                "续写文件应包含加载历史 + 新增消息");
-    }
-
-    @Test
-    void saveSessionAfterReloadClearAndRechatSameCountSavesNewFile() {
-        SessionStore store = store();
-        store.save(new Session(null, System.currentTimeMillis(), List.of(user("旧问"))));
-        Conversation conversation = conversation();
-        SessionManager manager = manager(conversation, new OutputPane(), new RenderContext(new AppConfig()));
-        manager.loadSession(store.readLatest().orElseThrow());
-        conversation.clear();
-        conversation.addMessage(user("新问"));
-
-        manager.saveSession();
-
-        assertEquals(2, countJsonFiles(), "/clear 后重聊且消息数恰好相同的新对话应正常存档，不能按数量误判为重复");
-        assertEquals("新问", store.readLatest().orElseThrow().getMessages().get(0).content(),
-                "新存档应是重聊后的内容而非加载的旧会话");
-    }
-
-    private int countJsonFiles() {
-        try (var stream = Files.list(tempDir)) {
-            return (int) stream.filter(p -> p.getFileName().toString().endsWith(".json")).count();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+    private Path sessionFiles() throws IOException {
+        Path dir = store().dir();
+        if (!Files.isDirectory(dir)) {
+            return null;
+        }
+        try (var files = Files.list(dir)) {
+            return files.filter(p -> p.getFileName().toString().endsWith(".jsonl"))
+                    .findFirst().orElse(null);
         }
     }
 }

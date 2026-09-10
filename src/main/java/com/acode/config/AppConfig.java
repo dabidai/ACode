@@ -4,7 +4,8 @@ import java.util.Map;
 
 /**
  * ACode 配置模型。YAML 字段 snake_case 对应 Java 字段：
- * protocol / model / base_url / api_key / max_context_tokens / max_iterations / tee / thinking / permission_mode / mcp_servers
+ * protocol / model / base_url / api_key / max_context_tokens / max_iterations / tee / thinking /
+ * permission_mode / memory_auto / mcp_servers
  */
 public class AppConfig {
 
@@ -17,6 +18,7 @@ public class AppConfig {
     private Boolean tee;
     private Boolean thinking;
     private String permissionMode;
+    private Boolean memoryAuto;
     private Map<String, McpServerConfig> mcpServers;
 
     public String getProtocol() {
@@ -96,6 +98,19 @@ public class AppConfig {
 
     public void setPermissionMode(String permissionMode) {
         this.permissionMode = permissionMode;
+    }
+
+    /** 自动记忆提取开关：缺省（null）视为开启；显式 false 时每轮结束不再有后台提取调用。 */
+    public boolean isMemoryAutoEnabled() {
+        return !Boolean.FALSE.equals(memoryAuto);
+    }
+
+    public Boolean getMemoryAuto() {
+        return memoryAuto;
+    }
+
+    public void setMemoryAuto(Boolean memoryAuto) {
+        this.memoryAuto = memoryAuto;
     }
 
     /** MCP server 列表（名→配置）；未配置时为空映射。 */

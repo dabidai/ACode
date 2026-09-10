@@ -2,49 +2,20 @@ package com.acode.session;
 
 import com.acode.provider.ChatMessage;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 一次会话：id（时间戳文件名）、创建时间、消息列表。
- * 无参构造 + getter/setter 供 Jackson 序列化/反序列化。
+ * 一次会话：id（即文件名）、最后活跃时间（Unix 秒，取会话文件末行的落盘时刻）、消息列表，
+ * 以及"是否已过期"（仅用于列表渲染与排序，不触发任何删除）。
  */
-public class Session {
+public record Session(String id, long lastActiveEpochSeconds, List<ChatMessage> messages,
+                      boolean expired) {
 
-    private String id;
-    private long createdAtEpochMillis;
-    private List<ChatMessage> messages = new ArrayList<>();
-
-    public Session() {
+    public Session {
+        messages = List.copyOf(messages);
     }
 
-    public Session(String id, long createdAtEpochMillis, List<ChatMessage> messages) {
-        this.id = id;
-        this.createdAtEpochMillis = createdAtEpochMillis;
-        this.messages = new ArrayList<>(messages);
-    }
-
-    public String getId() {
-        return id;
-    }
-
-    public void setId(String id) {
-        this.id = id;
-    }
-
-    public long getCreatedAtEpochMillis() {
-        return createdAtEpochMillis;
-    }
-
-    public void setCreatedAtEpochMillis(long createdAtEpochMillis) {
-        this.createdAtEpochMillis = createdAtEpochMillis;
-    }
-
-    public List<ChatMessage> getMessages() {
-        return messages;
-    }
-
-    public void setMessages(List<ChatMessage> messages) {
-        this.messages = new ArrayList<>(messages);
+    public Session(String id, long lastActiveEpochSeconds, List<ChatMessage> messages) {
+        this(id, lastActiveEpochSeconds, messages, false);
     }
 }

@@ -23,11 +23,16 @@ import com.acode.context.CompactExecutor;
 import com.acode.context.ContextManager;
 import com.acode.conversation.Conversation;
 import com.acode.mcp.McpManager;
+import com.acode.memory.MemoryExtractor;
+import com.acode.memory.MemoryManager;
+import com.acode.memory.MemoryScope;
+import com.acode.memory.MemoryStore;
 import com.acode.permission.PermissionChecker;
 import com.acode.permission.PermissionMode;
 import com.acode.permission.PermissionResponse;
 import com.acode.permission.RuleEngine;
 import com.acode.prompt.EnvironmentDetector;
+import com.acode.prompt.ProjectInstructions;
 import com.acode.prompt.PromptBuilder;
 import com.acode.prompt.SystemReminder;
 import com.acode.provider.ChatMessage;
@@ -41,7 +46,9 @@ import com.acode.provider.Usage;
 import com.acode.provider.anthropic.AnthropicProvider;
 import com.acode.provider.openai.OpenAiProvider;
 import com.acode.session.Session;
+import com.acode.session.SessionLoader;
 import com.acode.session.SessionManager;
+import com.acode.session.SessionRecorder;
 import com.acode.session.SessionStore;
 import com.acode.tool.DefaultToolset;
 import com.acode.tool.ToolContext;
@@ -104,8 +111,8 @@ public class ConversationController {
     private final AppConfig config;
     private final Conversation conversation;
     private final ToolRegistry toolRegistry;
-    private final SessionManager sessionManager;
     private final boolean resume;
+    private final SessionManager sessionManager;
     private boolean sessionManagerAttached;
 
     /** plan 模式开关：/plan 进入、/do 退出；作用于下一次 exchange 新建的 Agent */
@@ -134,11 +141,20 @@ public class ConversationController {
     /** 上下文管理门面（每会话一次装配；懒构造，捕获当时 projectRoot） */
     private ContextManager contextManager;
 
+    /** 记忆装配门面（每会话一次）：两级记忆根 + 索引注入文本 + 异步提取调度 */
+    private final MemoryManager memoryManager;
+
     /** 权限沙箱根：生产为当前工作目录；测试可注入 @TempDir 避免文件路径被沙箱拦截。 */
     private Path projectRoot = Path.of(System.getProperty("user.dir"));
 
     /** MCP 生命周期管理：启动连接并注册工具、退出清理 stdio 子进程；未配置 mcp_servers 时为空 manager。 */
     private McpManager mcpManager;
+
+    /** 启动期降级告警（指令越界/跳过、记忆根不可写/索引截断）：UI 就位后逐行输出 */
+    private List<String> startupWarnings = List.of();
+
+    /** 恢复会话后的首轮轮次提醒文本（久未活跃时才有）：下一次 exchange 用掉即清，不进历史 */
+    private String pendingTurnReminder;
 
     public static void run(boolean resume) {
         AppConfig config;
@@ -171,7 +187,14 @@ public class ConversationController {
         this.mcpManager = new McpManager(config, projectRoot);
         this.mcpManager.connectAll();
         this.mcpManager.registerTools(toolRegistry);
-        this.sessionManager = new SessionManager(new SessionStore(SessionStore.defaultDir()), conversation);
+        // 会话目录跟随当前 projectRoot 动态求值（测试可能在装配后再注入 @TempDir）
+        this.sessionManager = new SessionManager(SessionStore.forProject(() -> projectRoot), conversation);
+        this.sessionManager.setLoader(session -> activateSession(session, "加载"));
+        // 两级记忆根同样跟随当前 projectRoot / user.home 动态求值
+        this.memoryManager = new MemoryManager(
+                new MemoryStore(MemoryScope.project(() -> projectRoot),
+                        MemoryScope.user(ConversationController::userHome)),
+                conversation, provider, config.isMemoryAutoEnabled());
         this.resume = resume;
         this.renderContext = new RenderContext(config);
         // /clear、加载会话等清空点联动重置上下文管理的运行期状态（冻结记账/熔断；落盘文件不删）
@@ -179,19 +202,42 @@ public class ConversationController {
         initSessionState();
     }
 
-    /** 清空点钩子：懒装配 ContextManager 并复位运行期状态（首次清空时可能尚未有任何状态，复位为空操作） */
+    /** 清空点钩子：上下文管理运行期状态与记忆提取运行态一并复位（/clear、加载会话联动） */
     private void resetContextStateOnClear() {
         contextManager().reset();
+        memoryManager.reset();
     }
 
     /**
      * 会话启动时构建一次 system prompt 并探测环境快照存入会话状态：
      * 每轮 buildRequest 注入（SYSTEM 首位 + 环境 system-reminder 首条），均不进历史；
      * /clear 与恢复/加载会话不清除，下一轮仍注入。
+     * 启动告警（指令越界/跳过等）只在 UI 已就位时输出，启动不因记忆设施失败而中断。
      */
-    private void initSessionState() {
-        conversation.setSystemPrompt(PromptBuilder.buildSystemPrompt());
+    void initSessionState() {
+        var instructions = ProjectInstructions.load(projectRoot, userHome());
+        startupWarnings = new ArrayList<>(instructions.warnings());
+        startupWarnings.addAll(memoryManager.drainWarnings());
+        conversation.setSystemPrompt(PromptBuilder.buildSystemPrompt(
+                instructions.text(), memoryManager.indexText()));
         conversation.setEnvironment(SystemReminder.environment(EnvironmentDetector.detect(config.getModel())));
+        emitStartupWarnings();
+    }
+
+    private static Path userHome() {
+        return Path.of(System.getProperty("user.home"));
+    }
+
+    private void emitStartupWarnings() {
+        if (output == null || startupWarnings.isEmpty()) {
+            return;
+        }
+        LiveRegionRenderer live = liveRenderer();
+        Writer writer = screenWriter();
+        for (String warning : startupWarnings) {
+            output.appendLine(warning);
+            live.appendCommitted(writer, warning);
+        }
     }
 
     private static ChatProvider buildProvider(AppConfig config) {
@@ -213,12 +259,15 @@ public class ConversationController {
             live.appendCommitted(writer, BANNER);
             output.appendLine("输入 /help 查看命令，/quit 退出");
             live.appendCommitted(writer, "输入 /help 查看命令，/quit 退出");
+            // 恢复会话后再构建 system 提示：注入的是恢复后的状态（projectRoot 也已定型）
             restoreIfResume();
+            initSessionState();
             commandProcessor().mainLoop();
         } catch (IllegalStateException e) {
             System.err.println(e.getMessage());
         } finally {
-            // /quit 与异常退出都清理 MCP 子进程，避免残留
+            // /quit 与异常退出都关闭会话句柄并清理 MCP 子进程，避免残留句柄与进程
+            closeSession();
             closeMcpManager();
         }
     }
@@ -230,17 +279,53 @@ public class ConversationController {
         }
     }
 
-    /** 会话管理：懒绑定 UI（首次使用时以当前 output/RenderContext/tui 装配）。 */
+    /** 会话管理：装配已在构造期完成，这里只负责首次调用时补绑 UI。 */
     private SessionManager sessionManager() {
-        if (!sessionManagerAttached) {
+        if (!sessionManagerAttached && output != null) {
             sessionManager.attachUi(output, renderContext, tui);
             sessionManagerAttached = true;
         }
         return sessionManager;
     }
 
-    private void restoreIfResume() {
-        sessionManager().restoreIfResume(resume);
+    /** --resume 启动：恢复最近活跃的会话；没有则提示（既有文案） */
+    void restoreIfResume() {
+        if (!resume) {
+            return;
+        }
+        List<Session> sessions = sessionManager().store().list();
+        if (sessions.isEmpty()) {
+            sessionManager().notice("（没有可恢复的会话）");
+            return;
+        }
+        activateSession(sessions.get(0), "恢复");
+    }
+
+    /**
+     * 恢复/加载一个会话（恢复四步的落地）：
+     * 逐行解析（坏行跳过）→ 消息链截断 → 预算检查（已达触发点则走与 /compact 同一路径压一次）
+     * → 时间跨度提醒挂成恢复后首轮的轮次提醒（不进历史、不落盘）。
+     *
+     * <p>历史用原子替换而非逐条 add（后者会触发逐条落盘）；替换期间抑制重建监听，
+     * 否则刚读出来的历史会被当成"压缩重建"原地重写一遍；随后把句柄绑到该会话文件续写。
+     */
+    private void activateSession(Session session, String action) {
+        SessionRecorder recorder = sessionManager().recorder();
+        Path file = sessionManager().store().resolve(session.id());
+        SessionLoader.Loaded loaded = SessionLoader.load(file);
+
+        recorder.suspend();
+        conversation.clear(); // 联动复位上下文管理运行期状态（与 /clear 走同一钩子）
+        conversation.replaceAll(loaded.messages());
+        recorder.resume();
+
+        recorder.bind(file); // 续写同一文件：不新建、不产生分叉副本
+        if (contextManager().executor().needsAutoCompact()) {
+            contextManager().executor().run(false);
+        }
+        loaded.staleReminder().ifPresent(text -> pendingTurnReminder = text);
+
+        sessionManager().renderLoaded(action, session.id(), loaded.messages());
     }
 
     /** 主循环命令分发：惰性构造（首次使用时以当前 tui/output/应答器装配）。 */
@@ -250,6 +335,7 @@ public class ConversationController {
                     sessionManager(), this::permissionChecker, this::handleChat,
                     planMode -> this.planMode = planMode);
             commandProcessor.setCompactHandler(this::handleManualCompact);
+            commandProcessor.setMemoryHandler(this::handleMemoryCommand);
         }
         return commandProcessor;
     }
@@ -293,16 +379,52 @@ public class ConversationController {
         commandProcessor().handlePermissionMode(arg, live, writer);
     }
 
+    /** /memory：无参数输出两级记忆与索引状态；/memory run 同步提取一次并输出条数。 */
+    void handleMemoryCommand(String arg) {
+        LiveRegionRenderer live = renderContext.liveRenderer();
+        Writer writer = renderContext.screenWriter();
+        for (String line : memoryCommandLines(arg)) {
+            output.appendLine(line);
+            live.appendCommitted(writer, line);
+        }
+    }
+
+    /** 组装 /memory 的输出行（纯函数，便于直接断言） */
+    List<String> memoryCommandLines(String arg) {
+        if ("run".equalsIgnoreCase(arg)) {
+            MemoryExtractor.Outcome outcome = memoryManager.extractNow();
+            if (outcome.failed()) {
+                return List.of("记忆提取失败（未写入任何文件）");
+            }
+            if (outcome.nothing()) {
+                return List.of("（没有值得记忆的内容）");
+            }
+            return List.of("记忆提取完成：新增 " + outcome.created() + " · 更新 " + outcome.updated()
+                    + " · 删除 " + outcome.deleted());
+        }
+        List<MemoryStore.IndexView> views = memoryManager.store().indexViews();
+        StringBuilder counts = new StringBuilder("长期记忆：");
+        for (int i = 0; i < views.size(); i++) {
+            if (i > 0) {
+                counts.append(" · ");
+            }
+            counts.append(views.get(i).label()).append(' ').append(views.get(i).memoryCount()).append(" 条");
+        }
+        List<String> lines = new ArrayList<>();
+        lines.add(counts.toString());
+        for (MemoryStore.IndexView view : views) {
+            lines.add(view.label() + "索引：" + view.indexLines() + " 行 / " + view.indexBytes() + " B"
+                    + (view.truncated() ? "（已截断）" : ""));
+        }
+        return lines;
+    }
+
     /**
      * /resume：列出历史会话，↑/↓ 选择、回车加载、Esc 取消。
      * 菜单作为活跃区 overlay 渲染：只重绘屏幕底部、不进回滚；选定/取消后清掉菜单，历史再追加。
      */
     private void selectSession() {
         sessionManager().selectSession();
-    }
-
-    private void loadSession(Session session) {
-        sessionManager().loadSession(session);
     }
 
     private void handleChat(String input) {
@@ -372,7 +494,13 @@ public class ConversationController {
      * 便于用 FakeProvider 单测编排。repaint 为保留参数（渲染已全部经活跃区完成）。
      */
     void handleExchange(String input, BooleanSupplier ctrlC, Runnable repaint) {
-        exchangeRunner().run(input, ctrlC, repaint, planMode);
+        ExchangeRunner runner = exchangeRunner();
+        // 恢复会话后首轮的轮次提醒：只进请求、不进历史，用掉即清（第二轮不再出现）
+        if (pendingTurnReminder != null) {
+            runner.setPendingReminder(SystemReminder.wrap(pendingTurnReminder));
+            pendingTurnReminder = null;
+        }
+        runner.run(input, ctrlC, repaint, planMode);
     }
 
     /** 交换执行器：惰性构造，必须晚于全部测试 setter（捕获当时的 output/RenderContext/应答器）。 */
@@ -381,6 +509,7 @@ public class ConversationController {
             exchangeRunner = new ExchangeRunner(provider, config, conversation, toolRegistry,
                     output, renderContext, confirmAnswerer, choiceAnswerer, projectRoot, this::permissionChecker);
             exchangeRunner.setContextManager(contextManager());
+            exchangeRunner.setMemoryManager(memoryManager);
         }
         return exchangeRunner;
     }
@@ -419,8 +548,13 @@ public class ConversationController {
         return false;
     }
 
-    /** 退出时把完整历史存为新会话文件；空会话不存。 */
-    private void saveSession() {
-        sessionManager().saveSession();
+    /** 退出路径：关闭活跃会话句柄（不整存、不新建文件）。 */
+    void closeSession() {
+        sessionManager().closeSession();
+    }
+
+    /** 测试用：访问记忆装配门面 */
+    MemoryManager memoryManager() {
+        return memoryManager;
     }
 }

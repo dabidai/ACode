@@ -18,6 +18,7 @@ import com.acode.config.AppConfig;
 import com.acode.config.ConfigValidator;
 import com.acode.context.ContextManager;
 import com.acode.conversation.Conversation;
+import com.acode.memory.MemoryManager;
 import com.acode.permission.PermissionChecker;
 import com.acode.permission.PermissionResponse;
 import com.acode.provider.ChatMessage;
@@ -71,6 +72,12 @@ public class ExchangeRunner {
     /** 上下文管理门面（T8 装配注入）：大结果落盘 + 自动/紧急压缩随 Agent 每轮生效；null 则跳过 */
     private ContextManager contextManager;
 
+    /** 一次性轮次提醒（恢复会话后首轮用）：本次 exchange 首轮注入后即清，不进历史、不落盘 */
+    private ChatMessage pendingReminder;
+
+    /** 记忆装配门面（T9 装配注入）：随 Agent 每轮自然结束触发一次异步提取；null 则跳过 */
+    private MemoryManager memoryManager;
+
     public ExchangeRunner(ChatProvider provider, AppConfig config, Conversation conversation,
                           ToolRegistry toolRegistry, OutputPane output, RenderContext renderContext,
                           Function<ConfirmationRequestEvent, PermissionResponse> confirmAnswerer,
@@ -93,6 +100,16 @@ public class ExchangeRunner {
         this.contextManager = contextManager;
     }
 
+    /** 挂一条一次性轮次提醒（恢复会话后首轮注入；下一次 run 用掉即清）。 */
+    void setPendingReminder(ChatMessage reminder) {
+        this.pendingReminder = reminder;
+    }
+
+    /** 注入记忆装配门面（会话装配时一次调用；测试可缺省）。 */
+    void setMemoryManager(MemoryManager memoryManager) {
+        this.memoryManager = memoryManager;
+    }
+
     /**
      * 单次输入触发 Agent 循环：追加 user 消息 → new Agent(...).run() 在虚拟线程跑 ReAct 循环 →
      * 主线程订阅事件队列逐条渲染（流式文本 / 工具卡片 / 轮次收尾 / 重试 / 错误 / 循环结束提示）。
@@ -112,6 +129,9 @@ public class ExchangeRunner {
         agent.setPlanMode(planMode);
         agent.setConfirmationGate(new EventConfirmationGate());
         agent.setPermissionChecker(permissionCheckerSupplier.get());
+        agent.setOneShotReminder(pendingReminder);
+        agent.setMemoryManager(memoryManager);
+        pendingReminder = null; // 只用一次：恢复后的第二轮不再注入
         BlockingQueue<AgentEvent> events = agent.run();
 
         StreamPrinter printer = new StreamPrinter(output, live, writer, config.isTeeEnabled());

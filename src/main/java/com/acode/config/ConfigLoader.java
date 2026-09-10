@@ -27,7 +27,7 @@ public class ConfigLoader {
     private static final List<String> KNOWN_KEYS =
             List.of("protocol", "model", "base_url", "api_key",
                     "max_context_tokens", "max_iterations", "tee", "permission_mode", "thinking",
-                    "mcp_servers");
+                    "memory_auto", "mcp_servers");
 
     /** 生产入口：全局配置在用户主目录，项目级配置在当前工作目录 */
     public static AppConfig loadDefault() {
@@ -148,6 +148,13 @@ public class ConfigLoader {
                 throw new ConfigException(source + ": thinking 必须是 true/false，当前值 " + value);
             }
             config.setThinking(thinkingValue);
+        }
+        if (map.containsKey("memory_auto")) {
+            Object value = map.get("memory_auto");
+            if (!(value instanceof Boolean memoryAutoValue)) {
+                throw new ConfigException(source + ": memory_auto 必须是 true/false，当前值 " + value);
+            }
+            config.setMemoryAuto(memoryAutoValue);
         }
         if (map.containsKey("mcp_servers")) {
             Object value = map.get("mcp_servers");

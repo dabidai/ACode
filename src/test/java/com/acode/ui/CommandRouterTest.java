@@ -7,6 +7,7 @@ import static com.acode.ui.CommandRouter.Action.CLEAR;
 import static com.acode.ui.CommandRouter.Action.COMPACT;
 import static com.acode.ui.CommandRouter.Action.DO;
 import static com.acode.ui.CommandRouter.Action.HELP;
+import static com.acode.ui.CommandRouter.Action.MEMORY;
 import static com.acode.ui.CommandRouter.Action.PERMISSION_MODE;
 import static com.acode.ui.CommandRouter.Action.PLAN;
 import static com.acode.ui.CommandRouter.Action.QUIT;
@@ -108,7 +109,26 @@ class CommandRouterTest {
         assertTrue(CommandRouter.HELP_TEXT.contains("/do"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/permission-mode"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/compact"));
+        assertTrue(CommandRouter.HELP_TEXT.contains("/memory"));
         assertTrue(CommandRouter.HELP_TEXT.contains("/help"));
+    }
+
+    @Test
+    void resumeHelpMentionsContinuationIntoTheSameSession() {
+        assertTrue(CommandRouter.HELP_TEXT.contains("加载后继续写回该会话"),
+                "帮助文本应说明加载后续写同一会话");
+    }
+
+    @Test
+    void memoryCommandRoutesToMemory() {
+        assertEquals(MEMORY, CommandRouter.route("/memory"));
+        assertEquals(MEMORY, CommandRouter.route("/memory run"));
+        assertEquals(MEMORY, CommandRouter.route("/memory   "));
+    }
+
+    @Test
+    void memoryLikePathStillRoutesToChat() {
+        assertEquals(CHAT, CommandRouter.route("/memory/notes.md"));
     }
 
     @Test

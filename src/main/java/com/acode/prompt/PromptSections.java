@@ -27,6 +27,39 @@ public final class PromptSections {
         return new Section("Identity", 0, IDENTITY_CONTENT);
     }
 
+    // ── Priority 5: ProjectInstructions ─────────────────────────────────
+
+    /**
+     * 项目指令段（ACODE.md 三层展开文本）。空内容交给 PromptBuilder 的空段过滤自然丢弃——
+     * 三层全缺失时 system 提示与未引入本段之前逐字相同。
+     */
+    public static Section projectInstructionsSection(String text) {
+        if (text == null || text.isBlank()) {
+            return new Section("ProjectInstructions", 5, "");
+        }
+        return new Section("ProjectInstructions", 5,
+                "# Project instructions\n\n"
+                        + "Project-specific conventions from ACODE.md files. Follow them in this project.\n\n"
+                        + text);
+    }
+
+    // ── Priority 7: MemoryIndex ─────────────────────────────────────────
+
+    /**
+     * 记忆索引段（两级 MEMORY.md 拼接文本，项目级在前）。索引只存指针，
+     * 某条记忆与当前任务相关时由 Agent 自行读取对应文件，不做全文注入。
+     */
+    public static Section memoryIndexSection(String text) {
+        if (text == null || text.isBlank()) {
+            return new Section("MemoryIndex", 7, "");
+        }
+        return new Section("MemoryIndex", 7,
+                "# Memory index\n\n"
+                        + "Long-term memories collected from earlier sessions. Read the linked file "
+                        + "when one looks relevant to the current task.\n\n"
+                        + text);
+    }
+
     // ── Priority 10: Behavior ───────────────────────────────────────────
 
     static final String BEHAVIOR_CONTENT = """

@@ -10,6 +10,7 @@ import com.acode.context.ContextManager;
 import com.acode.context.ContextTooLong;
 import com.acode.context.ToolResultBudget;
 import com.acode.conversation.Conversation;
+import com.acode.memory.MemoryManager;
 import com.acode.permission.PermissionChecker;
 import com.acode.prompt.SystemReminder;
 import com.acode.provider.ChatMessage;
@@ -27,6 +28,8 @@ import com.acode.tool.ToolContext;
 import com.acode.tool.ToolRegistry;
 import com.acode.tool.ToolResult;
 import com.acode.util.VirtualThreads;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -44,6 +47,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 流错误。run() 在虚拟线程跑循环并返回事件队列，UI 订阅事件渲染。
  */
 public class Agent {
+
+    private static final Logger log = LoggerFactory.getLogger(Agent.class);
 
     /** 五种循环终止原因 */
     public enum Termination { NORMAL, MAX_ITERATIONS, CANCELED, PLAN_DELIVERED, ERROR }
@@ -90,6 +95,35 @@ public class Agent {
 
     /** 权限检查器：UI 装配时注入；null 时执行器走旧确认路径（存量测试兼容） */
     private PermissionChecker permissionChecker;
+
+    /** 一次性轮次提醒（恢复会话后首轮用）：只在本次 exchange 的首轮请求里尾插，不进历史 */
+    private ChatMessage oneShotReminder;
+
+    /** 记忆装配门面（可空：存量构造/测试不装配则不做提取）；每轮自然结束后触发一次异步提取 */
+    private MemoryManager memoryManager;
+
+    public void setOneShotReminder(ChatMessage reminder) {
+        this.oneShotReminder = reminder;
+    }
+
+    public void setMemoryManager(MemoryManager memoryManager) {
+        this.memoryManager = memoryManager;
+    }
+
+    /**
+     * 一轮自然结束（模型给出最终回复、不再调用工具）后触发一次异步记忆提取。
+     * 提取跑在后台虚拟线程、失败只记日志，绝不能影响本轮收尾。
+     */
+    private void notifyTurnComplete() {
+        if (memoryManager == null) {
+            return;
+        }
+        try {
+            memoryManager.onTurnComplete();
+        } catch (RuntimeException e) {
+            log.warn("触发记忆提取失败：{}", e.getMessage());
+        }
+    }
 
     public void setConfirmationGate(ConfirmationGate gate) {
         if (gate != null) {
@@ -191,6 +225,7 @@ public class Agent {
                 case NORMAL_END -> {
                     totalTurns = turn;
                     termination = Termination.NORMAL;
+                    notifyTurnComplete();
                     emit(new LoopComplete(turn));
                     return;
                 }
@@ -449,7 +484,8 @@ public class Agent {
             return conversation.buildRequest(planTools(),
                     SystemReminder.wrap(PlanModePrompt.buildReminder(turn)));
         }
-        return conversation.buildRequest(normalTools(), null);
+        // 恢复会话后的一次性提醒只挂首轮（同轮重试仍在首轮内，提醒不丢）
+        return conversation.buildRequest(normalTools(), turn == 1 ? oneShotReminder : null);
     }
 
     /** plan 模式工具列表：读类工具 + ExitPlanMode，各恰好一次 */

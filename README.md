@@ -17,7 +17,7 @@ ACode 按阶段迭代构建，每阶段有独立设计文档（`docs/chXX/`）�
 | 阶段五 | 权限系统 | `docs/ch05/` | ✅ 已完成 |
 | 阶段六 | MCP 工具生态（MCP 协议） | `docs/ch06/` | ✅ 已完成 |
 | 阶段七 | 上下文管理 | `docs/ch07/` | ✅ 已完成 |
-| 阶段八 | 记忆系统 | `docs/ch08/`（待建） | 🚧 规划中 |
+| 阶段八 | 记忆系统 | `docs/ch08/` | ✅ 已完成 |
 | 阶段九 | Slash Command | `docs/ch09/`（待建） | 🚧 规划中 |
 | 阶段十 | Skill 系统 | `docs/ch10/`（待建） | 🚧 规划中 |
 | 阶段十一 | Hook 系统 | `docs/ch11/`（待建） | 🚧 规划中 |
@@ -37,7 +37,9 @@ ACode 按阶段迭代构建，每阶段有独立设计文档（`docs/chXX/`）�
 - 🔌 **多供应商协议**：支持 OpenAI 与 Anthropic 协议（默认 OpenAI 对接 DeepSeek）
 - 🔗 **MCP 工具生态**：接入社区 MCP Server（GitHub / 数据库 / Slack 等），配置声明即自动连接并注册其工具（stdio / Streamable HTTP 双传输、子进程环境白名单隔离）
 - 🧠 **Prompt 工程**：七模块 System Prompt、环境快照注入、Prompt Cache 断点，每轮 usage 脚注（含 cache_read）
-- 💬 **对话保存与恢复**：退出自动保存到 `~/.acode/sessions/`，`--resume` 或 `/resume` 恢复
+- 💬 **项目级会话池**：会话以 JSONL 逐条追加写入 `<项目根>/.acode/sessions/`，与项目绑定；压缩后整段原子重写，`--resume` 或 `/resume` 恢复并续写同一文件（建议把 `.acode/sessions/` 加入项目 `.gitignore`）
+- 📄 **项目指令文件 ACODE.md**：三层加载（项目根 → 项目 `.acode/` → `~/.acode/`）按内容拼接（项目级在前），支持 `@include` 拆文件（深度上限 + 已展开集合防环 + 项目外逃逸拦截）
+- 🧠 **长期记忆**：四类记忆（用户偏好 / 纠正反馈 → `~/.acode/memory/`；项目知识 / 参考信息 → `<项目根>/.acode/memory/`）一记忆一文件 + `MEMORY.md` 索引；索引随 system 提示注入（会话启动一次、会话内不变），每轮自然结束后异步提取更新，`/memory` 查看、`/memory run` 手动提取（`memory_auto: false` 可关自动提取）
 - 🧠 **上下文管理**：超长工具结果全文落盘 + 定长预览（信息不丢、可读回）；对话逼近窗口上限时自动结构化摘要压缩（`/compact` 可手动触发），压缩后带边界提醒、失败熔断不误伤主流程
 - ⚙️ **三级配置加载**：内置默认 → 全局配置 → 项目级配置，逐级覆盖
 - 📝 **纯文件日志**：日志只写文件，不污染终端输出

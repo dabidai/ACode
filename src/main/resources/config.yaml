@@ -15,11 +15,16 @@ base_url: https://api.deepseek.com/v1
 # API 密钥（占位符；请在外部配置 ~/.acode/config.yaml 或 .acode/config.yaml 覆盖真实密钥）
 api_key: sk-请填入你的API密钥
 
-# 上下文窗口上限（token），对话历史超过后自动丢弃最早消息
+# 上下文窗口上限（token）。接近上限时自动把较早的对话压缩成摘要，不丢弃消息
 max_context_tokens: 200000
 
 # Agent 循环最大轮数（默认 20），模型连续多轮工具调用触顶后停止执行
 max_iterations: 20
+
+# 自动记忆提取开关（默认 true）：开启时每轮 Agent 循环自然结束后，后台异步回顾本轮对话，
+# 决定是否创建/更新/删除长期记忆（用户偏好、纠正反馈、项目知识、参考信息）。
+# 关掉后不再有每轮后台模型调用；/memory run 手动入口仍然可用。
+memory_auto: true
 
 # 诊断 tee 开关：设为 true 时把原始 SSE / 收到的 delta / 写进终端的字节分别记录到
 # acode-sse.log、acode-streamprinter.log、acode-terminal.log（相对启动目录）。

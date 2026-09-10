@@ -7,6 +7,8 @@ import com.acode.provider.TextBlock;
 import com.acode.provider.ToolResultBlock;
 import com.acode.provider.ToolUseBlock;
 import com.acode.tool.Tool;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -14,6 +16,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 /**
  * 对话编排：维护完整消息历史，组装请求时把「system → 环境 → 历史 → 轮次级」整体带出。
@@ -21,6 +24,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * 残余的单条消息自身超窗走可见错误，绝不静默丢历史。token 估算按字符数 ÷ 4 粗略计算。
  */
 public class Conversation {
+
+    private static final Logger log = LoggerFactory.getLogger(Conversation.class);
 
     private final List<ChatMessage> messages = new CopyOnWriteArrayList<>();
     private final String model;
@@ -40,6 +45,12 @@ public class Conversation {
     /** clear 钩子：/clear、加载会话等清空点联动重置运行期状态（上下文管理冻结/熔断，见 ch07） */
     private final List<Runnable> clearHooks = new CopyOnWriteArrayList<>();
 
+    /** 消息追加监听：每条消息落进历史后触发（活跃会话逐条落盘用） */
+    private final List<Consumer<ChatMessage>> appendListeners = new CopyOnWriteArrayList<>();
+
+    /** 历史重建监听：replaceAll 后触发（压缩重建后整段重写会话文件用） */
+    private final List<Consumer<List<ChatMessage>>> rebuildListeners = new CopyOnWriteArrayList<>();
+
     public Conversation(String model, boolean thinking, int maxTokens, int maxContextTokens) {
         this.model = model;
         this.thinking = thinking;
@@ -50,24 +61,54 @@ public class Conversation {
     /** 追加一条消息到完整历史（不分代次，无条件写入） */
     public void addMessage(ChatMessage message) {
         messages.add(message);
+        notifyAppended(message);
     }
 
     /** 带代次校验的追加：仅当代次仍当前时写入（旧 agent 线程的迟到写入被忽略） */
     public synchronized void addMessage(long epoch, ChatMessage message) {
         if (epoch == this.epoch) {
             messages.add(message);
+            notifyAppended(message);
         }
     }
 
     /** 把一批工具执行结果作为一条 user 消息追加进历史（Anthropic 要求同批 tool_result 放一条消息） */
     public void addToolResults(List<ToolResultBlock> results) {
-        messages.add(new ChatMessage(ChatMessage.Role.USER, new ArrayList<>(results)));
+        ChatMessage message = new ChatMessage(ChatMessage.Role.USER, new ArrayList<>(results));
+        messages.add(message);
+        notifyAppended(message);
     }
 
     /** 带代次校验的结果追加：与 addMessage(long, ...) 同理，防旧线程残留写入错乱历史 */
     public synchronized void addToolResults(long epoch, List<ToolResultBlock> results) {
         if (epoch == this.epoch) {
-            messages.add(new ChatMessage(ChatMessage.Role.USER, new ArrayList<>(results)));
+            ChatMessage message = new ChatMessage(ChatMessage.Role.USER, new ArrayList<>(results));
+            messages.add(message);
+            notifyAppended(message);
+        }
+    }
+
+    /** 注册消息追加监听（会话持久化用）；监听器异常被吞掉，持久化失败不得打断 Agent 循环 */
+    public void addAppendListener(Consumer<ChatMessage> listener) {
+        if (listener != null) {
+            appendListeners.add(listener);
+        }
+    }
+
+    /** 注册历史重建监听（整段重写会话文件用）；异常同样被吞掉 */
+    public void addRebuildListener(Consumer<List<ChatMessage>> listener) {
+        if (listener != null) {
+            rebuildListeners.add(listener);
+        }
+    }
+
+    private void notifyAppended(ChatMessage message) {
+        for (Consumer<ChatMessage> listener : appendListeners) {
+            try {
+                listener.accept(message);
+            } catch (RuntimeException e) {
+                log.warn("会话追加监听失败：{}", e.getMessage());
+            }
         }
     }
 
@@ -85,6 +126,17 @@ public class Conversation {
     public synchronized void replaceAll(List<ChatMessage> newMessages) {
         messages.clear();
         messages.addAll(newMessages);
+        notifyRebuilt(newMessages);
+    }
+
+    private void notifyRebuilt(List<ChatMessage> rebuilt) {
+        for (Consumer<List<ChatMessage>> listener : rebuildListeners) {
+            try {
+                listener.accept(rebuilt);
+            } catch (RuntimeException e) {
+                log.warn("会话重建监听失败：{}", e.getMessage());
+            }
+        }
     }
 
     public int messageCount() {

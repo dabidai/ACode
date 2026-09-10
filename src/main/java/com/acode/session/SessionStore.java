@@ -1,152 +1,170 @@
 package com.acode.session;
 
-import com.acode.provider.ChatMessage;
-import com.acode.provider.ToolResultBlock;
-import com.acode.provider.ToolUseBlock;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 /**
- * 会话存储：每个会话保存为独立 JSON 文件（文件名=时间戳），追加不覆盖历史。
- * 目录默认 <code>~/.acode/sessions/</code>。
+ * 项目级会话存储：会话文件为 {@code <项目根>/.acode/sessions/<id>.jsonl}，换项目即换会话池。
+ * 只负责目录、id 分配与读取（容忍坏行）；写入与句柄由 {@link SessionRecorder} 持有。
  */
 public class SessionStore {
 
-    private static final String EXT = ".json";
-    private static final DateTimeFormatter STAMP =
-            DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final Logger log = LoggerFactory.getLogger(SessionStore.class);
 
-    /** 保证同 JVM 内生成的文件名严格递增，避免同一毫秒碰撞 */
-    private static volatile long lastStampMillis = -1;
+    static final String EXT = ".jsonl";
+    private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
+    private static final int SUFFIX_SPACE = 0x10000;
 
-    private final Path sessionsDir;
+    /** 过期阈值：末行时间戳距今超过 30 天 → 列表标记「已过期」，只标记不删 */
+    static final long EXPIRY_SECONDS = 2_592_000L;
 
-    public SessionStore(Path sessionsDir) {
-        this.sessionsDir = sessionsDir;
+    private static final LongSupplier DEFAULT_CLOCK = () -> Instant.now().getEpochSecond();
+
+    /** 本 JVM 已分配过的会话 id（同一秒内连建多个会话时防碰撞） */
+    private static final Set<String> ALLOCATED = ConcurrentHashMap.newKeySet();
+
+    private final Supplier<Path> projectRoot;
+    private final LongSupplier nowSeconds;
+
+    public SessionStore(Path projectRoot) {
+        this(projectRoot, DEFAULT_CLOCK);
     }
 
-    public static Path defaultDir() {
-        return Paths.get(System.getProperty("user.home"), ".acode", "sessions");
+    /** 项目根动态求值：主流程用——测试可能在装配之后才注入 @TempDir 项目根 */
+    public static SessionStore forProject(Supplier<Path> projectRoot) {
+        return new SessionStore(projectRoot, DEFAULT_CLOCK);
     }
 
-    /** 保存为新文件；若会话无 id 则按时间戳分配。绝不覆盖已存在文件。 */
-    public void save(Session session) {
-        try {
-            Files.createDirectories(sessionsDir);
-            if (session.getId() == null) {
-                session.setId(nextUniqueName());
-            }
-            byte[] bytes = JSON.writeValueAsBytes(session);
-            Files.write(sessionsDir.resolve(session.getId() + EXT), bytes,
-                    StandardOpenOption.CREATE_NEW);
-        } catch (IOException e) {
-            throw new IllegalStateException("保存会话失败：" + e.getMessage(), e);
-        }
+    /** 包可见：测试注入固定时钟，驱动过期判定 */
+    SessionStore(Path projectRoot, LongSupplier nowSeconds) {
+        this(() -> projectRoot, nowSeconds);
     }
 
-    /** 按创建时间升序返回全部会话（文件名即时间戳，字典序=时间序） */
-    public List<Session> list() {
-        if (!Files.isDirectory(sessionsDir)) {
-            return List.of();
-        }
-        try (Stream<Path> stream = Files.list(sessionsDir)) {
-            return stream
-                    .filter(p -> p.getFileName().toString().endsWith(EXT))
-                    .sorted()
-                    .map(this::read)
-                    .toList();
-        } catch (IOException e) {
-            throw new IllegalStateException("列出会话失败：" + e.getMessage(), e);
-        }
+    private SessionStore(Supplier<Path> projectRoot, LongSupplier nowSeconds) {
+        this.projectRoot = projectRoot;
+        this.nowSeconds = nowSeconds;
     }
 
-    public Optional<Session> readLatest() {
-        List<Session> sessions = list();
-        return sessions.isEmpty() ? Optional.empty() : Optional.of(sessions.get(sessions.size() - 1));
+    /** 会话目录（供测试断言文件位置） */
+    public Path dir() {
+        return projectRoot.get().resolve(".acode").resolve("sessions");
     }
 
-    public Optional<Session> load(String id) {
-        Path file = sessionsDir.resolve(id + EXT);
-        if (!Files.isRegularFile(file)) {
-            return Optional.empty();
-        }
-        return Optional.of(read(file));
-    }
-
-    private Session read(Path file) {
-        try {
-            Session session = JSON.readValue(file.toFile(), Session.class);
-            session.setMessages(repairLegacyRoles(session.getMessages()));
-            return session;
-        } catch (IOException e) {
-            throw new IllegalStateException("读取会话失败：" + file + "：" + e.getMessage(), e);
-        }
+    /** 某个 id 对应的会话文件路径（尚未保证存在） */
+    public Path resolve(String id) {
+        return dir().resolve(id + EXT);
     }
 
     /**
-     * 修复旧版会话文件（role 未被序列化的时代遗留）加载出的消息角色。
-     * 规则（按优先级）：已带 role 的原样保留；含 tool_use 块→ASSISTANT、
-     * 含 tool_result 块→USER（工具块是确定性信号）；纯文本按位置交替推断，
-     * 首条为 USER（真实会话首条必是用户输入），其余取上一条已解析角色的相反值。
-     * 仅重建被修复的消息，全部干净时返回原列表引用（对齐 Conversation.sanitize 的 dirty 模式）。
-     * 已知轻微边缘：紧跟 tool_result 的截断续写提示（USER）会被交替规则判成 ASSISTANT，
-     * Anthropic 会合并相邻同角色消息，影响仅为该提示渲染无 ● 前缀；新保存的文件不受影响。
-     * 只在内存中修复，不改写任何会话文件。
+     * 分配会话 id：{@code yyyyMMdd-HHmmss-} + 4 位小写十六进制随机串。
+     * 随机后缀避免同一秒内连建多个会话碰撞；极小概率撞上已有文件时重试。
      */
-    static List<ChatMessage> repairLegacyRoles(List<ChatMessage> messages) {
-        ChatMessage.Role previous = null;
-        boolean dirty = false;
-        List<ChatMessage> repaired = new ArrayList<>(messages.size());
-        for (ChatMessage message : messages) {
-            if (message.role() != null) {
-                repaired.add(message);
-                previous = message.role();
-                continue;
+    public String newId() {
+        String stamp = LocalDateTime.now().format(STAMP);
+        for (int i = 0; i < 50; i++) {
+            String id = stamp + "-" + suffix(ThreadLocalRandom.current().nextInt(SUFFIX_SPACE));
+            if (reserve(id)) {
+                return id;
             }
-            ChatMessage.Role inferred;
-            if (containsToolUse(message)) {
-                inferred = ChatMessage.Role.ASSISTANT;
-            } else if (containsToolResult(message)) {
-                inferred = ChatMessage.Role.USER;
-            } else if (previous == null) {
-                inferred = ChatMessage.Role.USER;
-            } else {
-                inferred = previous == ChatMessage.Role.USER
-                        ? ChatMessage.Role.ASSISTANT : ChatMessage.Role.USER;
-            }
-            repaired.add(new ChatMessage(inferred, message.blocks()));
-            previous = inferred;
-            dirty = true;
         }
-        return dirty ? repaired : messages;
+        for (int n = 0; n < SUFFIX_SPACE; n++) {
+            String id = stamp + "-" + suffix(n);
+            if (reserve(id)) {
+                return id;
+            }
+        }
+        throw new IllegalStateException("无法分配会话 id：" + stamp);
     }
 
-    private static boolean containsToolUse(ChatMessage message) {
-        return message.blocks().stream().anyMatch(b -> b instanceof ToolUseBlock);
+    /** 同 JVM 内已分配过的 id 不再复用，保证同一秒内连建多个会话绝不碰撞 */
+    private boolean reserve(String id) {
+        return ALLOCATED.add(id) && !Files.exists(resolve(id));
     }
 
-    private static boolean containsToolResult(ChatMessage message) {
-        return message.blocks().stream().anyMatch(b -> b instanceof ToolResultBlock);
+    private static String suffix(int value) {
+        return String.format("%04x", value);
     }
 
-    private synchronized String nextUniqueName() throws IOException {
-        long now = Math.max(System.currentTimeMillis(), lastStampMillis + 1);
-        lastStampMillis = now;
-        return LocalDateTime.ofInstant(Instant.ofEpochMilli(now), ZoneId.systemDefault())
-                .format(STAMP);
+    /** 全部会话：按最后活跃降序（活跃在前），已过期项一律排在未过期项之后 */
+    public List<Session> list() {
+        Path sessionsDir = dir();
+        if (!Files.isDirectory(sessionsDir)) {
+            return List.of();
+        }
+        long now = nowSeconds.getAsLong();
+        List<Session> sessions = new ArrayList<>();
+        try (Stream<Path> stream = Files.list(sessionsDir)) {
+            for (Path file : stream.filter(SessionStore::isSessionFile).toList()) {
+                sessions.add(readSession(file, now));
+            }
+        } catch (IOException e) {
+            log.warn("列出会话失败：{}", e.getMessage());
+            return List.of();
+        }
+        sessions.sort(Comparator.comparing(Session::expired)
+                .thenComparing(Comparator.comparingLong(Session::lastActiveEpochSeconds).reversed()));
+        return sessions;
+    }
+
+    public Optional<Session> load(String id) {
+        if (id == null) {
+            return Optional.empty();
+        }
+        Path file = resolve(id);
+        if (!Files.isRegularFile(file)) {
+            return Optional.empty();
+        }
+        return Optional.of(readSession(file, nowSeconds.getAsLong()));
+    }
+
+    /** 逐行读取一个会话文件；坏行直接跳过，文件不可读/缺失按空列表返回，不抛错 */
+    public static List<SessionEntry> readEntries(Path file) {
+        List<String> lines;
+        try {
+            lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            log.warn("读取会话失败：{}：{}", file, e.getMessage());
+            return List.of();
+        }
+        List<SessionEntry> entries = new ArrayList<>(lines.size());
+        for (String line : lines) {
+            SessionCodec.decode(line).ifPresent(entries::add);
+        }
+        return entries;
+    }
+
+    private Session readSession(Path file, long now) {
+        List<SessionEntry> entries = readEntries(file);
+        long lastTs = entries.isEmpty() ? 0L : entries.get(entries.size() - 1).ts();
+        boolean expired = lastTs > 0 && now - lastTs > EXPIRY_SECONDS;
+        return new Session(stripExt(file), lastTs,
+                entries.stream().map(SessionEntry::message).toList(), expired);
+    }
+
+    private static boolean isSessionFile(Path file) {
+        return Files.isRegularFile(file) && file.getFileName().toString().endsWith(EXT);
+    }
+
+    private static String stripExt(Path file) {
+        String name = file.getFileName().toString();
+        return name.endsWith(EXT) ? name.substring(0, name.length() - EXT.length()) : name;
     }
 }

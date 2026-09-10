@@ -1,25 +1,20 @@
 package com.acode.session;
 
 import com.acode.provider.ChatMessage;
-import com.acode.provider.ContentBlock;
-import com.acode.provider.ToolResultBlock;
-import com.acode.provider.ToolUseBlock;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
+import java.util.Set;
 
-import static com.acode.provider.ChatMessage.Role.ASSISTANT;
 import static com.acode.provider.ChatMessage.Role.USER;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SessionStoreTest {
@@ -27,208 +22,141 @@ class SessionStoreTest {
     @TempDir
     Path tempDir;
 
+    /** 固定"现在"，让过期判定可控 */
+    private static final long NOW = 1_800_000_000L;
+
     private SessionStore store() {
-        return new SessionStore(tempDir);
+        return new SessionStore(tempDir, () -> NOW);
     }
 
-    private static Session session(String id, List<ChatMessage> messages) {
-        return new Session(id, System.currentTimeMillis(), messages);
+    private Path writeSession(String id, String... lines) throws IOException {
+        Files.createDirectories(store().dir());
+        Path file = store().resolve(id);
+        Files.write(file, List.of(lines), StandardCharsets.UTF_8);
+        return file;
     }
 
-    private static ChatMessage user(String content) {
-        return ChatMessage.of(USER, content);
-    }
-
-    private static ChatMessage assistant(String content) {
-        return ChatMessage.of(ASSISTANT, content);
-    }
-
-    @Test
-    void saveWritesJsonFileWithAllMessages() {
-        Session session = session(null, List.of(
-                user("第一轮提问"),
-                assistant("第一轮回答"),
-                user("第二轮提问")));
-        store().save(session);
-
-        assertTrue(session.getId() != null && !session.getId().isBlank(),
-                "无 id 的会话应被分配时间戳 id");
-        long jsonFiles = countJsonFiles();
-        assertEquals(1, jsonFiles, "目录应恰好出现 1 个 .json 文件");
-
-        Optional<Session> loaded = store().readLatest();
-        assertTrue(loaded.isPresent());
-        assertEquals(List.of("第一轮提问", "第一轮回答", "第二轮提问"),
-                loaded.get().getMessages().stream().map(ChatMessage::content).toList(),
-                "内容应含全部消息，顺序不变");
+    private static String line(String text, long ts) {
+        return SessionCodec.encode(ChatMessage.of(USER, text), ts);
     }
 
     @Test
-    void secondSaveCreatesNewFileWithoutModifyingFirst() {
+    void sessionsLiveUnderProjectLevelAcodesSessionsWithJsonlExtension() {
         SessionStore store = store();
-        store.save(session(null, List.of(user("会话A"))));
-        Path firstFile = onlyJsonFile();
-        byte[] firstBytes = read(firstFile);
-
-        store.save(session(null, List.of(user("会话B"))));
-
-        assertEquals(2, countJsonFiles(), "再次保存应出现第 2 个文件");
-        assertEquals(new String(firstBytes), new String(read(firstFile)),
-                "第 1 个文件不应被修改");
+        assertEquals(tempDir.resolve(".acode").resolve("sessions"), store.dir());
+        assertTrue(store.resolve("abc").getFileName().toString().endsWith(".jsonl"));
     }
 
     @Test
-    void readLatestReturnsMostRecent() {
-        SessionStore store = store();
-        store.save(session(null, List.of(user("旧会话"))));
-        store.save(session(null, List.of(user("新会话"))));
-        Session latest = store.readLatest().orElseThrow();
-        assertEquals("新会话", latest.getMessages().get(0).content());
+    void newIdMatchesTimestampHexFormat() {
+        String id = store().newId();
+        assertTrue(id.matches("\\d{8}-\\d{6}-[0-9a-f]{4}"), id);
     }
 
     @Test
-    void listReturnsSessionsInCreationOrder() {
+    void newIdDoesNotCollideWithinSameSecond() {
         SessionStore store = store();
-        store.save(session("a", List.of(user("第一条"))));
-        store.save(session("b", List.of(user("第二条"))));
-        List<Session> sessions = store.list();
+        Set<String> ids = new HashSet<>();
+        for (int i = 0; i < 3; i++) {
+            String id = store.newId();
+            assertTrue(ids.add(id), "同一秒内连建会话不得碰撞：" + id);
+        }
+        assertEquals(3, ids.size());
+    }
+
+    @Test
+    void listSkipsBadLinesAndKeepsTheRest() throws IOException {
+        writeSession("20260101-000000-abcd", line("第一行", NOW - 10),
+                "{不是合法 JSON", line("第三行", NOW - 5));
+        Session session = store().list().get(0);
+        assertEquals(List.of("第一行", "第三行"),
+                session.messages().stream().map(ChatMessage::content).toList());
+    }
+
+    @Test
+    void emptyOrAllBadFileCountsAsEmptySession() throws IOException {
+        writeSession("20260101-000001-aaaa");
+        writeSession("20260101-000002-bbbb", "{坏", "也坏");
+        List<Session> sessions = store().list();
+        assertEquals(2, sessions.size(), "空文件与全坏行文件都应被列为空会话");
+        assertTrue(sessions.stream().allMatch(s -> s.messages().isEmpty()));
+        assertTrue(sessions.stream().noneMatch(Session::expired), "无有效时间戳的文件不算过期");
+    }
+
+    @Test
+    void missingDirectoryListsNothing() {
+        assertTrue(store().list().isEmpty());
+    }
+
+    @Test
+    void listsByLastActiveDescending() throws IOException {
+        writeSession("20260101-000000-aaaa", line("旧", NOW - 1000));
+        writeSession("20260101-000001-bbbb", line("新", NOW - 10));
+        writeSession("20260101-000002-cccc", line("中", NOW - 100));
+
+        assertEquals(List.of("新", "中", "旧"), store().list().stream()
+                .map(s -> s.messages().get(0).content()).toList());
+    }
+
+    @Test
+    void lastActiveComesFromFinalLine() throws IOException {
+        writeSession("20260101-000000-aaaa", line("第一行", NOW - 1000), line("末行", NOW - 3));
+        assertEquals(NOW - 3, store().list().get(0).lastActiveEpochSeconds());
+    }
+
+    @Test
+    void marksSessionsOlderThanThirtyDaysExpiredAndSortsThemLast() throws IOException {
+        long stale = NOW - SessionStore.EXPIRY_SECONDS - 1;
+        writeSession("20260101-000000-aaaa", line("活跃", NOW - 5000));
+        writeSession("20260101-000001-bbbb", line("过期", stale));
+        writeSession("20260101-000002-cccc", line("最新", NOW - 1));
+
+        List<Session> sessions = store().list();
+        assertEquals(3, sessions.size());
+        assertTrue(sessions.get(0).id().endsWith("cccc"), "未过期里最新的排最前");
+        assertTrue(sessions.get(1).id().endsWith("aaaa"));
+        assertTrue(sessions.get(2).expired(), "超期会话被标记");
+        assertTrue(sessions.get(2).id().endsWith("bbbb"), "过期项一律排在未过期项之后");
+    }
+
+    @Test
+    void expiryThresholdMatchesTheDocumentedThirtyDays() {
+        assertEquals(2_592_000L, SessionStore.EXPIRY_SECONDS);
+    }
+
+    @Test
+    void expiredSessionSortsLastEvenWhenItsTimestampIsNewer() throws IOException {
+        // 空文件没有时间戳（不算过期，lastActive 为 0）；过期项的末行 ts 反而更大
+        writeSession("20260101-000000-aaaa");
+        writeSession("20260101-000001-bbbb", line("过期", NOW - SessionStore.EXPIRY_SECONDS - 1));
+
+        List<Session> sessions = store().list();
         assertEquals(2, sessions.size());
-        assertEquals(List.of("第一条", "第二条"),
-                sessions.stream()
-                        .map(s -> s.getMessages().get(0).content())
-                        .toList());
+        assertTrue(sessions.get(0).id().endsWith("aaaa"), "未过期项一律排在前");
+        assertFalse(sessions.get(0).expired());
+        assertTrue(sessions.get(1).expired(), "超期项被标记");
+        assertTrue(sessions.get(1).lastActiveEpochSeconds() > sessions.get(0).lastActiveEpochSeconds(),
+                "被压到最后的过期项时间戳更大，证明排序按「未过期在前」而非纯时间降序");
     }
 
     @Test
-    void loadByExistingIdAndUnknownId() {
-        SessionStore store = store();
-        store.save(session("known", List.of(user("你好"))));
-        assertTrue(store.load("known").isPresent());
-        assertFalse(store.load("not-exist").isPresent());
+    void loadUnknownIdReturnsEmpty() {
+        assertTrue(store().load("nope").isEmpty());
+        assertTrue(store().load(null).isEmpty());
     }
 
     @Test
-    void saveRefusesToOverwriteSameId() {
-        SessionStore store = store();
-        store.save(session("dup", List.of(user("第一次"))));
-        assertThrows(IllegalStateException.class,
-                () -> store.save(session("dup", List.of(user("第二次")))));
-        assertEquals(1, countJsonFiles(), "同名文件不应被覆盖，仍只有 1 个");
+    void loadReadsEntriesOfKnownSession() throws IOException {
+        writeSession("20260101-000000-abcd", line("甲", NOW - 1), line("乙", NOW));
+        Session session = store().load("20260101-000000-abcd").orElseThrow();
+        assertEquals(2, session.messages().size());
+        assertEquals("20260101-000000-abcd", session.id());
     }
 
     @Test
-    void saveLoadRoundTripPreservesToolBlocks() {
-        ObjectMapper json = new ObjectMapper();
-        ChatMessage assistant = new ChatMessage(ASSISTANT, List.of(
-                new ToolUseBlock("id-1", "ReadFile",
-                        json.createObjectNode().put("file_path", "a.txt"))));
-        ChatMessage toolResult = new ChatMessage(USER, List.of(
-                new ToolResultBlock("id-1", "文件内容", false)));
-
-        store().save(session("tool", List.of(assistant, toolResult)));
-        Session loaded = store().load("tool").orElseThrow();
-        assertEquals(2, loaded.getMessages().size(), "含工具块的会话应完整往返");
-
-        ChatMessage m0 = loaded.getMessages().get(0);
-        ToolUseBlock use = assertInstanceOf(ToolUseBlock.class, m0.blocks().get(0));
-        assertEquals("ReadFile", use.name());
-        assertEquals("a.txt", use.input().path("file_path").asText());
-
-        ChatMessage m1 = loaded.getMessages().get(1);
-        ToolResultBlock result = assertInstanceOf(ToolResultBlock.class, m1.blocks().get(0));
-        assertEquals("id-1", result.toolUseId());
-        assertEquals("文件内容", result.content());
-        assertFalse(result.isError());
-    }
-
-    @Test
-    void legacySessionWithoutRoleFieldRestoresInferredRoles() throws IOException {
-        String legacyJson = """
-                {"id":"legacy1","createdAtEpochMillis":1,"messages":[
-                  {"content":[{"type":"text","text":"旧提问"}]},
-                  {"content":[{"type":"text","text":"旧回答"},{"type":"tool_use","id":"u1","name":"ReadFile","input":{"file_path":"a.txt"}}]},
-                  {"content":[{"type":"tool_result","tool_use_id":"u1","content":"文件内容","is_error":false}]},
-                  {"content":[{"type":"text","text":"继续回答"}]}
-                ]}""";
-        Files.writeString(tempDir.resolve("legacy1.json"), legacyJson);
-
-        Session loaded = store().load("legacy1").orElseThrow();
-
-        assertEquals(List.of(USER, ASSISTANT, USER, ASSISTANT),
-                loaded.getMessages().stream().map(ChatMessage::role).toList(),
-                "无 role 字段的旧版消息应按 tool 块信号与首条 USER 交替规则推断角色");
-        ChatMessage toolUse = loaded.getMessages().get(1);
-        assertEquals("旧回答", toolUse.content(), "修复应保留文本内容");
-        assertEquals("ReadFile",
-                ((ToolUseBlock) toolUse.blocks().get(1)).name(), "修复应保留工具块");
-    }
-
-    @Test
-    void legacyTextOnlySessionAlternatesRolesFromUser() throws IOException {
-        String legacyJson = """
-                {"id":"legacy2","createdAtEpochMillis":1,"messages":[
-                  {"content":[{"type":"text","text":"一"}]},
-                  {"content":[{"type":"text","text":"二"}]},
-                  {"content":[{"type":"text","text":"三"}]}
-                ]}""";
-        Files.writeString(tempDir.resolve("legacy2.json"), legacyJson);
-
-        Session loaded = store().load("legacy2").orElseThrow();
-
-        assertEquals(List.of(USER, ASSISTANT, USER),
-                loaded.getMessages().stream().map(ChatMessage::role).toList(),
-                "纯文本旧版消息应从首条 USER 开始交替推断角色");
-    }
-
-    @Test
-    void legacySessionWithRoleFieldUnaffected() throws IOException {
-        String legacyJson = """
-                {"id":"old1","createdAtEpochMillis":1,"messages":[
-                  {"role":"USER","content":"旧版文本"},
-                  {"role":"ASSISTANT","content":"旧版回答"}
-                ]}""";
-        Files.writeString(tempDir.resolve("old1.json"), legacyJson);
-
-        Session loaded = store().load("old1").orElseThrow();
-
-        assertEquals(List.of(USER, ASSISTANT),
-                loaded.getMessages().stream().map(ChatMessage::role).toList(),
-                "带 role 字段的会话加载后角色应原样保留");
-        assertEquals("旧版文本", loaded.getMessages().get(0).content(),
-                "record 时代纯字符串 content 应兼容解析");
-    }
-
-    @Test
-    void savedSessionContainsRoleField() throws IOException {
-        store().save(session(null, List.of(user("你好"), assistant("世界"))));
-
-        String raw = Files.readString(onlyJsonFile());
-        assertTrue(raw.contains("\"role\":\"USER\""), "保存的会话 JSON 应含 USER 角色字段");
-        assertTrue(raw.contains("\"role\":\"ASSISTANT\""), "保存的会话 JSON 应含 ASSISTANT 角色字段");
-    }
-
-    private int countJsonFiles() {
-        try (var stream = Files.list(tempDir)) {
-            return (int) stream.filter(p -> p.getFileName().toString().endsWith(".json")).count();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private Path onlyJsonFile() {
-        try (var stream = Files.list(tempDir)) {
-            return stream.filter(p -> p.getFileName().toString().endsWith(".json"))
-                    .findFirst().orElseThrow();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private static byte[] read(Path file) {
-        try {
-            return Files.readAllBytes(file);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+    void readEntriesSkipsUnparsableLines() throws IOException {
+        Path file = writeSession("20260101-000000-abcd", line("甲", NOW), "half-line-cut-off");
+        assertEquals(1, SessionStore.readEntries(file).size());
+        assertEquals(0, SessionStore.readEntries(tempDir.resolve("missing.jsonl")).size());
     }
 }

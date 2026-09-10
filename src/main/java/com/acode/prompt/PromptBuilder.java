@@ -34,8 +34,19 @@ public class PromptBuilder {
 
     /** Fixed assembly of the seven modules (identity first, output style last). */
     public static String buildSystemPrompt() {
+        return buildSystemPrompt("", "");
+    }
+
+    /**
+     * Fixed assembly plus the two injected sections: project instructions (priority 5) and the
+     * memory index (priority 7). Blank input drops the section entirely, so the no-argument
+     * overload stays byte-identical to the assembly before these sections existed.
+     */
+    public static String buildSystemPrompt(String projectInstructions, String memoryIndex) {
         return new PromptBuilder()
                 .add(PromptSections.identitySection())
+                .add(PromptSections.projectInstructionsSection(projectInstructions))
+                .add(PromptSections.memoryIndexSection(memoryIndex))
                 .add(PromptSections.behaviorSection())
                 .add(PromptSections.toolUsageSection())
                 .add(PromptSections.codeQualitySection())

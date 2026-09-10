@@ -44,6 +44,14 @@ class PromptSectionsTest {
     }
 
     @Test
+    void chapterEightSectionsKeepTheirDocumentedPriorities() {
+        assertEquals(5, PromptSections.projectInstructionsSection("X").priority(),
+                "项目指令段优先级 5（Identity 0 与 Behavior 10 之间）");
+        assertEquals(7, PromptSections.memoryIndexSection("X").priority(),
+                "记忆索引段优先级 7（紧随项目指令段）");
+    }
+
+    @Test
     void identityHasSecurityRedLines() {
         String c = PromptSections.identitySection().content();
         assertTrue(c.contains("security vulnerabilities"));

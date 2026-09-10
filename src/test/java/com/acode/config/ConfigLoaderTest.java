@@ -249,4 +249,42 @@ class ConfigLoaderTest {
         AppConfig config = validGlobal();
         assertEquals(null, config.getPermissionMode());
     }
+
+    @Test
+    void memoryAutoDefaultsToEnabledWhenAbsent() throws IOException {
+        AppConfig config = validGlobal();
+        assertTrue(config.isMemoryAutoEnabled(), "缺省视为开启");
+    }
+
+    @Test
+    void unsetMemoryAutoReadsAsEnabled() {
+        AppConfig fresh = new AppConfig();
+        assertEquals(null, fresh.getMemoryAuto(), "未配置时字段为 null");
+        assertTrue(fresh.isMemoryAutoEnabled(), "null 视为开启");
+    }
+
+    @Test
+    void memoryAutoExplicitFalseDisablesIt() throws IOException {
+        validGlobal();
+        write(projectConfig(), "memory_auto: false\n");
+        AppConfig config = ConfigLoader.load(globalFile(), projectDir());
+        assertEquals(Boolean.FALSE, config.getMemoryAuto());
+        assertTrue(!config.isMemoryAutoEnabled());
+    }
+
+    @Test
+    void memoryAutoExplicitTrueEnablesIt() throws IOException {
+        validGlobal();
+        write(projectConfig(), "memory_auto: true\n");
+        assertTrue(ConfigLoader.load(globalFile(), projectDir()).isMemoryAutoEnabled());
+    }
+
+    @Test
+    void memoryAutoNonBooleanRejected() throws IOException {
+        validGlobal();
+        write(projectConfig(), "memory_auto: 也许\n");
+        ConfigException e = assertThrows(ConfigException.class,
+                () -> ConfigLoader.load(globalFile(), projectDir()));
+        assertTrue(e.getMessage().contains("memory_auto 必须是 true/false"));
+    }
 }

@@ -54,6 +54,8 @@ class ConversationControllerTest {
         config.setProtocol("anthropic");
         config.setModel("test-model");
         config.setMaxContextTokens(8000);
+        // 本组测试断言精确的请求次数：关掉每轮结束的异步记忆提取
+        config.setMemoryAuto(false);
         return config;
     }
 
@@ -741,34 +743,31 @@ class ConversationControllerTest {
         }
     }
 
-    // ---- P1-8 会话保存与 plan 交付渲染 ----
+    // ---- P1-8 会话持久化与 plan 交付渲染 ----
 
-    /** saveSession 为私有且仅 mainLoop 调用（无终端不可达），测试经反射调用 */
+    /** 会话落盘已改为"消息进历史即追加"：空会话不建文件，非空会话逐条写进项目级会话目录 */
     @Test
-    void saveSessionSkipsEmptyConversation() throws Exception {
-        String originalHome = System.getProperty("user.home");
-        Path fakeHome = tempDir.resolve("fake-home");
-        Files.createDirectories(fakeHome);
-        System.setProperty("user.home", fakeHome.toString());
-        try {
-            ConversationController controller =
-                    new ConversationController(FakeProvider.scripted(List.of()), config(), false);
-            controller.setOutput(new OutputPane());
-            Method saveSession = ConversationController.class.getDeclaredMethod("saveSession");
-            saveSession.setAccessible(true);
+    void sessionFileIsWrittenAsMessagesArrive() throws Exception {
+        Path projectRoot = tempDir.resolve("proj");
+        Files.createDirectories(projectRoot);
+        Path sessionsDir = projectRoot.resolve(".acode").resolve("sessions");
 
-            saveSession.invoke(controller); // 空会话：应直接跳过
-            assertFalse(Files.exists(fakeHome.resolve(".acode/sessions")),
-                    "空会话退出不应创建任何会话文件");
+        ConversationController controller = new ConversationController(
+                FakeProvider.scripted(List.of(List.of(FakeProvider.delta("回答"), FakeProvider.complete()))),
+                config(), false);
+        controller.setProjectRoot(projectRoot);
+        controller.setOutput(new OutputPane());
 
-            controller.handleExchange("你好", () -> false, () -> { });
-            saveSession.invoke(controller); // 正对照：非空会话应保存
-            assertTrue(Files.exists(fakeHome.resolve(".acode/sessions")), "非空会话应创建会话目录");
-            try (Stream<Path> files = Files.list(fakeHome.resolve(".acode/sessions"))) {
-                assertTrue(files.count() >= 1, "非空会话应产生会话文件");
-            }
-        } finally {
-            System.setProperty("user.home", originalHome);
+        assertFalse(Files.exists(sessionsDir), "空会话不应创建任何会话文件");
+
+        controller.handleExchange("你好", () -> false, () -> { });
+
+        assertTrue(Files.isDirectory(sessionsDir), "消息落盘应创建项目级会话目录");
+        try (Stream<Path> files = Files.list(sessionsDir)) {
+            List<Path> listed = files.filter(p -> p.getFileName().toString().endsWith(".jsonl")).toList();
+            assertEquals(1, listed.size(), "一个会话一个文件");
+            assertEquals(2, Files.readAllLines(listed.get(0)).size(),
+                    "用户消息与助手回复各占一行");
         }
     }
 

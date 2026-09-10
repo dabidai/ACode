@@ -6,6 +6,7 @@ import com.acode.mcp.ProcessEnv;
 import com.acode.provider.FakeProvider;
 import com.acode.ui.OutputPane;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.StringWriter;
 import java.nio.file.Path;
@@ -22,12 +23,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class McpWiringTest {
 
+    @TempDir
+    Path tempDir;
+
     @Test
     void configuredMcpServerToolsRegisteredBeforeAgentBuilds() throws Exception {
         AppConfig config = new AppConfig();
         config.setProtocol("anthropic");
         config.setModel("test-model");
         config.setMaxContextTokens(8000);
+        config.setMemoryAuto(false);
         List<String> command = fakeServerCommand();
         Map<String, Object> yaml = new LinkedHashMap<>();
         yaml.put("type", "stdio");
@@ -39,6 +44,7 @@ class McpWiringTest {
         FakeProvider provider = FakeProvider.scripted(List.of(List.of(FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config, false);
         try {
+            controller.setProjectRoot(tempDir); // 会话/记忆落盘必须落在临时目录，不得写进真实仓库
             controller.setOutput(new OutputPane());
             controller.setScreenWriter(new StringWriter());
             controller.handleExchange("hello", () -> false, () -> { });

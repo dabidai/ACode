@@ -32,6 +32,9 @@ public class CommandProcessor {
     /** 手动压缩处理回调（ConversationController 装配时注入；缺省空操作，存量构造/测试兼容） */
     private Runnable compactHandler = () -> { };
 
+    /** 记忆命令处理回调（参数为 /memory 之后的剩余文本；缺省空操作） */
+    private Consumer<String> memoryHandler = arg -> { };
+
     public CommandProcessor(AcodeTerminal tui, OutputPane output, RenderContext renderContext,
                             Conversation conversation, SessionManager sessionManager,
                             Supplier<PermissionChecker> checkerSupplier,
@@ -53,6 +56,13 @@ public class CommandProcessor {
         }
     }
 
+    /** 注入 /memory 处理回调（记忆装配后调用）。 */
+    public void setMemoryHandler(Consumer<String> memoryHandler) {
+        if (memoryHandler != null) {
+            this.memoryHandler = memoryHandler;
+        }
+    }
+
     public void mainLoop() {
         InputPane input = new InputPane(tui.terminal(), "> ");
         LiveRegionRenderer live = renderContext.liveRenderer();
@@ -62,12 +72,12 @@ public class CommandProcessor {
             try {
                 line = input.readLine();
             } catch (UserInterruptException | EndOfFileException e) {
-                sessionManager.saveSession();
+                sessionManager.closeSession();
                 return;
             }
             switch (CommandRouter.route(line)) {
                 case QUIT -> {
-                    sessionManager.saveSession();
+                    sessionManager.closeSession();
                     return;
                 }
                 case CLEAR -> {
@@ -93,6 +103,8 @@ public class CommandProcessor {
                     live.appendCommitted(writer, "（已退出规划模式，开始执行）");
                 }
                 case COMPACT -> compactHandler.run();
+                case MEMORY -> memoryHandler.accept(
+                        line.trim().substring("/memory".length()).trim());
                 case PERMISSION_MODE -> handlePermissionMode(line.trim().substring("/permission-mode".length()).trim(), live, writer);
                 case SKIP -> {
                     // 空白输入，忽略

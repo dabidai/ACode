@@ -147,7 +147,7 @@ public class ConversationController {
     /** 权限沙箱根：生产为当前工作目录；测试可注入 @TempDir 避免文件路径被沙箱拦截。 */
     private Path projectRoot = Path.of(System.getProperty("user.dir"));
 
-    /** MCP 生命周期管理：启动连接并注册工具、退出清理 stdio 子进程；未配置 mcp_servers 时为空 manager。 */
+    /** MCP 生命周期管理：UI 就位后由 {@link #connectMcp()} 连接并注册工具、退出清理 stdio 子进程。 */
     private McpManager mcpManager;
 
     /** 启动期降级告警（指令越界/跳过、记忆根不可写/索引截断）：UI 就位后逐行输出 */
@@ -185,8 +185,8 @@ public class ConversationController {
         toolRegistry.register(new ExitPlanModeTool());
         toolRegistry.register(new AskUserTool());
         this.mcpManager = new McpManager(config, projectRoot);
-        this.mcpManager.connectAll();
-        this.mcpManager.registerTools(toolRegistry);
+        // 连接在 start() 里 UI 就位后做：连接耗时（含超时）不该挡在 banner 之前，
+        // 告警也要落进输出区而不是裸 stderr
         // 会话目录跟随当前 projectRoot 动态求值（测试可能在装配后再注入 @TempDir）
         this.sessionManager = new SessionManager(SessionStore.forProject(() -> projectRoot), conversation);
         this.sessionManager.setLoader(session -> activateSession(session, "加载"));
@@ -229,14 +229,36 @@ public class ConversationController {
     }
 
     private void emitStartupWarnings() {
-        if (output == null || startupWarnings.isEmpty()) {
+        if (startupWarnings.isEmpty()) {
             return;
         }
-        LiveRegionRenderer live = liveRenderer();
-        Writer writer = screenWriter();
         for (String warning : startupWarnings) {
-            output.appendLine(warning);
-            live.appendCommitted(writer, warning);
+            emitLine(warning);
+        }
+    }
+
+    /** 提交一行到输出区（进 scrollback + 活跃区历史）；UI 未就位时丢弃。 */
+    private void emitLine(String line) {
+        if (output == null) {
+            return;
+        }
+        output.appendLine(line);
+        liveRenderer().appendCommitted(screenWriter(), line);
+    }
+
+    /**
+     * 连接并注册 MCP server 工具；由 {@link #start()} 在 banner 输出后调用，
+     * 使连接耗时（每 server 默认最多 60s 超时）与告警都在界面就绪之后发生。
+     * 单个 server 失败只落一条告警，不中断启动。
+     */
+    void connectMcp() {
+        if (!mcpManager.serverNames().isEmpty()) {
+            emitLine("正在连接 MCP server：" + String.join("、", mcpManager.serverNames()) + " …");
+        }
+        mcpManager.connectAll();
+        mcpManager.registerTools(toolRegistry);
+        for (String warning : mcpManager.drainWarnings()) {
+            emitLine(warning);
         }
     }
 
@@ -259,6 +281,8 @@ public class ConversationController {
             live.appendCommitted(writer, BANNER);
             output.appendLine("输入 /help 查看命令，/quit 退出");
             live.appendCommitted(writer, "输入 /help 查看命令，/quit 退出");
+            // MCP 连接放在 banner 之后：先让用户看到界面，再等外部 server 握手
+            connectMcp();
             // 恢复会话后再构建 system 提示：注入的是恢复后的状态（projectRoot 也已定型）
             restoreIfResume();
             initSessionState();
@@ -389,33 +413,35 @@ public class ConversationController {
         }
     }
 
-    /** 组装 /memory 的输出行（纯函数，便于直接断言） */
+    /** 组装 /memory 的输出行：状态/提取结果，末尾附带待取的记忆告警（取走即清） */
     List<String> memoryCommandLines(String arg) {
+        List<String> lines = new ArrayList<>();
         if ("run".equalsIgnoreCase(arg)) {
             MemoryExtractor.Outcome outcome = memoryManager.extractNow();
             if (outcome.failed()) {
-                return List.of("记忆提取失败（未写入任何文件）");
+                lines.add("记忆提取失败（未写入任何文件）");
+            } else if (outcome.nothing()) {
+                lines.add("（没有值得记忆的内容）");
+            } else {
+                lines.add("记忆提取完成：新增 " + outcome.created() + " · 更新 " + outcome.updated()
+                        + " · 删除 " + outcome.deleted());
             }
-            if (outcome.nothing()) {
-                return List.of("（没有值得记忆的内容）");
+        } else {
+            List<MemoryStore.IndexView> views = memoryManager.store().indexViews();
+            StringBuilder counts = new StringBuilder("长期记忆：");
+            for (int i = 0; i < views.size(); i++) {
+                if (i > 0) {
+                    counts.append(" · ");
+                }
+                counts.append(views.get(i).label()).append(' ').append(views.get(i).memoryCount()).append(" 条");
             }
-            return List.of("记忆提取完成：新增 " + outcome.created() + " · 更新 " + outcome.updated()
-                    + " · 删除 " + outcome.deleted());
-        }
-        List<MemoryStore.IndexView> views = memoryManager.store().indexViews();
-        StringBuilder counts = new StringBuilder("长期记忆：");
-        for (int i = 0; i < views.size(); i++) {
-            if (i > 0) {
-                counts.append(" · ");
+            lines.add(counts.toString());
+            for (MemoryStore.IndexView view : views) {
+                lines.add(view.label() + "索引：" + view.indexLines() + " 行 / " + view.indexBytes() + " B"
+                        + (view.truncated() ? "（已截断）" : ""));
             }
-            counts.append(views.get(i).label()).append(' ').append(views.get(i).memoryCount()).append(" 条");
         }
-        List<String> lines = new ArrayList<>();
-        lines.add(counts.toString());
-        for (MemoryStore.IndexView view : views) {
-            lines.add(view.label() + "索引：" + view.indexLines() + " 行 / " + view.indexBytes() + " B"
-                    + (view.truncated() ? "（已截断）" : ""));
-        }
+        lines.addAll(memoryManager.drainWarnings());
         return lines;
     }
 

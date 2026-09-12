@@ -18,8 +18,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * T8 装配集成：构造 ConversationController（配置了 mcp_servers）→ 构造器连接并注册 MCP 工具 →
- * 首轮 Agent 请求的工具列表已含 MCP 工具名（注册时机在 Agent 首次构建前）。
+ * T8 装配集成：构造 ConversationController（配置了 mcp_servers）→ 显式驱动 connectMcp()
+ * （真实流程由 start() 在 banner 输出后调用）→ 首轮 Agent 请求的工具列表已含 MCP 工具名
+ * （注册时机在 Agent 首次构建前）。
  */
 class McpWiringTest {
 
@@ -45,8 +46,12 @@ class McpWiringTest {
         ConversationController controller = new ConversationController(provider, config, false);
         try {
             controller.setProjectRoot(tempDir); // 会话/记忆落盘必须落在临时目录，不得写进真实仓库
-            controller.setOutput(new OutputPane());
+            OutputPane output = new OutputPane();
+            controller.setOutput(output);
             controller.setScreenWriter(new StringWriter());
+            controller.connectMcp(); // 真实流程里由 start() 在 banner 之后就调用
+            assertTrue(output.lines().stream().anyMatch(line -> line.contains("正在连接 MCP server：srv")),
+                    "连接提示应进输出区而非裸 stderr：" + output.lines());
             controller.handleExchange("hello", () -> false, () -> { });
             var requests = provider.receivedRequests();
             assertFalse(requests.isEmpty(), "应发出首轮请求");

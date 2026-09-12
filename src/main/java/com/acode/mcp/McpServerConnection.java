@@ -8,6 +8,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -25,6 +26,7 @@ public class McpServerConnection implements AutoCloseable {
     private final McpServerConfig config;
     private final Path workingDirectory;
     private final Function<McpServerConfig, Transport> transportFactory;
+    private final Consumer<String> warningSink;
     private final ReentrantLock connectLock = new ReentrantLock();
     private final AtomicInteger connectCount = new AtomicInteger();
 
@@ -33,16 +35,23 @@ public class McpServerConnection implements AutoCloseable {
     private volatile List<McpToolWrapper> discoveredTools = List.of();
 
     public McpServerConnection(String name, McpServerConfig config, Path workingDirectory) {
-        this(name, config, workingDirectory, null);
+        this(name, config, workingDirectory, null, null);
     }
 
     /** 包可见：测试注入 transport 工厂（每次建连调用一次）。 */
     McpServerConnection(String name, McpServerConfig config, Path workingDirectory,
                         Function<McpServerConfig, Transport> transportFactory) {
+        this(name, config, workingDirectory, transportFactory, null);
+    }
+
+    /** warningSink 收拢握手期告警，透传给每次新建的 client；null 表示丢弃。 */
+    McpServerConnection(String name, McpServerConfig config, Path workingDirectory,
+                        Function<McpServerConfig, Transport> transportFactory, Consumer<String> warningSink) {
         this.name = name;
         this.config = config;
         this.workingDirectory = workingDirectory;
         this.transportFactory = transportFactory != null ? transportFactory : this::buildTransport;
+        this.warningSink = warningSink;
     }
 
     /** 连接（关旧建新）→ 握手 → 工具发现并缓存适配器。幂等；与 close/重连互斥。 */
@@ -83,7 +92,7 @@ public class McpServerConnection implements AutoCloseable {
     private McpClient buildClient() {
         Transport transport = transportFactory.apply(config);
         transport.start();
-        return new McpClient(transport, Duration.ofSeconds(config.timeoutSeconds()));
+        return new McpClient(transport, Duration.ofSeconds(config.timeoutSeconds()), warningSink);
     }
 
     private Transport buildTransport(McpServerConfig config) {

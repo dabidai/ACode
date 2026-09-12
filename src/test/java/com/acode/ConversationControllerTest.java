@@ -455,6 +455,8 @@ class ConversationControllerTest {
                 List.of(FakeProvider.delta("普通回答"), FakeProvider.complete())));
         ConversationController controller = new ConversationController(provider, config(), false);
         controller.setProjectRoot(tempDir);
+        // 提示词在构造函数里就用默认项目根建好了，换根之后必须重建才会取到隔离后的索引
+        controller.initSessionState();
         OutputPane output = new OutputPane();
         controller.setOutput(output);
         controller.handleExchange("你好", () -> false, () -> { });

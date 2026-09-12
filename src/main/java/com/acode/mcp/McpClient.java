@@ -14,6 +14,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
  * MCP 协议客户端：初始化握手（版本协商容错）→ initialized 通知 → 工具发现（含分页）→ 工具调用。
@@ -29,21 +30,28 @@ public class McpClient {
 
     private final Transport transport;
     private final Duration timeout;
+    private final Consumer<String> warningSink;
     private final AtomicLong nextId = new AtomicLong();
     private final Map<String, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
 
     public McpClient(Transport transport) {
-        this(transport, DEFAULT_TIMEOUT);
+        this(transport, DEFAULT_TIMEOUT, null);
     }
 
     public McpClient(Transport transport, Duration timeout) {
+        this(transport, timeout, null);
+    }
+
+    /** warningSink 收拢握手期告警（如协议版本不一致）；null 表示丢弃，不打 stderr。 */
+    public McpClient(Transport transport, Duration timeout, Consumer<String> warningSink) {
         this.transport = transport;
         this.timeout = timeout == null ? DEFAULT_TIMEOUT : timeout;
+        this.warningSink = warningSink == null ? message -> { } : warningSink;
         transport.setMessageHandler(this::dispatch);
         transport.setTerminationHandler(this::failAllPending);
     }
 
-    /** 握手：发 initialize、协议版本不一致仅警告不中断，随后发 initialized 通知。 */
+    /** 握手：发 initialize、协议版本不一致仅告警不中断，随后发 initialized 通知。 */
     public void initialize() {
         ObjectNode params = JSON.createObjectNode();
         params.put("protocolVersion", PROTOCOL_VERSION);
@@ -54,7 +62,7 @@ public class McpClient {
         JsonNode result = sendRequest("initialize", params);
         String serverVersion = result.path("protocolVersion").asText("");
         if (!PROTOCOL_VERSION.equals(serverVersion)) {
-            System.err.println("警告：MCP server 协议版本 " + serverVersion
+            warningSink.accept("警告：MCP server 协议版本 " + serverVersion
                     + " 与客户端 " + PROTOCOL_VERSION + " 不一致，继续连接");
         }
         sendNotification("notifications/initialized", JSON.createObjectNode());

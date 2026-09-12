@@ -12,7 +12,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -36,8 +35,8 @@ class McpEndToEndTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    @TempDir
-    Path tempDir;
+    /** 子进程 CWD：不可用 @TempDir，原因见 {@link SubprocessWorkingDir} */
+    private static final Path WORK_DIR = SubprocessWorkingDir.get();
 
     /** 用当前测试 JVM 的完整 classpath 启动 FakeMcpServer 子进程（surefire 下含依赖 jar） */
     private static List<String> fakeServerCommand() {
@@ -76,7 +75,7 @@ class McpEndToEndTest {
     @Test
     void stdioEndToEnd() {
         ToolRegistry registry = new ToolRegistry();
-        McpManager manager = new McpManager(configWith("srv", stdioServerYaml()), tempDir);
+        McpManager manager = new McpManager(configWith("srv", stdioServerYaml()), WORK_DIR);
         manager.connectAll();
         manager.registerTools(registry);
         Tool echo = registry.get("srv_echo");
@@ -95,7 +94,7 @@ class McpEndToEndTest {
                     + ":" + server.getAddress().getPort() + "/";
             ToolRegistry registry = new ToolRegistry();
             McpManager manager = new McpManager(
-                    configWith("http_srv", Map.of("type", "http", "url", url, "timeout", 5)), tempDir);
+                    configWith("http_srv", Map.of("type", "http", "url", url, "timeout", 5)), WORK_DIR);
             manager.connectAll();
             manager.registerTools(registry);
             Tool echo = registry.get("http_srv_echo");
@@ -112,7 +111,7 @@ class McpEndToEndTest {
     @Test
     void lazyReconnectAfterSubprocessKill() {
         ToolRegistry registry = new ToolRegistry();
-        McpManager manager = new McpManager(configWith("srv", stdioServerYaml()), tempDir);
+        McpManager manager = new McpManager(configWith("srv", stdioServerYaml()), WORK_DIR);
         manager.connectAll();
         manager.registerTools(registry);
         Tool echo = registry.get("srv_echo");
@@ -130,7 +129,7 @@ class McpEndToEndTest {
     @Test
     void permissionMapsFromServerConfigEndToEnd() {
         ToolRegistry readRegistry = new ToolRegistry();
-        McpManager readManager = new McpManager(configWith("read_srv", readServerYaml()), tempDir);
+        McpManager readManager = new McpManager(configWith("read_srv", readServerYaml()), WORK_DIR);
         readManager.connectAll();
         readManager.registerTools(readRegistry);
         Tool readTool = readRegistry.get("read_srv_echo");
@@ -138,7 +137,7 @@ class McpEndToEndTest {
         assertEquals(Permission.READ, readTool.permission(), "声明 read 的 server 工具应为 READ（plan 模式可见）");
 
         ToolRegistry defaultRegistry = new ToolRegistry();
-        McpManager defaultManager = new McpManager(configWith("srv", stdioServerYaml()), tempDir);
+        McpManager defaultManager = new McpManager(configWith("srv", stdioServerYaml()), WORK_DIR);
         defaultManager.connectAll();
         defaultManager.registerTools(defaultRegistry);
         Tool defaultTool = defaultRegistry.get("srv_echo");

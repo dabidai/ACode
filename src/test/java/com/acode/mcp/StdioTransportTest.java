@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -29,8 +28,8 @@ class StdioTransportTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    @TempDir
-    Path tempDir;
+    /** 子进程 CWD：不可用 @TempDir，原因见 {@link SubprocessWorkingDir} */
+    private static final Path WORK_DIR = SubprocessWorkingDir.get();
 
     /** 用当前测试 JVM 的完整 classpath 启动 FakeMcpServer 子进程（surefire 下含依赖 jar） */
     private static List<String> fakeServerCommand() {
@@ -42,7 +41,7 @@ class StdioTransportTest {
 
     @Test
     void sendRequestReceivesResponseCallback() throws Exception {
-        StdioTransport transport = new StdioTransport(fakeServerCommand(), tempDir);
+        StdioTransport transport = new StdioTransport(fakeServerCommand(), WORK_DIR);
         try {
             CountDownLatch responseLatch = new CountDownLatch(1);
             AtomicReference<JsonRpcMessage> received = new AtomicReference<>();
@@ -64,7 +63,7 @@ class StdioTransportTest {
 
     @Test
     void subprocessDeathMarksDeadAndTriggersTermination() throws Exception {
-        StdioTransport transport = new StdioTransport(fakeServerCommand(), tempDir);
+        StdioTransport transport = new StdioTransport(fakeServerCommand(), WORK_DIR);
         CountDownLatch terminated = new CountDownLatch(1);
         transport.setTerminationHandler(terminated::countDown);
         transport.start();
@@ -80,7 +79,7 @@ class StdioTransportTest {
 
     @Test
     void closeDestroysSubprocessAndMarksDead() throws Exception {
-        StdioTransport transport = new StdioTransport(fakeServerCommand(), tempDir);
+        StdioTransport transport = new StdioTransport(fakeServerCommand(), WORK_DIR);
         CountDownLatch terminated = new CountDownLatch(1);
         transport.setTerminationHandler(terminated::countDown);
         transport.start();
@@ -114,7 +113,7 @@ class StdioTransportTest {
                 .filter(k -> !whitelist.contains(k) && !k.isBlank())
                 .findFirst()
                 .orElse("ACODE_TEST_UNSET");
-        StdioTransport transport = new StdioTransport(fakeServerCommand(), tempDir);
+        StdioTransport transport = new StdioTransport(fakeServerCommand(), WORK_DIR);
         try {
             CountDownLatch latch = new CountDownLatch(2);
             ConcurrentHashMap<String, String> responses = new ConcurrentHashMap<>();

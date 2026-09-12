@@ -8,7 +8,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
@@ -38,8 +37,8 @@ class McpToolWrapperTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    @TempDir
-    Path tempDir;
+    /** 子进程 CWD：不可用 @TempDir，原因见 {@link SubprocessWorkingDir} */
+    private static final Path WORK_DIR = SubprocessWorkingDir.get();
 
     /** 用当前测试 JVM 的完整 classpath 启动 FakeMcpServer 子进程（surefire 下含依赖 jar） */
     private static List<String> fakeServerCommand() {
@@ -59,7 +58,7 @@ class McpToolWrapperTest {
     }
 
     private McpServerConnection connection(String name) {
-        return new McpServerConnection(name, stdioConfig(name, 5), tempDir);
+        return new McpServerConnection(name, stdioConfig(name, 5), WORK_DIR);
     }
 
     private static McpToolWrapper wrapperFor(McpServerConnection connection, String toolName) {
@@ -158,9 +157,9 @@ class McpToolWrapperTest {
             if (created.incrementAndGet() > 1) {
                 return new FailingTransport();
             }
-            return new StdioTransport(fakeServerCommand(), tempDir);
+            return new StdioTransport(fakeServerCommand(), WORK_DIR);
         };
-        McpServerConnection connection = new McpServerConnection("srv", stdioConfig("srv", 5), tempDir, factory);
+        McpServerConnection connection = new McpServerConnection("srv", stdioConfig("srv", 5), WORK_DIR, factory);
         connection.connect();
         connection.callTool("kill", JSON.createObjectNode());
         awaitDead(connection);

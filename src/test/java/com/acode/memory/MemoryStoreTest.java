@@ -107,6 +107,41 @@ class MemoryStoreTest {
     }
 
     @Test
+    void nonMemoryFilesInTheRootAreIgnoredWithoutWarning() throws IOException {
+        store.write(MemoryType.USER, "good", "正常", "正文");
+        Files.createDirectories(user.root());
+        Files.writeString(user.root().resolve("notes.md"), "用户自己的笔记");
+        Files.writeString(user.root().resolve("README.md"), "# 目录说明");
+
+        assertEquals(List.of("good"), store.list(user).stream().map(MemoryFile::name).toList());
+        assertTrue(store.drainWarnings().isEmpty(), "非记忆文件既不该列出，也不该告警");
+    }
+
+    @Test
+    void repeatedWarningsAreRecordedOnlyOnce() throws IOException {
+        Files.createDirectories(user.root());
+        Files.writeString(user.root().resolve("user-broken.md"), "没有 frontmatter");
+
+        store.list(user);
+        store.list(user);
+        store.list(user);
+
+        assertEquals(1, store.drainWarnings().size(), "同一告警重复出现只该记一次");
+        assertTrue(store.drainWarnings().isEmpty(), "取走后缓冲应清空");
+    }
+
+    @Test
+    void aWarningCanBeReportedAgainAfterBeingDrained() throws IOException {
+        Files.createDirectories(user.root());
+        Files.writeString(user.root().resolve("user-broken.md"), "没有 frontmatter");
+
+        store.list(user);
+        assertEquals(1, store.drainWarnings().size());
+        store.list(user);
+        assertEquals(1, store.drainWarnings().size(), "取走之后同一问题应能再次上报");
+    }
+
+    @Test
     void injectionTextPutsProjectLevelFirst() {
         store.write(MemoryType.PROJECT, "deadline", "项目知识摘要", "正文");
         store.write(MemoryType.USER, "any", "用户偏好摘要", "正文");
@@ -117,6 +152,18 @@ class MemoryStoreTest {
         assertTrue(projectAt >= 0 && userAt >= 0, text);
         assertTrue(projectAt < userAt, "项目级索引必须排在用户级之前：" + text);
         assertFalse(text.contains("MEMORY.md"), "索引只存指针，不含索引文件名本身");
+        assertTrue(text.contains("## Project\n"), "项目级段落应带层级小标题：" + text);
+        assertTrue(text.contains("## User\n"), "用户级段落应带层级小标题：" + text);
+        assertTrue(text.indexOf("## Project") < text.indexOf("## User"), text);
+    }
+
+    @Test
+    void injectionTextOnlyLabelsTheLevelsThatHaveMemories() {
+        store.write(MemoryType.USER, "any", "用户偏好摘要", "正文");
+
+        String text = store.injectionText();
+        assertTrue(text.startsWith("## User\n"), text);
+        assertFalse(text.contains("## Project"), "空的一级不应出现小标题：" + text);
     }
 
     @Test
@@ -150,6 +197,18 @@ class MemoryStoreTest {
         assertTrue(view.indexLines() < 30, "体积超限应先于行数上限生效：" + view.indexLines());
         assertTrue(view.indexBytes() <= MemoryStore.INDEX_MAX_BYTES);
         assertTrue(view.text().endsWith(MemoryStore.INDEX_TRUNCATED_MARK));
+    }
+
+    @Test
+    void lineLimitTruncationAlsoKeepsTheMarkInsideTheByteLimit() throws IOException {
+        // 行数触顶留下的 200 行本就接近体积上限：截断标记同样必须落进上限内
+        seed(user, MemoryType.USER, MemoryStore.INDEX_MAX_LINES + 1, "d".repeat(130));
+        MemoryStore.IndexView view = store.loadIndex(user);
+
+        assertTrue(view.truncated());
+        assertTrue(view.text().endsWith(MemoryStore.INDEX_TRUNCATED_MARK));
+        assertTrue(view.indexBytes() <= MemoryStore.INDEX_MAX_BYTES,
+                "含截断标记的注入文本超限：" + view.indexBytes());
     }
 
     @Test

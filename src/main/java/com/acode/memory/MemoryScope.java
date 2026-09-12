@@ -81,7 +81,10 @@ public final class MemoryScope {
         return candidate.startsWith(root) ? candidate : null;
     }
 
-    /** 本根内全部 {@code .md}（不含索引文件），按文件名排序 */
+    /**
+     * 本根内的记忆文件（文件名须匹配 {@link #FILE_NAME}），按文件名排序。
+     * 目录里其余 {@code .md} 是用户自有文件，不列出也不告警；索引文件被白名单天然排除。
+     */
     public List<Path> files() {
         Path root = root();
         if (!Files.isDirectory(root)) {
@@ -90,8 +93,8 @@ public final class MemoryScope {
         try (Stream<Path> stream = Files.list(root)) {
             List<Path> files = new ArrayList<>();
             for (Path path : stream.sorted().toList()) {
-                String name = path.getFileName().toString();
-                if (name.endsWith(".md") && !INDEX_FILE.equals(name) && Files.isRegularFile(path)) {
+                if (FILE_NAME.matcher(path.getFileName().toString()).matches()
+                        && Files.isRegularFile(path)) {
                     files.add(path);
                 }
             }

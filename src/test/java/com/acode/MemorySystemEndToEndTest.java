@@ -271,6 +271,32 @@ class MemorySystemEndToEndTest {
                 "启动告警不得阻断对话");
     }
 
+    @Test
+    void memoryWarningsRaisedByExtractionReachTheUiInSession() throws IOException {
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.delta("回答一"), FakeProvider.complete()),
+                List.of(FakeProvider.delta("[]"), FakeProvider.complete()),
+                List.of(FakeProvider.delta("回答二"), FakeProvider.complete()),
+                List.of(FakeProvider.delta("[]"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(200_000), false);
+        controller.setProjectRoot(projectRoot);
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+        controller.setScreenWriter(new StringWriter());
+        controller.initSessionState();
+
+        // 构造之后再放坏文件：启动那次索引加载看不到它，告警只能由提取产生
+        write(fakeHome.resolve(".acode").resolve("memory").resolve("user-broken.md"), "没有 frontmatter");
+
+        controller.handleExchange("你好", () -> false, () -> { });
+        awaitRuns(controller, 1);
+        controller.handleExchange("继续", () -> false, () -> { });
+        awaitRuns(controller, 2);
+
+        assertTrue(output.lines().stream().anyMatch(line -> line.contains("头部残缺")),
+                "提取产生的告警应在会话内渲染，而不是攒到下次启动：" + output.lines());
+    }
+
     private static Set<Path> filesUnder(Path root) throws IOException {
         try (Stream<Path> stream = Files.walk(root)) {
             return stream.filter(Files::isRegularFile).collect(Collectors.toCollection(TreeSet::new));
@@ -278,8 +304,13 @@ class MemorySystemEndToEndTest {
     }
 
     private static void awaitExtraction(ConversationController controller) throws IOException {
+        awaitRuns(controller, 1);
+    }
+
+    /** 等到已收尾的提取轮次达到 runs（含解析失败轮次） */
+    private static void awaitRuns(ConversationController controller, int runs) throws IOException {
         long deadline = System.currentTimeMillis() + 5000;
-        while (controller.memoryManager().scheduler().completedRuns() < 1
+        while (controller.memoryManager().scheduler().completedRuns() < runs
                 && System.currentTimeMillis() < deadline) {
             try {
                 Thread.sleep(10);
@@ -288,7 +319,7 @@ class MemorySystemEndToEndTest {
                 throw new IOException("等待提取收尾被中断", e);
             }
         }
-        assertEquals(1, controller.memoryManager().scheduler().completedRuns(),
-                "一轮对话结束后应完成一次提取");
+        assertEquals(runs, controller.memoryManager().scheduler().completedRuns(),
+                "一轮对话结束后应完成 " + runs + " 次提取");
     }
 }

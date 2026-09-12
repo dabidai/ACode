@@ -111,8 +111,9 @@ public class Agent {
     }
 
     /**
-     * 一轮自然结束（模型给出最终回复、不再调用工具）后触发一次异步记忆提取。
-     * 提取跑在后台虚拟线程、失败只记日志，绝不能影响本轮收尾。
+     * 一轮自然结束（模型给出最终回复、不再调用工具）后触发一次异步记忆提取，并就地取走累积的记忆告警。
+     * 提取跑在后台虚拟线程、失败只记日志，绝不能影响本轮收尾；告警在本轮收尾时渲染，
+     * 不等下次会话启动（异步提取写出的新告警最迟下一轮浮现）。
      */
     private void notifyTurnComplete() {
         if (memoryManager == null) {
@@ -120,8 +121,11 @@ public class Agent {
         }
         try {
             memoryManager.onTurnComplete();
+            for (String warning : memoryManager.drainWarnings()) {
+                emit(new Notice(warning));
+            }
         } catch (RuntimeException e) {
-            log.warn("触发记忆提取失败：{}", e.getMessage());
+            log.warn("记忆收尾失败：{}", e.getMessage());
         }
     }
 

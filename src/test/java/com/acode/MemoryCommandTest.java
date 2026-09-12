@@ -159,6 +159,31 @@ class MemoryCommandTest {
     }
 
     @Test
+    void runReportsSkippedElements() {
+        List<String> lines = controller(FakeProvider.streaming(
+                "[{\"op\":\"create\",\"type\":\"user\",\"name\":\"good\",\"description\":\"y\"},"
+                        + " {\"op\":\"nope\"}]")).memoryCommandLines("run");
+
+        assertEquals("记忆提取完成：新增 1 · 更新 0 · 删除 0", lines.get(0));
+        assertTrue(lines.stream().anyMatch(l -> l.contains("1 条操作格式非法")),
+                "跳过的条数应出现在 /memory 输出里：" + lines);
+    }
+
+    @Test
+    void statusSurfacesPendingWarnings() throws IOException {
+        ConversationController controller = controller(FakeProvider.streaming("[]"));
+        // 构造之后再放坏文件：启动时那次 drain 看不到它，告警只能由本次命令产生
+        Files.createDirectories(userMemoryDir());
+        Files.writeString(userMemoryDir().resolve("user-broken.md"), "没有 frontmatter",
+                StandardCharsets.UTF_8);
+
+        List<String> lines = controller.memoryCommandLines("");
+
+        assertTrue(lines.stream().anyMatch(l -> l.contains("头部残缺")),
+                "本命令自己产生的告警应随输出返回：" + lines);
+    }
+
+    @Test
     void manualRunStillWorksWhenAutoExtractionIsDisabled() {
         AppConfig config = config();
         config.setMemoryAuto(false);

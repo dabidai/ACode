@@ -1,7 +1,5 @@
 package com.acode.memory;
 
-import java.util.List;
-
 /**
  * 四类长期记忆与归属根。用户偏好 / 纠正反馈跨项目共享（用户级），
  * 项目知识 / 参考信息随项目走（项目级）。
@@ -27,11 +25,6 @@ public enum MemoryType {
 
     public MemoryScope.Kind scopeKind() {
         return scopeKind;
-    }
-
-    /** 固定枚举顺序：项目级在前、用户级在后——与索引注入顺序同源 */
-    public static List<MemoryType> inOrder() {
-        return List.of(PROJECT, REFERENCE, USER, FEEDBACK);
     }
 
     /** 按 slug 解析；非四类之一返回 null */

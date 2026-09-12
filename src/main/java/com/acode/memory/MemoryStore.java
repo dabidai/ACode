@@ -25,6 +25,8 @@ public class MemoryStore {
     /** 索引注入上限：体积（字节，先到者生效） */
     public static final int INDEX_MAX_BYTES = 25 * 1024;
     public static final String INDEX_TRUNCATED_MARK = "（记忆索引超限，已截断）";
+    /** 截断标记连同其前置换行占用的字节数：体积上限必须为它留位 */
+    private static final int MARK_COST = byteLength("\n" + INDEX_TRUNCATED_MARK);
 
     private static final Logger log = LoggerFactory.getLogger(MemoryStore.class);
     private static final Pattern INDEX_LINE = Pattern.compile("^- \\[.+]\\(([^)]+)\\).*$");
@@ -159,7 +161,7 @@ public class MemoryStore {
 
     /**
      * 读一个根的索引：悬空指针行忽略并告警，随后按行数与体积双上限截断（先到者生效）。
-     * 磁盘文件不被改写——截断只发生在注入路径上。
+     * 体积按真实拼接字节复核，截断标记本身也占预算。磁盘文件不被改写——截断只发生在注入路径上。
      */
     public IndexView loadIndex(MemoryScope scope) {
         int memoryCount = list(scope).size();
@@ -194,20 +196,10 @@ public class MemoryStore {
             kept = new ArrayList<>(kept.subList(0, INDEX_MAX_LINES));
             truncated = true;
         }
-        int bytes = kept.stream().mapToInt(l -> l.getBytes(StandardCharsets.UTF_8).length + 1).sum();
-        if (bytes > INDEX_MAX_BYTES) {
-            List<String> withinLimit = new ArrayList<>(kept.size());
-            int used = 0;
-            for (String line : kept) {
-                int size = line.getBytes(StandardCharsets.UTF_8).length + 1;
-                if (used + size > INDEX_MAX_BYTES) {
-                    break;
-                }
-                withinLimit.add(line);
-                used += size;
-            }
-            kept = withinLimit;
+        // 体积按真实拼接字节复核：行数触发的截断也要为标记留位，否则"守住上限"后仍会超限
+        if (truncated || byteLength(String.join("\n", kept)) > INDEX_MAX_BYTES) {
             truncated = true;
+            kept = fitWithin(kept, INDEX_MAX_BYTES - MARK_COST);
         }
         if (dangling > 0) {
             warn(scope.label() + "索引有 " + dangling + " 条悬空指针，已忽略");
@@ -217,9 +209,28 @@ public class MemoryStore {
         if (truncated) {
             text = text.isEmpty() ? INDEX_TRUNCATED_MARK : text + "\n" + INDEX_TRUNCATED_MARK;
         }
-        int finalBytes = text.getBytes(StandardCharsets.UTF_8).length;
+        int finalBytes = byteLength(text);
         return new IndexView(scope.label(), text, memoryCount, kept.size(), finalBytes,
                 truncated, dangling);
+    }
+
+    /** 从头逐行装入直到拼接字节超过 budget（行间换行算 1 字节，末尾无换行） */
+    private static List<String> fitWithin(List<String> lines, int budget) {
+        List<String> within = new ArrayList<>(lines.size());
+        int used = 0;
+        for (String line : lines) {
+            int size = byteLength(line) + (within.isEmpty() ? 0 : 1);
+            if (used + size > budget) {
+                break;
+            }
+            within.add(line);
+            used += size;
+        }
+        return within;
+    }
+
+    private static int byteLength(String text) {
+        return text.getBytes(StandardCharsets.UTF_8).length;
     }
 
     /** 两级索引视图：项目级在前、用户级在后 */
@@ -227,15 +238,21 @@ public class MemoryStore {
         return List.of(loadIndex(projectScope), loadIndex(userScope));
     }
 
-    /** 注入 system 提示的索引文本：项目级在前、用户级在后依次拼接；两级皆空则为空串 */
+    /** 注入 system 提示的索引文本：项目级、用户级各带层级小标题依次拼接；两级皆空则为空串 */
     public String injectionText() {
         List<String> parts = new ArrayList<>(2);
-        for (IndexView view : indexViews()) {
+        for (MemoryScope scope : List.of(projectScope, userScope)) {
+            IndexView view = loadIndex(scope);
             if (!view.text().isBlank()) {
-                parts.add(view.text());
+                parts.add(heading(scope) + "\n" + view.text());
             }
         }
         return String.join("\n", parts);
+    }
+
+    /** 模型可见的层级小标题（与 /memory 展示用的中文 label 分用） */
+    private static String heading(MemoryScope scope) {
+        return scope.kind() == MemoryScope.Kind.PROJECT ? "## Project" : "## User";
     }
 
     /** 取出并清空累计告警（供 UI 输出一次） */
@@ -245,7 +262,11 @@ public class MemoryStore {
         return drained;
     }
 
-    private void warn(String message) {
+    /** 记录一条告警：同一消息在被取走前只记一次（提取每轮都会重列记忆，否则同一条告警会反复刷屏） */
+    void warn(String message) {
+        if (warnings.contains(message)) {
+            return;
+        }
         log.warn("{}", message);
         warnings.add(message);
     }

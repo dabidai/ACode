@@ -23,7 +23,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 不经 {@code Conversation} 的历史组装，避免被裁剪或注入轮次提醒），把索引 + 现有记忆清单 +
  * 最近一轮对话发给模型，解析结构化操作列表后逐项落盘。
  *
- * <p>解析失败即整轮放弃（零写入）；单条落盘失败只跳过该项，其余项照常。
+ * <p>JSON 坏掉即整轮放弃（零写入）；数组内单个元素非法只跳过该元素并计数上报；
+ * 单条落盘失败只跳过该项，其余项照常。
  */
 public class MemoryExtractor {
 
@@ -61,8 +62,11 @@ public class MemoryExtractor {
         return calls.get();
     }
 
-    /** 发一次提取请求并解析；调用失败或解析失败都返回空（调用方据此零写入） */
-    public Optional<List<MemoryOperation>> extract() {
+    /** 一轮提取解析出的操作：{@code operations} 为合法项，{@code skipped} 为被跳过的非法元素数 */
+    public record Parsed(List<MemoryOperation> operations, int skipped) {}
+
+    /** 发一次提取请求并解析；调用失败或 JSON 坏掉都返回空（调用方据此零写入） */
+    public Optional<Parsed> extract() {
         calls.incrementAndGet();
         Collector collector = new Collector();
         provider.streamChat(request(), collector);
@@ -75,19 +79,25 @@ public class MemoryExtractor {
 
     /** 同步跑一轮：提取 + 落盘 */
     public Outcome run() {
-        Optional<List<MemoryOperation>> parsed = extract();
+        Optional<Parsed> parsed = extract();
         if (parsed.isEmpty()) {
             return Outcome.failure();
         }
         return apply(parsed.get());
     }
 
-    /** 逐项落盘；单条失败只跳过，其余照常 */
-    public Outcome apply(List<MemoryOperation> operations) {
+    /** 逐项落盘；非法元素在解析时已跳过，单条落盘失败只跳过该项，其余项照常 */
+    public Outcome apply(Parsed parsed) {
+        if (parsed.skipped() > 0) {
+            store.warn("记忆提取有 " + parsed.skipped() + " 条操作格式非法，已跳过");
+        }
+        if (parsed.operations().isEmpty() && parsed.skipped() > 0) {
+            return Outcome.failure(); // 一个合法项都没有
+        }
         int created = 0;
         int updated = 0;
         int deleted = 0;
-        for (MemoryOperation op : operations) {
+        for (MemoryOperation op : parsed.operations()) {
             switch (op.op()) {
                 case DELETE -> {
                     if (store.delete(op.fileName())) {
@@ -161,8 +171,11 @@ public class MemoryExtractor {
         return List.of();
     }
 
-    /** 解析模型输出为操作列表；非数组、元素结构非法、JSON 坏掉都返回空（整轮放弃） */
-    static Optional<List<MemoryOperation>> parse(String raw) {
+    /**
+     * 解析模型输出：JSON 坏掉、不是数组 → 空（整轮放弃）；
+     * 数组内单个元素不合法（op/type/name/description 结构不符）→ 只跳过该元素并计数，其余照常落盘。
+     */
+    static Optional<Parsed> parse(String raw) {
         if (raw == null) {
             return Optional.empty();
         }
@@ -182,14 +195,16 @@ public class MemoryExtractor {
             return Optional.empty();
         }
         List<MemoryOperation> operations = new ArrayList<>(array.size());
+        int skipped = 0;
         for (JsonNode node : array) {
             MemoryOperation operation = toOperation(node);
             if (operation == null) {
-                return Optional.empty();
+                skipped++;
+                continue;
             }
             operations.add(operation);
         }
-        return Optional.of(operations);
+        return Optional.of(new Parsed(operations, skipped));
     }
 
     private static MemoryOperation toOperation(JsonNode node) {

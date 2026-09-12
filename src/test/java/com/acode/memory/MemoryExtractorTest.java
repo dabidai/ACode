@@ -111,15 +111,27 @@ class MemoryExtractorTest {
                 "[{\"op\":\"create\",\"type\":\"mystery\",\"name\":\"x\",\"description\":\"y\"}]",
                 "[{\"op\":\"create\",\"type\":\"user\",\"name\":\"..\",\"description\":\"y\"}]",
                 "[{\"op\":\"nope\",\"type\":\"user\",\"name\":\"x\",\"description\":\"y\"}]",
-                "[{\"op\":\"create\",\"type\":\"user\",\"name\":\"good\",\"description\":\"y\"}, {\"op\":\"create\"}]",
         };
         long before = memoryFileCount();
         for (String raw : bad) {
             MemoryExtractor.Outcome outcome =
                     extractor(FakeProvider.streaming(raw), conversation()).run();
-            assertTrue(outcome.failed(), "应判定为整轮放弃：" + raw);
+            assertTrue(outcome.failed(), "JSON 坏掉或全为非法元素应判定整轮放弃：" + raw);
         }
-        assertEquals(before, memoryFileCount(), "解析失败必须零文件写入");
+        assertEquals(before, memoryFileCount(), "整轮放弃必须零文件写入");
+    }
+
+    @Test
+    void invalidElementIsSkippedWhileValidOnesAreWritten() throws Exception {
+        String raw = "[{\"op\":\"create\",\"type\":\"user\",\"name\":\"good\",\"description\":\"y\"},"
+                + " {\"op\":\"create\"}]";
+        MemoryExtractor.Outcome outcome = extractor(FakeProvider.streaming(raw), conversation()).run();
+
+        assertFalse(outcome.failed(), "单个非法元素不该拖垮整轮：" + raw);
+        assertEquals(1, outcome.created());
+        assertTrue(store.read("user-good.md").isPresent(), "同批里的合法元素应照常落盘");
+        assertTrue(store.drainWarnings().stream().anyMatch(w -> w.contains("1 条操作格式非法")),
+                "跳过的条数必须上报");
     }
 
     @Test

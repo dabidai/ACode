@@ -4,7 +4,6 @@ import com.acode.util.VirtualThreads;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -40,7 +39,7 @@ public class MemoryExtractionScheduler {
         }
         VirtualThreads.POOL.submit(() -> {
             try {
-                Optional<List<MemoryOperation>> operations = extractor.extract();
+                Optional<MemoryExtractor.Parsed> operations = extractor.extract();
                 if (operations.isEmpty()) {
                     lastOutcome.set(MemoryExtractor.Outcome.empty());
                     return;

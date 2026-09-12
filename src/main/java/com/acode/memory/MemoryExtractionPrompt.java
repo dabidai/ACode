@@ -16,10 +16,12 @@ public final class MemoryExtractionPrompt {
                 recent exchange of the conversation. Decide whether anything in it is worth
                 remembering long-term.
 
-                Operations:
-                - create a new memory file (frontmatter + body, then update the MEMORY.md index)
-                - update an existing memory file when its information changed
-                - delete an outdated memory file (and drop its index pointer)
+                Reply with the operations to perform. You never touch the files or the index
+                yourself: the caller writes the memory files and rebuilds MEMORY.md from your
+                operations, so refer to each memory by type and slug only.
+                - create: a memory that does not exist yet
+                - update: an existing memory whose information changed
+                - delete: an existing memory that is outdated
 
                 Memory types:
                 - user: the user's personal coding preferences and style requests

@@ -50,12 +50,6 @@ class MemoryScopeTest {
     }
 
     @Test
-    void typeOrderPutsProjectLevelFirst() {
-        assertEquals(java.util.List.of(MemoryType.PROJECT, MemoryType.REFERENCE,
-                MemoryType.USER, MemoryType.FEEDBACK), MemoryType.inOrder());
-    }
-
-    @Test
     void acceptsWellFormedFileNames() {
         for (String name : new String[]{"project-deadline.md", "user-any.md", "feedback-testing.md",
                 "reference-links.md", "project-a.md"}) {

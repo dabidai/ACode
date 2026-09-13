@@ -383,7 +383,8 @@ public class ConversationController {
                             conversation.estimateContextTokens(), conversation.maxContextTokens()),
                     this::selectMenu,
                     this::clearScreenAndNewSession,
-                    this::lastDeliveredPlanPath);
+                    this::lastDeliveredPlanPath,
+                    () -> this.deliveredPlanPath = null);
             // 上下文工厂：只有 args 每次不同，其余依赖装配时固定打包
             PermissionChecker checker = permissionChecker();
             ContextManager contexts = contextManager();

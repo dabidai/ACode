@@ -37,4 +37,8 @@ public interface UIController {
     default Path lastDeliveredPlanPath() {
         return null;
     }
+
+    /** 消费已交付的计划状态（/do 把计划发出后调用）：清空后回到"无计划"分支。默认 no-op（旧测试桩不必改） */
+    default void consumeDeliveredPlan() {
+    }
 }

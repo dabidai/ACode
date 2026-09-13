@@ -41,6 +41,7 @@ class PlanDoCommandTest {
         private final List<Boolean> planModes = new ArrayList<>();
         private Path planPath;
         private boolean cleared;
+        private boolean consumed;
 
         @Override
         public void appendSystemMessage(String text) {
@@ -77,6 +78,12 @@ class PlanDoCommandTest {
         @Override
         public Path lastDeliveredPlanPath() {
             return planPath;
+        }
+
+        @Override
+        public void consumeDeliveredPlan() {
+            consumed = true;
+            planPath = null;
         }
 
         void deliverPlan(Path path) {
@@ -155,6 +162,45 @@ class PlanDoCommandTest {
         assertEquals(List.of(false), ui.planModes, "应退出规划模式");
         assertEquals(List.of(plan), ui.submitted, "发出去的任务文本应为计划正文");
         assertEquals(List.of("（已退出规划模式，按计划开始执行）"), ui.messages);
+        assertTrue(ui.consumed, "计划发出后应消费该状态");
+    }
+
+    @Test
+    void doTwiceConsumesPlanSoSecondRunReportsNoPlan() throws Exception {
+        CommandRegistry registry = new CommandRegistry();
+        BuiltinCommands.registerAll(registry);
+        FakeUi ui = new FakeUi();
+        Path planFile = tempDir.resolve("plan-once.md");
+        Files.writeString(planFile, "计划正文", StandardCharsets.UTF_8);
+        ui.deliverPlan(planFile);
+
+        registry.find("do").handler().execute(build(null, ui));
+        assertEquals(List.of("计划正文"), ui.submitted, "第一次应执行已交付计划");
+
+        registry.find("do").handler().execute(build(null, ui));
+
+        assertEquals(List.of("计划正文"), ui.submitted, "第二次不应重复执行同一份计划");
+        assertEquals(List.of("（已退出规划模式，按计划开始执行）", "（已退出规划模式；没有可执行的计划）"),
+                ui.messages, "第二次应回到无计划分支");
+    }
+
+    @Test
+    void doKeepsPlanStateWhenPlanFileCannotBeRead() {
+        CommandRegistry registry = new CommandRegistry();
+        BuiltinCommands.registerAll(registry);
+        FakeUi ui = new FakeUi();
+        ui.deliverPlan(tempDir.resolve("missing-plan.md"));
+
+        registry.find("do").handler().execute(build(null, ui));
+
+        assertTrue(ui.submitted.isEmpty(), "读不到计划正文则不发出任务");
+        assertEquals(1, ui.messages.size(), "应输出一行读取失败提示");
+        assertTrue(ui.messages.get(0).startsWith("读取计划失败："), ui.messages.toString());
+        assertTrue(!ui.consumed, "读取失败不消费状态，用户可修好文件后重试");
+
+        registry.find("do").handler().execute(build(null, ui));
+        assertEquals(2, ui.messages.size(), "状态保留，再次 /do 仍走读取而非无计划分支");
+        assertTrue(ui.messages.get(1).startsWith("读取计划失败："), ui.messages.toString());
     }
 
     @Test

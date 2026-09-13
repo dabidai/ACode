@@ -29,7 +29,7 @@ class TerminalUIControllerTest {
                                                    Supplier<UIController.ContextUsage> usage,
                                                    BiFunction<List<MenuEntry>, String, Integer> menu) {
         return new TerminalUIController(output, render, submit, plan, usage, menu,
-                () -> { }, () -> null);
+                () -> { }, () -> null, () -> { });
     }
 
     @Test
@@ -111,7 +111,7 @@ class TerminalUIControllerTest {
         AtomicBoolean called = new AtomicBoolean();
         TerminalUIController ui = new TerminalUIController(new OutputPane(), renderContext(),
                 s -> { }, b -> { }, () -> new UIController.ContextUsage(0, 0), (e, t) -> -1,
-                () -> called.set(true), () -> null);
+                () -> called.set(true), () -> null, () -> { });
 
         ui.clearScreenAndNewSession();
 
@@ -123,13 +123,25 @@ class TerminalUIControllerTest {
         Path planPath = Path.of("plans", "plan-auth.md");
         TerminalUIController ui = new TerminalUIController(new OutputPane(), renderContext(),
                 s -> { }, b -> { }, () -> new UIController.ContextUsage(0, 0), (e, t) -> -1,
-                () -> { }, () -> planPath);
+                () -> { }, () -> planPath, () -> { });
 
         assertSame(planPath, ui.lastDeliveredPlanPath(), "计划落盘位置应来自注入的读取入口");
 
         TerminalUIController noPlan = new TerminalUIController(new OutputPane(), renderContext(),
                 s -> { }, b -> { }, () -> new UIController.ContextUsage(0, 0), (e, t) -> -1,
-                () -> { }, () -> null);
+                () -> { }, () -> null, () -> { });
         assertNull(noPlan.lastDeliveredPlanPath(), "无交付记录时应返回 null");
+    }
+
+    @Test
+    void consumeDeliveredPlanDelegatesToInjectedAction() {
+        AtomicBoolean called = new AtomicBoolean();
+        TerminalUIController ui = new TerminalUIController(new OutputPane(), renderContext(),
+                s -> { }, b -> { }, () -> new UIController.ContextUsage(0, 0), (e, t) -> -1,
+                () -> { }, () -> null, () -> called.set(true));
+
+        ui.consumeDeliveredPlan();
+
+        assertTrue(called.get(), "消费计划状态应委托注入的动作");
     }
 }

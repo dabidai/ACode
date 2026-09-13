@@ -44,6 +44,7 @@ import static com.acode.provider.ChatMessage.Role.USER;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -604,6 +605,11 @@ class CommandSystemEndToEndTest {
                 provider.receivedRequests().get(provider.receivedRequests().size() - 1).messages();
         assertEquals(Files.readString(plan, StandardCharsets.UTF_8), messages.get(messages.size() - 1).content(),
                 "执行模式应把计划正文发给 Agent");
+
+        assertNull(controller.lastDeliveredPlanPath(), "计划发出后应消费该状态");
+        line(controller, "/do");
+        assertEquals(chatBefore + 1, chatRequests(provider), "第二次 /do 回到无计划分支、不发对话请求");
+        assertTrue(output.lines().contains("（已退出规划模式；没有可执行的计划）"), output.lines().toString());
     }
 
     // ---- 组 10：补全候选来自可见清单、按注册顺序、前缀过滤 ----

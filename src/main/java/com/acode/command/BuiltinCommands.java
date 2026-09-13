@@ -116,7 +116,7 @@ public final class BuiltinCommands {
         });
     }
 
-    /** /do：切回非规划模式；有待执行计划时读取计划正文发给 Agent 开始执行，否则只切模式并如实告知 */
+    /** /do：切回非规划模式；有待执行计划时读取计划正文发给 Agent 开始执行并在发出后消费该状态，否则只切模式并如实告知 */
     static Command executePlan() {
         return new Command("do", List.of(), "切换到执行模式", "/do",
                 CommandType.LOCAL_UI, null, false, ctx -> {
@@ -129,6 +129,7 @@ public final class BuiltinCommands {
             try {
                 String content = Files.readString(planPath, StandardCharsets.UTF_8);
                 ctx.ui().submitUserInput(content);
+                ctx.ui().consumeDeliveredPlan();
                 emit(ctx.ui(), List.of("（已退出规划模式，按计划开始执行）"));
             } catch (IOException e) {
                 emit(ctx.ui(), List.of("读取计划失败：" + e.getMessage()));

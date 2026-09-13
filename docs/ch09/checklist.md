@@ -346,7 +346,7 @@ Token：45,230 / 200,000（23%）
 - [ ] 启动后 `/help` 能列出全部内置命令（注册中心在装配期注册完毕）
 - [ ] 内置命令清单集中在**同一处**声明（`grep -c "register" src/main/java/com/acode/command/BuiltinCommands.java` 反映全部命令数）
 - [ ] `docs/manual-test.md` 出现「阶段九」小节
-- [ ] `README.md` 命令表已无 `/permission-mode` 与 `/session`（`grep -n "permission-mode\|/session" README.md` 返回 0 条）
+- [ ] `README.md` 命令表已无 `/permission-mode` 与 `/session` **命令行**（`grep -nE '^\| ./(permission-mode|session)' README.md` 返回 0 条；`.acode/sessions/` 这类目录路径不计）
 - [ ] `README.md` 命令表含 `/resume`、`/status`、`/review` 与别名列；`/memory` 说明为"查看 / 创建三层指令文件"
 - [ ] `README.md` 的记忆功能描述已说明"长期记忆由 Agent 在对话中维护"（不再只写 `/memory` 查看）
 

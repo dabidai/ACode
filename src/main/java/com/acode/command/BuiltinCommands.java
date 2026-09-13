@@ -52,6 +52,9 @@ public final class BuiltinCommands {
         registry.register(permission());
         registry.register(status());
         registry.register(quit());
+        registry.register(clear());
+        registry.register(plan());
+        registry.register(executePlan());
     }
 
     /** /help：无参数按类型分三段（本地 / 本地界面 / 提示词）列出可见命令；带参数输出指定命令的详情 */
@@ -86,6 +89,51 @@ public final class BuiltinCommands {
     static Command quit() {
         return new Command("quit", List.of(), "退出程序", "/quit",
                 CommandType.LOCAL, null, false, ctx -> CommandResult.EXIT);
+    }
+
+    /** /clear：当前对话保存后开启新会话 → 清屏 → 输出提示（沿用既有三步语义与文案）；不发起模型请求 */
+    static Command clear() {
+        return new Command("clear", List.of(), "清除对话历史", "/clear",
+                CommandType.LOCAL_UI, null, false, ctx -> {
+            ctx.ui().clearScreenAndNewSession();
+            emit(ctx.ui(), List.of("（已清空）"));
+            return CommandResult.CONTINUE;
+        });
+    }
+
+    /** /plan：切换到规划模式；带参数时把参数作为任务描述发给 Agent 开始规划，不带参数只切模式并提示 */
+    static Command plan() {
+        return new Command("plan", List.of("p"), "切换到 Plan 模式", "/plan <任务>",
+                CommandType.LOCAL_UI, "<任务>", false, ctx -> {
+            ctx.ui().setPlanMode(true);
+            if (ctx.args() == null) {
+                emit(ctx.ui(), List.of("（已进入规划模式：只读探索，计划落盘到 .acode/plans/）"));
+            } else {
+                ctx.ui().submitUserInput(ctx.args());
+            }
+            return CommandResult.CONTINUE;
+        });
+    }
+
+    /** /do：切回非规划模式；有待执行计划时读取计划正文发给 Agent 开始执行，否则只切模式并如实告知 */
+    static Command executePlan() {
+        return new Command("do", List.of(), "切换到执行模式", "/do",
+                CommandType.LOCAL_UI, null, false, ctx -> {
+            ctx.ui().setPlanMode(false);
+            Path planPath = ctx.ui().lastDeliveredPlanPath();
+            if (planPath == null) {
+                emit(ctx.ui(), List.of("（已退出规划模式；没有可执行的计划）"));
+                return CommandResult.CONTINUE;
+            }
+            try {
+                String content = Files.readString(planPath, StandardCharsets.UTF_8);
+                ctx.ui().submitUserInput(content);
+                emit(ctx.ui(), List.of("（已退出规划模式，按计划开始执行）"));
+            } catch (IOException e) {
+                emit(ctx.ui(), List.of("读取计划失败：" + e.getMessage()));
+            }
+            return CommandResult.CONTINUE;
+        });
     }
 
     /** /compact：占用低于阈值直接提示无需压缩；否则走既有手动压缩路径（三段式输出 + 失败兜底），带参数时作为保留重点 */

@@ -4,15 +4,19 @@ import com.acode.config.AppConfig;
 import org.junit.jupiter.api.Test;
 
 import java.io.StringWriter;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TerminalUIControllerTest {
 
@@ -24,7 +28,8 @@ class TerminalUIControllerTest {
                                                    Consumer<String> submit, Consumer<Boolean> plan,
                                                    Supplier<UIController.ContextUsage> usage,
                                                    BiFunction<List<MenuEntry>, String, Integer> menu) {
-        return new TerminalUIController(output, render, submit, plan, usage, menu);
+        return new TerminalUIController(output, render, submit, plan, usage, menu,
+                () -> { }, () -> null);
     }
 
     @Test
@@ -99,5 +104,32 @@ class TerminalUIControllerTest {
                 s -> { }, b -> { }, () -> new UIController.ContextUsage(0, 0), (e, t) -> -1);
 
         assertEquals(-1, ui.selectMenu(List.of(MenuEntry.item("A")), null), "取消应返回 -1");
+    }
+
+    @Test
+    void clearScreenAndNewSessionDelegatesToInjectedAction() {
+        AtomicBoolean called = new AtomicBoolean();
+        TerminalUIController ui = new TerminalUIController(new OutputPane(), renderContext(),
+                s -> { }, b -> { }, () -> new UIController.ContextUsage(0, 0), (e, t) -> -1,
+                () -> called.set(true), () -> null);
+
+        ui.clearScreenAndNewSession();
+
+        assertTrue(called.get(), "清屏开新会话应委托注入的动作");
+    }
+
+    @Test
+    void lastDeliveredPlanPathReturnsInjectedSupplierValue() {
+        Path planPath = Path.of("plans", "plan-auth.md");
+        TerminalUIController ui = new TerminalUIController(new OutputPane(), renderContext(),
+                s -> { }, b -> { }, () -> new UIController.ContextUsage(0, 0), (e, t) -> -1,
+                () -> { }, () -> planPath);
+
+        assertSame(planPath, ui.lastDeliveredPlanPath(), "计划落盘位置应来自注入的读取入口");
+
+        TerminalUIController noPlan = new TerminalUIController(new OutputPane(), renderContext(),
+                s -> { }, b -> { }, () -> new UIController.ContextUsage(0, 0), (e, t) -> -1,
+                () -> { }, () -> null);
+        assertNull(noPlan.lastDeliveredPlanPath(), "无交付记录时应返回 null");
     }
 }

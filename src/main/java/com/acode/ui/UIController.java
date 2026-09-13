@@ -1,5 +1,6 @@
 package com.acode.ui;
 
+import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -27,4 +28,13 @@ public interface UIController {
 
     /** 弹出交互式选择菜单：条目与标题由调用方给出；返回选中下标，取消返回 -1 */
     int selectMenu(List<MenuEntry> entries, String title);
+
+    /** 清屏并开启新会话（/clear 用）：当前对话保存后开启新会话，然后清空屏幕与输出区。默认 no-op（旧测试桩不必改） */
+    default void clearScreenAndNewSession() {
+    }
+
+    /** 读取最近一次规划交付的计划落盘位置（/do 用）；无交付记录时为 null。默认返回 null */
+    default Path lastDeliveredPlanPath() {
+        return null;
+    }
 }

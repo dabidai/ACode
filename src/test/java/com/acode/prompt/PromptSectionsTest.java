@@ -68,6 +68,21 @@ class PromptSectionsTest {
     }
 
     @Test
+    void behaviorContainsMemoryWriteConvention() {
+        String c = PromptSections.behaviorSection().content();
+        assertTrue(c.contains("asks you to remember"), c);
+        assertTrue(c.contains("memory root"), c);
+        assertTrue(c.contains("MEMORY.md index in sync"), c);
+    }
+
+    @Test
+    void memoryIndexSectionPointsToMemoryRootPaths() {
+        String c = PromptSections.memoryIndexSection("X").content();
+        assertTrue(c.contains("memory root path"), c);
+        assertTrue(c.contains("read the linked file"), c);
+    }
+
+    @Test
     void toolUsageHasSixToolMappings() {
         String c = PromptSections.toolUsageSection().content();
         assertTrue(c.contains("Use ReadFile instead of cat"));

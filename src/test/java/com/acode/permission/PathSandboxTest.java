@@ -1,11 +1,13 @@
 package com.acode.permission;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -102,6 +104,63 @@ class PathSandboxTest {
     void allowsCaseInsensitiveVariantOnWindows() {
         // Windows 文件系统大小写不敏感：解析后 real path 归一化 → 仍在项目内
         assertTrue(sandbox().check("SRC\\MAIN\\JAVA\\A.java"));
+    }
+
+    @Test
+    void allowsPathInsideExtraRootOutsideTmpdir() throws IOException {
+        // junit @TempDir 落在 java.io.tmpdir 下：额外根必须放在 tmpdir 之外（用户主目录）才能证明放行来自额外根
+        Path base = Files.createTempDirectory(Path.of(System.getProperty("user.home")), "acode-sandbox-");
+        Path memoryRoot = base.resolve("memory");
+        Files.createDirectories(memoryRoot);
+        try {
+            PathSandbox sb = new PathSandbox(projectRoot, List.of(memoryRoot));
+            assertTrue(sb.check(memoryRoot.resolve("user-x.md").toString()),
+                    "项目与临时目录之外的额外根应放行");
+            assertTrue(sb.check(memoryRoot.resolve("not-yet-created.md").toString()),
+                    "额外根内尚不存在的文件应经父目录兜底放行");
+        } finally {
+            Files.deleteIfExists(memoryRoot);
+            Files.deleteIfExists(base);
+        }
+    }
+
+    @Test
+    void deniesPathOutsideExtraRoots() throws IOException {
+        Path base = Files.createTempDirectory(Path.of(System.getProperty("user.home")), "acode-sandbox-");
+        Path memoryRoot = base.resolve("memory");
+        Files.createDirectories(memoryRoot);
+        Path elsewhere = base.resolve("elsewhere");
+        Files.createDirectories(elsewhere);
+        try {
+            PathSandbox sb = new PathSandbox(projectRoot, List.of(memoryRoot));
+            assertFalse(sb.check(elsewhere.resolve("x.md").toString()),
+                    "额外根的兄弟目录不在放行范围内");
+            assertFalse(sb.check(base.resolve("adjacent.txt").toString()),
+                    "额外根之外、同父目录下的路径仍被拒");
+        } finally {
+            Files.deleteIfExists(elsewhere);
+            Files.deleteIfExists(memoryRoot);
+            Files.deleteIfExists(base);
+        }
+    }
+
+    @Test
+    void noExtraRootsKeepsOriginalBehavior() {
+        PathSandbox withEmpty = new PathSandbox(projectRoot, List.of());
+        PathSandbox original = new PathSandbox(projectRoot);
+        String tmp = System.getProperty("java.io.tmpdir");
+
+        for (String p : List.of(
+                "src/main/java/A.java",
+                projectRoot.resolve("existing/a.txt").toString(),
+                projectRoot.toString(),
+                Path.of(tmp).resolve("acode-tmpfile.txt").toString())) {
+            assertTrue(original.check(p), "原沙箱应放行：" + p);
+            assertEquals(original.check(p), withEmpty.check(p), p);
+        }
+        String outside = Path.of(System.getProperty("user.home")).resolve("secret.txt").toString();
+        assertFalse(original.check(outside));
+        assertEquals(original.check(outside), withEmpty.check(outside), outside);
     }
 
     private boolean createSymbolicLink(Path link, Path target) {

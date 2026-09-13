@@ -250,9 +250,10 @@ public class MemoryStore {
         return String.join("\n", parts);
     }
 
-    /** 模型可见的层级小标题（与 /memory 展示用的中文 label 分用） */
+    /** 模型可见的层级小标题（与 /memory 展示用的中文 label 分用）；标题带该层记忆根路径 */
     private static String heading(MemoryScope scope) {
-        return scope.kind() == MemoryScope.Kind.PROJECT ? "## Project" : "## User";
+        String name = scope.kind() == MemoryScope.Kind.PROJECT ? "## Project" : "## User";
+        return name + " (" + scope.root() + ")";
     }
 
     /** 取出并清空累计告警（供 UI 输出一次） */

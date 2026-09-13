@@ -6,6 +6,7 @@ import com.acode.tool.Permission;
 import com.acode.tool.Tool;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -51,9 +52,15 @@ public class PermissionChecker {
     private volatile PermissionMode mode;
 
     public PermissionChecker(PermissionMode mode, Path projectRoot, RuleEngine ruleEngine) {
+        this(mode, projectRoot, ruleEngine, List.of());
+    }
+
+    /** 额外允许根（两级记忆根等）透传给路径沙箱；不传时行为与三参构造一致 */
+    public PermissionChecker(PermissionMode mode, Path projectRoot, RuleEngine ruleEngine,
+                             List<Path> extraSandboxRoots) {
         this.mode = mode;
         this.projectRoot = projectRoot.toAbsolutePath().normalize();
-        this.sandbox = new PathSandbox(projectRoot);
+        this.sandbox = new PathSandbox(projectRoot, extraSandboxRoots);
         this.detector = new DangerousCommandDetector();
         this.ruleEngine = ruleEngine;
     }

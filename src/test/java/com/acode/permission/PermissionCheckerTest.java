@@ -17,6 +17,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -38,11 +39,15 @@ class PermissionCheckerTest {
     }
 
     private PermissionChecker checker(PermissionMode mode) {
+        return checker(mode, List.of());
+    }
+
+    private PermissionChecker checker(PermissionMode mode, List<Path> extraRoots) {
         ruleEngine = new RuleEngine(
                 projectRoot.resolve("user-none/permissions.yaml"),
                 projectRulesFile,
                 projectRoot.resolve("local-none/permissions.local.yaml"));
-        return new PermissionChecker(mode, projectRoot, ruleEngine);
+        return new PermissionChecker(mode, projectRoot, ruleEngine, extraRoots);
     }
 
     private ObjectNode args(String key, String value) {
@@ -198,6 +203,49 @@ class PermissionCheckerTest {
     void sandboxAllowsInsidePathThenModeMatrix() {
         CheckResult r = checker(PermissionMode.DEFAULT).check(tool("ReadFile", Permission.READ), args("file_path", "src/main/java/A.java"));
         assertEquals(Decision.ALLOW, r.decision());
+    }
+
+    @Test
+    void userLevelMemoryRootIsNotSandboxDenied() throws IOException {
+        // junit @TempDir 落在 java.io.tmpdir 下：记忆根必须放在 tmpdir 之外才能证明放行来自额外根
+        Path base = Files.createTempDirectory(Path.of(System.getProperty("user.home")), "acode-checker-");
+        Path memoryRoot = base.resolve("memory");
+        Files.createDirectories(memoryRoot);
+        try {
+            PermissionChecker c = checker(PermissionMode.DEFAULT, List.of(memoryRoot));
+            String target = memoryRoot.resolve("user-any.md").toString();
+
+            assertEquals(Decision.ALLOW,
+                    c.check(tool("ReadFile", Permission.READ), args("file_path", target)).decision(),
+                    "用户级记忆根内的文件工具调用不应被沙箱拒绝");
+            assertEquals(Decision.ASK,
+                    c.check(tool("WriteFile", Permission.WRITE), args("file_path", target)).decision(),
+                    "写记忆文件应透过沙箱落回模式矩阵（default 下写需确认）");
+        } finally {
+            Files.deleteIfExists(memoryRoot);
+            Files.deleteIfExists(base);
+        }
+    }
+
+    @Test
+    void outsideProjectStillDeniedWithExtraMemoryRoots() throws IOException {
+        Path base = Files.createTempDirectory(Path.of(System.getProperty("user.home")), "acode-checker-");
+        Path memoryRoot = base.resolve("memory");
+        Files.createDirectories(memoryRoot);
+        Path notes = base.resolve("notes");
+        Files.createDirectories(notes);
+        try {
+            PermissionChecker c = checker(PermissionMode.DEFAULT, List.of(memoryRoot));
+
+            CheckResult r = c.check(tool("ReadFile", Permission.READ),
+                    args("file_path", notes.resolve("secret.txt").toString()));
+            assertEquals(Decision.DENY, r.decision(), "放行范围只增加记忆根：项目外其他路径仍被拒绝");
+            assertTrue(r.reason().contains("超出沙箱范围"));
+        } finally {
+            Files.deleteIfExists(notes);
+            Files.deleteIfExists(memoryRoot);
+            Files.deleteIfExists(base);
+        }
     }
 
     @Test

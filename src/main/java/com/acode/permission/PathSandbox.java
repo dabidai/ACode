@@ -2,11 +2,12 @@ package com.acode.permission;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
  * 路径沙箱：文件工具的目标路径先解析符号链接再做前缀校验，
- * 必须落在项目根目录或系统临时目录（java.io.tmpdir）内。
+ * 必须落在项目根目录、系统临时目录（java.io.tmpdir）或任一额外允许根内。
  * fail closed：解析失败按拒绝处理（新建文件走父目录兜底，不误伤）。
  */
 public class PathSandbox {
@@ -15,11 +16,19 @@ public class PathSandbox {
     private final List<Path> allowedRoots;
 
     public PathSandbox(Path projectRoot) {
+        this(projectRoot, List.of());
+    }
+
+    /** 额外允许根（两级记忆根等在项目外的受信目录）；不传时行为与单参构造完全一致 */
+    public PathSandbox(Path projectRoot, List<Path> extraRoots) {
         this.projectRoot = projectRoot.toAbsolutePath().normalize();
-        this.allowedRoots = List.of(
-                resolveRoot(this.projectRoot),
-                resolveRoot(Path.of(System.getProperty("java.io.tmpdir")).toAbsolutePath().normalize())
-        );
+        List<Path> roots = new ArrayList<>(extraRoots.size() + 2);
+        roots.add(resolveRoot(this.projectRoot));
+        roots.add(resolveRoot(Path.of(System.getProperty("java.io.tmpdir")).toAbsolutePath().normalize()));
+        for (Path extra : extraRoots) {
+            roots.add(resolveRoot(extra.toAbsolutePath().normalize()));
+        }
+        this.allowedRoots = List.copyOf(roots);
     }
 
     /** 目标路径解析后落在任一允许根内 → true；解析失败或越界 → false */

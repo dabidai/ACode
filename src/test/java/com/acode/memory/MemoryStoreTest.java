@@ -152,9 +152,21 @@ class MemoryStoreTest {
         assertTrue(projectAt >= 0 && userAt >= 0, text);
         assertTrue(projectAt < userAt, "项目级索引必须排在用户级之前：" + text);
         assertFalse(text.contains("MEMORY.md"), "索引只存指针，不含索引文件名本身");
-        assertTrue(text.contains("## Project\n"), "项目级段落应带层级小标题：" + text);
-        assertTrue(text.contains("## User\n"), "用户级段落应带层级小标题：" + text);
+        assertTrue(text.contains("## Project ("), "项目级段落应带层级小标题：" + text);
+        assertTrue(text.contains("## User ("), "用户级段落应带层级小标题：" + text);
         assertTrue(text.indexOf("## Project") < text.indexOf("## User"), text);
+    }
+
+    @Test
+    void injectionHeadingsCarryMemoryRootPaths() {
+        store.write(MemoryType.PROJECT, "deadline", "项目知识摘要", "正文");
+        store.write(MemoryType.USER, "any", "用户偏好摘要", "正文");
+
+        String text = store.injectionText();
+        assertTrue(text.contains("## Project (" + project.root() + ")\n"), text);
+        assertTrue(text.contains("## User (" + user.root() + ")\n"), text);
+        assertTrue(text.indexOf(project.root().toString()) < text.indexOf(user.root().toString()),
+                "项目级记忆根应先于用户级出现：" + text);
     }
 
     @Test
@@ -162,7 +174,7 @@ class MemoryStoreTest {
         store.write(MemoryType.USER, "any", "用户偏好摘要", "正文");
 
         String text = store.injectionText();
-        assertTrue(text.startsWith("## User\n"), text);
+        assertTrue(text.startsWith("## User ("), text);
         assertFalse(text.contains("## Project"), "空的一级不应出现小标题：" + text);
     }
 

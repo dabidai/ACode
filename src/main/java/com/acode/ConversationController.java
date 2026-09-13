@@ -558,7 +558,10 @@ public class ConversationController {
                 Path.of(System.getProperty("user.home")).resolve(".acode/permissions.yaml"),
                 projectRoot.resolve(".acode/permissions.yaml"),
                 projectRoot.resolve(".acode/permissions.local.yaml"));
-        return new PermissionChecker(mode, projectRoot, ruleEngine);
+        // 两级记忆根作为额外允许根传入沙箱：用户级在项目外，是既有设计的盲区
+        return new PermissionChecker(mode, projectRoot, ruleEngine,
+                List.of(memoryManager.store().projectScope().root(),
+                        memoryManager.store().userScope().root()));
     }
 
     /** raw 模式下检测 Ctrl+C（0x03 字节）；命中则消费该字节。 */

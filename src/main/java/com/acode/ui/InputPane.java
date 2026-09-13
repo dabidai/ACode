@@ -27,6 +27,7 @@ public class InputPane {
                 .terminal(terminal)
                 .appName("acode")
                 .option(LineReader.Option.ERASE_LINE_ON_FINISH, true)
+                .completer(new SlashCompleter())
                 .build();
         bindKeys();
     }

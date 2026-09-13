@@ -10,10 +10,10 @@ import java.util.List;
 public record Command(String name, List<String> aliases, String description, String usage,
                       CommandType type, String argumentHint, boolean hidden, Handler handler) {
 
-    /** 处理函数：入参为参数原文（无参数时为 null），返回命令执行结果。 */
+    /** 处理函数：入参为打包好依赖的执行上下文（参数原文见 {@link CommandContext#args()}），返回命令执行结果。 */
     @FunctionalInterface
     public interface Handler {
-        CommandResult execute(String args);
+        CommandResult execute(CommandContext ctx);
     }
 
     public Command {

@@ -20,12 +20,16 @@ class CommandRegistryTest {
 
     private static Command command(String name, String... aliases) {
         return new Command(name, List.of(aliases), "desc of " + name, "/" + name,
-                CommandType.LOCAL, null, false, args -> CommandResult.CONTINUE);
+                CommandType.LOCAL, null, false, ctx -> CommandResult.CONTINUE);
     }
 
     private static Command hiddenCommand(String name) {
         return new Command(name, List.of(), "hidden " + name, "/" + name,
-                CommandType.LOCAL, null, true, args -> CommandResult.CONTINUE);
+                CommandType.LOCAL, null, true, ctx -> CommandResult.CONTINUE);
+    }
+
+    private static CommandContext ctx(String args) {
+        return new CommandContext(args, null, null, null, null, null, null, null, null);
     }
 
     @Test
@@ -127,15 +131,15 @@ class CommandRegistryTest {
 
     @Test
     void sameHandlerInstanceCanBackMultipleCommands() {
-        Command.Handler shared = args -> CommandResult.CONTINUE;
+        Command.Handler shared = ctx -> CommandResult.CONTINUE;
         CommandRegistry registry = new CommandRegistry();
         registry.register(new Command("resume", List.of(), "d1", "/resume",
                 CommandType.LOCAL, null, false, shared));
         registry.register(new Command("resume-session", List.of(), "d2", "/resume-session",
                 CommandType.LOCAL, null, false, shared));
         assertSame(registry.find("resume").handler(), registry.find("resume-session").handler());
-        assertEquals(CommandResult.CONTINUE, registry.find("resume").handler().execute(null));
-        assertEquals(CommandResult.CONTINUE, registry.find("resume-session").handler().execute("x"));
+        assertEquals(CommandResult.CONTINUE, registry.find("resume").handler().execute(ctx(null)));
+        assertEquals(CommandResult.CONTINUE, registry.find("resume-session").handler().execute(ctx("x")));
     }
 
     @Test

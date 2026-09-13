@@ -1,10 +1,7 @@
 package com.acode;
 
 import com.acode.config.AppConfig;
-import com.acode.permission.PermissionChecker;
-import com.acode.permission.PermissionMode;
 import com.acode.permission.PermissionResponse;
-import com.acode.permission.RuleEngine;
 import com.acode.prompt.PromptBuilder;
 import com.acode.provider.ChatMessage;
 import com.acode.provider.ChatRequest;
@@ -600,90 +597,6 @@ class ConversationControllerTest {
         assertTrue(joined.contains("文件不存在"), "失败正文应显示");
     }
 
-    // ---- T8 /permission-mode 运行时切档 ----
-
-    private static PermissionChecker injectChecker(ConversationController controller, Path projectRoot) {
-        RuleEngine rules = new RuleEngine(
-                projectRoot.resolve("u.yaml"), projectRoot.resolve("p.yaml"), projectRoot.resolve("l.yaml"));
-        PermissionChecker checker = new PermissionChecker(PermissionMode.DEFAULT, projectRoot, rules);
-        controller.setPermissionChecker(checker);
-        return checker;
-    }
-
-    @Test
-    void permissionModeCommandSwitchesCheckerMode() {
-        ConversationController controller = new ConversationController(FakeProvider.scripted(List.of()), config(), false);
-        PermissionChecker checker = injectChecker(controller, tempDir);
-        OutputPane output = new OutputPane();
-        controller.setOutput(output);
-        StringWriter sw = new StringWriter();
-        controller.setScreenWriter(sw);
-
-        controller.handlePermissionMode("acceptEdits", new LiveRegionRenderer(80, 24), sw);
-        assertEquals(PermissionMode.ACCEPT_EDITS, checker.mode());
-        assertTrue(sw.toString().contains("已切换到权限模式：acceptEdits"));
-    }
-
-    @Test
-    void permissionModeTrailingWhitespaceIsTrimmed() {
-        ConversationController controller = new ConversationController(FakeProvider.scripted(List.of()), config(), false);
-        PermissionChecker checker = injectChecker(controller, tempDir);
-        controller.setOutput(new OutputPane());
-        controller.handlePermissionMode("acceptEdits  ", new LiveRegionRenderer(80, 24), new StringWriter());
-        assertEquals(PermissionMode.ACCEPT_EDITS, checker.mode());
-    }
-
-    @Test
-    void permissionModeCaseSensitiveRejectsUppercase() {
-        ConversationController controller = new ConversationController(FakeProvider.scripted(List.of()), config(), false);
-        PermissionChecker checker = injectChecker(controller, tempDir);
-        controller.setOutput(new OutputPane());
-        controller.handlePermissionMode("ACCEPT_EDITS", new LiveRegionRenderer(80, 24), new StringWriter());
-        assertEquals(PermissionMode.DEFAULT, checker.mode(), "大小写敏感：非法值模式不变");
-    }
-
-    @Test
-    void permissionModeExtraArgRejected() {
-        ConversationController controller = new ConversationController(FakeProvider.scripted(List.of()), config(), false);
-        PermissionChecker checker = injectChecker(controller, tempDir);
-        controller.setOutput(new OutputPane());
-        controller.handlePermissionMode("acceptEdits extra", new LiveRegionRenderer(80, 24), new StringWriter());
-        assertEquals(PermissionMode.DEFAULT, checker.mode(), "多余参数非法、模式不变");
-    }
-
-    @Test
-    void permissionModeInvalidValueKeepsModeAndPrintsError() {
-        ConversationController controller = new ConversationController(FakeProvider.scripted(List.of()), config(), false);
-        PermissionChecker checker = injectChecker(controller, tempDir);
-        controller.setOutput(new OutputPane());
-        StringWriter sw = new StringWriter();
-        controller.setScreenWriter(sw);
-        controller.handlePermissionMode("yolo", new LiveRegionRenderer(80, 24), sw);
-        assertEquals(PermissionMode.DEFAULT, checker.mode());
-        assertTrue(sw.toString().contains("非法权限模式"));
-    }
-
-    @Test
-    void permissionModeNoArgPrintsCurrentMode() {
-        ConversationController controller = new ConversationController(FakeProvider.scripted(List.of()), config(), false);
-        injectChecker(controller, tempDir);
-        controller.setOutput(new OutputPane());
-        StringWriter sw = new StringWriter();
-        controller.setScreenWriter(sw);
-        controller.handlePermissionMode("", new LiveRegionRenderer(80, 24), sw);
-        assertTrue(sw.toString().contains("当前权限模式：default"));
-    }
-
-    @Test
-    void permissionModeSwitchDoesNotPersistToConfig() {
-        AppConfig config = config();
-        ConversationController controller = new ConversationController(FakeProvider.scripted(List.of()), config, false);
-        injectChecker(controller, tempDir);
-        controller.setOutput(new OutputPane());
-        controller.handlePermissionMode("acceptEdits", new LiveRegionRenderer(80, 24), new StringWriter());
-        assertNull(config.getPermissionMode(), "运行时切档不应写回 config");
-    }
-
     // ---- P0-1 awaitLoopEnd 超时路径（控制器级） ----
 
     /**
@@ -849,26 +762,6 @@ class ConversationControllerTest {
     }
 
     // ---- P2-15 permissionChecker 懒构建与 config 初始模式 ----
-
-    @Test
-    void permissionModeLazilyBuildsChecker() {
-        // 不注入 checker：切档应触发懒构建（buildPermissionChecker），而非依赖测试替身
-        ConversationController controller =
-                new ConversationController(FakeProvider.scripted(List.of()), config(), false);
-        controller.setProjectRoot(tempDir);
-        controller.setOutput(new OutputPane());
-        StringWriter sw = new StringWriter();
-        controller.setScreenWriter(sw);
-
-        controller.handlePermissionMode("acceptEdits", new LiveRegionRenderer(80, 24), sw);
-        assertTrue(sw.toString().contains("已切换到权限模式：acceptEdits"),
-                "未注入 checker 时应懒构建并切档：" + sw);
-
-        StringWriter query = new StringWriter();
-        controller.handlePermissionMode("", new LiveRegionRenderer(80, 24), query);
-        assertTrue(query.toString().contains("当前权限模式：acceptEdits"),
-                "切档后查询应反映真实 checker 模式：" + query);
-    }
 
     @Test
     void configuredPermissionModeAppliesToChecker() throws Exception {

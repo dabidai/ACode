@@ -247,15 +247,13 @@ class HelpStatusCommandTest {
     void helpDetailShowsDescriptionUsageArgumentsAndAliases() {
         CommandRegistry registry = new CommandRegistry();
         BuiltinCommands.registerAll(registry);
-        registry.register(new Command("compact", List.of("c"), "压缩上下文", "/compact <重点>",
-                CommandType.LOCAL, "<重点>", false, ctx -> CommandResult.CONTINUE));
 
         FakeUi ui = new FakeUi(new UIController.ContextUsage(0, 0));
         String output = String.join("\n", run(registry, "help", "compact", ui));
 
         assertTrue(output.contains("描述：压缩上下文"));
-        assertTrue(output.contains("用法：/compact <重点>"));
-        assertTrue(output.contains("参数：<重点>"));
+        assertTrue(output.contains("用法：/compact"));
+        assertTrue(output.contains("参数：<需要保留的重点>"));
         assertTrue(output.contains("别名：/c"));
     }
 

@@ -19,11 +19,9 @@ import com.acode.config.AppConfig;
 import com.acode.config.ConfigException;
 import com.acode.config.ConfigLoader;
 import com.acode.config.ConfigValidator;
-import com.acode.context.CompactExecutor;
 import com.acode.context.ContextManager;
 import com.acode.conversation.Conversation;
 import com.acode.mcp.McpManager;
-import com.acode.memory.MemoryExtractor;
 import com.acode.memory.MemoryManager;
 import com.acode.memory.MemoryScope;
 import com.acode.memory.MemoryStore;
@@ -63,7 +61,6 @@ import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
 import com.acode.ui.PromptAnswerer;
 import com.acode.ui.RenderContext;
-import com.acode.ui.SelectionMenu;
 import com.acode.ui.StreamPrinter;
 import com.acode.ui.TerminalMenuKeySource;
 import com.acode.ui.ToolCallDisplay;
@@ -361,8 +358,6 @@ public class ConversationController {
             commandProcessor = new CommandProcessor(tui, output, renderContext, conversation,
                     sessionManager(), this::permissionChecker, this::handleChat,
                     planMode -> this.planMode = planMode);
-            commandProcessor.setCompactHandler(this::handleManualCompact);
-            commandProcessor.setMemoryHandler(this::handleMemoryCommand);
         }
         return commandProcessor;
     }
@@ -373,87 +368,6 @@ public class ConversationController {
             contextManager = new ContextManager(projectRoot, provider, conversation);
         }
         return contextManager;
-    }
-
-    /** 手动 /compact：空闲态同步压缩一次并展示压缩前后预算（历史过短/失败/成功三类提示） */
-    void handleManualCompact() {
-        LiveRegionRenderer live = renderContext.liveRenderer();
-        Writer writer = renderContext.screenWriter();
-        output.appendLine("正在压缩…");
-        live.appendCommitted(writer, "正在压缩…");
-        try {
-            CompactExecutor.Result result = contextManager().executor().run(true);
-            String line;
-            if (result.noChange()) {
-                line = "（没有需要压缩的内容）";
-            } else if (result.failed()) {
-                line = "压缩失败：" + result.reason();
-            } else {
-                line = "压缩完成：压缩前约 " + result.beforeEstimate()
-                        + " token → 压缩后约 " + result.afterEstimate() + " token";
-            }
-            output.appendLine(line);
-            live.appendCommitted(writer, line);
-        } catch (RuntimeException e) {
-            String line = "压缩失败：" + e.getMessage();
-            output.appendLine(line);
-            live.appendCommitted(writer, line);
-        }
-    }
-
-    /** /permission-mode 切档（委托 CommandProcessor；测试直接调用）。 */
-    void handlePermissionMode(String arg, LiveRegionRenderer live, Writer writer) {
-        commandProcessor().handlePermissionMode(arg, live, writer);
-    }
-
-    /** /memory：无参数输出两级记忆与索引状态；/memory run 同步提取一次并输出条数。 */
-    void handleMemoryCommand(String arg) {
-        LiveRegionRenderer live = renderContext.liveRenderer();
-        Writer writer = renderContext.screenWriter();
-        for (String line : memoryCommandLines(arg)) {
-            output.appendLine(line);
-            live.appendCommitted(writer, line);
-        }
-    }
-
-    /** 组装 /memory 的输出行：状态/提取结果，末尾附带待取的记忆告警（取走即清） */
-    List<String> memoryCommandLines(String arg) {
-        List<String> lines = new ArrayList<>();
-        if ("run".equalsIgnoreCase(arg)) {
-            MemoryExtractor.Outcome outcome = memoryManager.extractNow();
-            if (outcome.failed()) {
-                lines.add("记忆提取失败（未写入任何文件）");
-            } else if (outcome.nothing()) {
-                lines.add("（没有值得记忆的内容）");
-            } else {
-                lines.add("记忆提取完成：新增 " + outcome.created() + " · 更新 " + outcome.updated()
-                        + " · 删除 " + outcome.deleted());
-            }
-        } else {
-            List<MemoryStore.IndexView> views = memoryManager.store().indexViews();
-            StringBuilder counts = new StringBuilder("长期记忆：");
-            for (int i = 0; i < views.size(); i++) {
-                if (i > 0) {
-                    counts.append(" · ");
-                }
-                counts.append(views.get(i).label()).append(' ').append(views.get(i).memoryCount()).append(" 条");
-            }
-            lines.add(counts.toString());
-            for (MemoryStore.IndexView view : views) {
-                lines.add(view.label() + "索引：" + view.indexLines() + " 行 / " + view.indexBytes() + " B"
-                        + (view.truncated() ? "（已截断）" : ""));
-            }
-        }
-        lines.addAll(memoryManager.drainWarnings());
-        return lines;
-    }
-
-    /**
-     * /resume：列出历史会话，↑/↓ 选择、回车加载、Esc 取消。
-     * 菜单作为活跃区 overlay 渲染：只重绘屏幕底部、不进回滚；选定/取消后清掉菜单，历史再追加。
-     */
-    private void selectSession() {
-        sessionManager().selectSession();
     }
 
     private void handleChat(String input) {

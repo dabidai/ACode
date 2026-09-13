@@ -15,7 +15,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.io.StringWriter;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -24,7 +23,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** T11 /memory：只读状态输出 + 手动提取入口（关掉自动提取后仍可用）。 */
+/**
+ * 记忆系统的控制器级集成验证（ch08 遗留 + ch09 迁移后保留）：
+ * 提取触发入口已由 /memory 命令接管（见 command/MemoryCommandTest），本组只用
+ * {@code memoryManager().extractNow()} 驱动提取，断言索引注入与会话内可见性。
+ */
 class MemoryCommandTest {
 
     private static final String CREATE_ONE = """
@@ -87,114 +90,6 @@ class MemoryCommandTest {
                 .map(ChatMessage::content)
                 .findFirst()
                 .orElse("");
-    }
-
-    @Test
-    void statusReportsZeroCountsWhenNothingIsStored() {
-        List<String> lines = controller(FakeProvider.streaming("[]")).memoryCommandLines("");
-
-        assertEquals("长期记忆：项目级 0 条 · 用户级 0 条", lines.get(0));
-        assertTrue(lines.get(1).startsWith("项目级索引：0 行 / 0 B"), lines.get(1));
-        assertTrue(lines.get(2).startsWith("用户级索引：0 行 / 0 B"), lines.get(2));
-        assertFalse(lines.get(1).contains("已截断"));
-    }
-
-    @Test
-    void runReportsCountsInItsOutput() {
-        List<String> lines = controller(FakeProvider.streaming(CREATE_ONE)).memoryCommandLines("run");
-        assertEquals("记忆提取完成：新增 1 · 更新 0 · 删除 0", lines.get(0));
-    }
-
-    @Test
-    void runWritesMemoryFileAndIndex() throws IOException {
-        controller(FakeProvider.streaming(CREATE_ONE)).handleMemoryCommand("run");
-
-        assertTrue(Files.isRegularFile(userMemoryDir().resolve("user-pref.md")));
-        String index = Files.readString(userMemoryDir().resolve("MEMORY.md"), StandardCharsets.UTF_8);
-        assertEquals("- [pref](user-pref.md) - 摘要\n", index);
-    }
-
-    @Test
-    void statusReportsCountsAndIndexStats() {
-        controller(FakeProvider.streaming(CREATE_ONE)).handleMemoryCommand("run");
-
-        List<String> lines = controller(FakeProvider.streaming("[]")).memoryCommandLines("");
-        assertEquals("长期记忆：项目级 0 条 · 用户级 1 条", lines.get(0));
-        assertTrue(lines.get(2).contains("1 行"), lines.get(2));
-        assertFalse(lines.get(2).contains("已截断"));
-    }
-
-    @Test
-    void statusFlagsTruncatedIndex() throws IOException {
-        Files.createDirectories(userMemoryDir());
-        StringBuilder index = new StringBuilder();
-        int over = MemoryStore.INDEX_MAX_LINES + 5;
-        for (int i = 0; i < over; i++) {
-            String fileName = "user-m" + i + ".md";
-            Files.writeString(userMemoryDir().resolve(fileName),
-                    "---\nname: m" + i + "\ndescription: d\ntype: user\n---\n\n正文\n",
-                    StandardCharsets.UTF_8);
-            index.append("- [m").append(i).append("](").append(fileName).append(") - d\n");
-        }
-        Files.writeString(userMemoryDir().resolve("MEMORY.md"), index.toString(),
-                StandardCharsets.UTF_8);
-
-        List<String> lines = controller(FakeProvider.streaming("[]")).memoryCommandLines("");
-        assertTrue(lines.get(2).contains("（已截断）"), lines.get(2));
-        assertTrue(lines.get(2).contains(String.valueOf(MemoryStore.INDEX_MAX_LINES)), lines.get(2));
-    }
-
-    @Test
-    void runReportsWhenNothingIsWorthRemembering() {
-        List<String> lines = controller(FakeProvider.streaming("[]")).memoryCommandLines("run");
-        assertEquals(List.of("（没有值得记忆的内容）"), lines);
-        assertFalse(Files.exists(userMemoryDir().resolve("MEMORY.md")));
-    }
-
-    @Test
-    void runReportsFailureWithoutWritingAnything() {
-        List<String> lines = controller(FakeProvider.streaming("完全无法解析")).memoryCommandLines("run");
-        assertEquals("记忆提取失败（未写入任何文件）", lines.get(0));
-        assertFalse(Files.exists(userMemoryDir()));
-    }
-
-    @Test
-    void runReportsSkippedElements() {
-        List<String> lines = controller(FakeProvider.streaming(
-                "[{\"op\":\"create\",\"type\":\"user\",\"name\":\"good\",\"description\":\"y\"},"
-                        + " {\"op\":\"nope\"}]")).memoryCommandLines("run");
-
-        assertEquals("记忆提取完成：新增 1 · 更新 0 · 删除 0", lines.get(0));
-        assertTrue(lines.stream().anyMatch(l -> l.contains("1 条操作格式非法")),
-                "跳过的条数应出现在 /memory 输出里：" + lines);
-    }
-
-    @Test
-    void statusSurfacesPendingWarnings() throws IOException {
-        ConversationController controller = controller(FakeProvider.streaming("[]"));
-        // 构造之后再放坏文件：启动时那次 drain 看不到它，告警只能由本次命令产生
-        Files.createDirectories(userMemoryDir());
-        Files.writeString(userMemoryDir().resolve("user-broken.md"), "没有 frontmatter",
-                StandardCharsets.UTF_8);
-
-        List<String> lines = controller.memoryCommandLines("");
-
-        assertTrue(lines.stream().anyMatch(l -> l.contains("头部残缺")),
-                "本命令自己产生的告警应随输出返回：" + lines);
-    }
-
-    @Test
-    void manualRunStillWorksWhenAutoExtractionIsDisabled() {
-        AppConfig config = config();
-        config.setMemoryAuto(false);
-        ConversationController controller = new ConversationController(
-                FakeProvider.streaming(CREATE_ONE), config, false);
-        controller.setProjectRoot(projectRoot);
-        controller.setOutput(new OutputPane());
-        controller.setScreenWriter(new StringWriter());
-
-        assertEquals("记忆提取完成：新增 1 · 更新 0 · 删除 0",
-                controller.memoryCommandLines("run").get(0));
     }
 
     @Test
@@ -282,7 +177,7 @@ class MemoryCommandTest {
 
     @Test
     void systemPromptCarriesTheMemoryIndexOnTheNextSession() {
-        controller(FakeProvider.streaming(CREATE_ONE)).handleMemoryCommand("run");
+        controller(FakeProvider.streaming(CREATE_ONE)).memoryManager().extractNow();
 
         FakeProvider provider = FakeProvider.scripted(List.of(
                 List.of(FakeProvider.delta("回答"), FakeProvider.complete())));
@@ -305,7 +200,7 @@ class MemoryCommandTest {
         controller.initSessionState();
 
         controller.handleExchange("第一问", () -> false, () -> { });
-        controller.handleMemoryCommand("run");
+        controller.memoryManager().extractNow();
         controller.handleExchange("第二问", () -> false, () -> { });
 
         List<ChatRequest> chatRequests = provider.receivedRequests().stream()

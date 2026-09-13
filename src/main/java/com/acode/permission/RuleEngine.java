@@ -17,11 +17,20 @@ import org.yaml.snakeyaml.Yaml;
 /**
  * 规则引擎：三层规则文件（用户级 ~/.acode/permissions.yaml、项目级/本地级 {项目}/.acode/*.yaml）。
  * 求值（R4）：每层内从后往前、后匹配者覆盖先匹配者，得该层最终结果；
- * 任一层最终为 DENY 即返回 DENY（跨层 deny 不可翻转）；否则 local > project > user 取第一个非 null。
+ * 跨层按 deny > ask > allow 三级判定——任一层 DENY → DENY（跨层 deny 不可翻转）；
+ * 否则任一层 ASK → ASK（询问跨层穿透，更宽的 allow 盖不掉）；
+ * 否则 local > project > user 取第一个非 null；三层皆无匹配返回 null。
  */
 public class RuleEngine {
 
     private static final Pattern RULE_PATTERN = Pattern.compile("^(\\w+)\\((.+)\\)$");
+
+    /** 一层规则清单：文件路径 + 规则列表（供命令层逐条打印「工具名(模式) → 效果」） */
+    public record LayerRules(Path file, List<PermissionRule> rules) {
+        public int count() {
+            return rules.size();
+        }
+    }
 
     private final Path userFile;
     private final Path projectFile;
@@ -39,7 +48,7 @@ public class RuleEngine {
         reload();
     }
 
-    /** 返回 ALLOW/DENY；无匹配返回 null */
+    /** 返回 ALLOW/DENY/ASK；三层皆无匹配返回 null。跨层按 deny > ask > allow 判定 */
     public PermissionRule.RuleEffect evaluate(String toolName, String content) {
         PermissionRule.RuleEffect user = layerEffect(userRules, toolName, content);
         PermissionRule.RuleEffect project = layerEffect(projectRules, toolName, content);
@@ -50,6 +59,12 @@ public class RuleEngine {
                 || local == PermissionRule.RuleEffect.DENY) {
             return PermissionRule.RuleEffect.DENY;
         }
+        // 任一层 ASK 即返回 ASK（询问跨层穿透：更宽的 allow 盖不掉）
+        if (user == PermissionRule.RuleEffect.ASK
+                || project == PermissionRule.RuleEffect.ASK
+                || local == PermissionRule.RuleEffect.ASK) {
+            return PermissionRule.RuleEffect.ASK;
+        }
         // local > project > user 取第一个非 null
         if (local != null) {
             return local;
@@ -58,6 +73,14 @@ public class RuleEngine {
             return project;
         }
         return user;
+    }
+
+    /** /permission 无参列举用：三层规则清单（文件路径 + 规则摘要），顺序为用户级 → 项目级 → 项目本地级 */
+    public List<LayerRules> layers() {
+        return List.of(
+                new LayerRules(userFile, userRules),
+                new LayerRules(projectFile, projectRules),
+                new LayerRules(localFile, localRules));
     }
 
     private PermissionRule.RuleEffect layerEffect(List<PermissionRule> rules, String toolName, String content) {
@@ -87,7 +110,7 @@ public class RuleEngine {
             List<Map<String, String>> rules = new ArrayList<>();
             for (PermissionRule r : existing) {
                 rules.add(entry(r.toolName() + "(" + r.pattern() + ")",
-                        r.effect() == PermissionRule.RuleEffect.ALLOW ? "allow" : "deny"));
+                        r.effect().keyword()));
             }
             rules.add(entry(toolName + "(" + escaped + ")", "allow"));
 
@@ -166,6 +189,7 @@ public class RuleEngine {
         PermissionRule.RuleEffect effect = switch (e) {
             case "allow" -> PermissionRule.RuleEffect.ALLOW;
             case "deny" -> PermissionRule.RuleEffect.DENY;
+            case "ask" -> PermissionRule.RuleEffect.ASK;
             default -> null;
         };
         if (effect == null) {

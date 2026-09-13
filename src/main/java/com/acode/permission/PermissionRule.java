@@ -10,7 +10,14 @@ import java.util.regex.Pattern;
  */
 public record PermissionRule(String toolName, String pattern, RuleEffect effect) {
 
-    public enum RuleEffect { ALLOW, DENY }
+    public enum RuleEffect {
+        ALLOW, DENY, ASK;
+
+        /** 规则文件中的效果字符串（allow / deny / ask），写回与展示共用 */
+        public String keyword() {
+            return name().toLowerCase();
+        }
+    }
 
     public boolean matches(String toolName, String content) {
         if (!this.toolName.equals(toolName) || content == null) {

@@ -74,12 +74,22 @@ public class PermissionChecker {
     }
 
     public void addAllowAlwaysRule(String toolName, String content) {
-        allowAlwaysRules.add(toolName + ":" + content);
+        allowAlwaysRules.add(allowAlwaysKey(toolName, content));
+    }
+
+    /** 会话级「始终允许」的键：写入与两处读取必须共用，否则授权会静默失效 */
+    private static String allowAlwaysKey(String toolName, String content) {
+        return toolName + ":" + content;
     }
 
     /** 「始终允许」持久化到本地规则文件；写回失败返回 false（R9，不抛异常）。 */
     public boolean appendLocalRule(String toolName, String content) {
         return ruleEngine.appendLocalRule(toolName, content);
+    }
+
+    /** 规则清单查询委托：/permission 无参列举三层规则（文件路径 + 规则摘要） */
+    public List<RuleEngine.LayerRules> ruleLayers() {
+        return ruleEngine.layers();
     }
 
     /** 内容提取：无对应字段返回 null（未注册工具跳过内容层，R6） */
@@ -133,18 +143,26 @@ public class PermissionChecker {
             return CheckResult.allow();
         }
 
-        // ⑥ 权限规则：allow/deny 直接返回
+        // ⑥ 权限规则：deny 就地拒绝、allow 就地放行；
+        // ask 不就地返回——先落第 ⑦ 层「始终允许」给已明确授权留门，未命中才返回询问，且不再走第 ⑧ 层模式矩阵
         if (content != null) {
             PermissionRule.RuleEffect effect = ruleEngine.evaluate(toolName, content);
-            if (effect != null) {
-                return effect == PermissionRule.RuleEffect.ALLOW
-                        ? CheckResult.allow()
-                        : CheckResult.deny("规则拒绝");
+            if (effect == PermissionRule.RuleEffect.DENY) {
+                return CheckResult.deny("规则拒绝");
+            }
+            if (effect == PermissionRule.RuleEffect.ALLOW) {
+                return CheckResult.allow();
+            }
+            if (effect == PermissionRule.RuleEffect.ASK) {
+                if (allowAlwaysRules.contains(allowAlwaysKey(toolName, content))) {
+                    return CheckResult.allow();
+                }
+                return CheckResult.ask();
             }
         }
 
         // ⑦ 会话级「始终允许」
-        if (content != null && allowAlwaysRules.contains(toolName + ":" + content)) {
+        if (content != null && allowAlwaysRules.contains(allowAlwaysKey(toolName, content))) {
             return CheckResult.allow();
         }
 

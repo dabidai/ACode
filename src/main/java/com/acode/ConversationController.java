@@ -118,6 +118,9 @@ public class ConversationController {
     /** plan 模式开关：/plan 进入、/do 退出；作用于下一次 exchange 新建的 Agent */
     private boolean planMode = false;
 
+    /** 最近一次规划交付的计划落盘位置（会话内状态，重启即无记录，走无计划分支）；复位动作归 T12 清除钩子 */
+    private Path deliveredPlanPath;
+
     private AcodeTerminal tui;
     private OutputPane output;
     private final RenderContext renderContext;
@@ -526,7 +529,15 @@ public class ConversationController {
             runner.setPendingReminder(SystemReminder.wrap(pendingTurnReminder));
             pendingTurnReminder = null;
         }
-        runner.run(input, ctrlC, repaint, planMode);
+        Path deliveredPlan = runner.run(input, ctrlC, repaint, planMode);
+        if (deliveredPlan != null) {
+            this.deliveredPlanPath = deliveredPlan;
+        }
+    }
+
+    /** 读取最近一次规划交付的计划落盘位置；无交付记录时为 null（供 /do 走有则执行、无则仅切换） */
+    Path lastDeliveredPlanPath() {
+        return deliveredPlanPath;
     }
 
     /** 交换执行器：惰性构造，必须晚于全部测试 setter（捕获当时的 output/RenderContext/应答器）。 */

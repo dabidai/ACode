@@ -800,6 +800,33 @@ class ConversationControllerTest {
         }
     }
 
+    /** 计划落盘位置记为会话内状态：默认无记录、交付后可得、非交付 exchange 不覆盖 */
+    @Test
+    void planDeliveryPathRecordedAsSessionState() throws Exception {
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.delta("计划：重构 X"),
+                        FakeProvider.toolUse("id-1", "ExitPlanMode", JSON.createObjectNode()),
+                        FakeProvider.complete()),
+                List.of(FakeProvider.delta("普通回答"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
+        controller.setOutput(new OutputPane());
+        Field planMode = ConversationController.class.getDeclaredField("planMode");
+        planMode.setAccessible(true);
+
+        assertNull(controller.lastDeliveredPlanPath(), "无交付记录时默认应为空（重启后走无计划分支）");
+
+        planMode.setBoolean(controller, true);
+        controller.handleExchange("做个计划", () -> false, () -> { });
+        Path plan = controller.lastDeliveredPlanPath();
+        assertTrue(plan != null && Files.exists(plan), "计划交付后应记录落盘位置：" + plan);
+        assertEquals("计划：重构 X", Files.readString(plan), "记录的位置应指向本次交付的计划正文");
+
+        planMode.setBoolean(controller, false);
+        controller.handleExchange("普通问题", () -> false, () -> { });
+        assertEquals(plan, controller.lastDeliveredPlanPath(), "非计划交付的 exchange 不应覆盖既有记录");
+    }
+
     // ---- P2-14 RetryEvent / ErrorEvent 渲染 ----
 
     @Test

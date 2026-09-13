@@ -114,8 +114,9 @@ public class ExchangeRunner {
      * 单次输入触发 Agent 循环：追加 user 消息 → new Agent(...).run() 在虚拟线程跑 ReAct 循环 →
      * 主线程订阅事件队列逐条渲染（流式文本 / 工具卡片 / 轮次收尾 / 重试 / 错误 / 循环结束提示）。
      * ctrlC 注入中断源（真实终端为 Ctrl+C）；repaint 为保留参数（渲染已全部经活跃区完成）。
+     * 返回本次 exchange 计划交付的落盘路径（非计划交付返回 null），供上层记为会话内状态。
      */
-    void run(String input, BooleanSupplier ctrlC, Runnable repaint, boolean planMode) {
+    Path run(String input, BooleanSupplier ctrlC, Runnable repaint, boolean planMode) {
         conversation.nextEpoch(); // 先失效上一轮残留的 agent 线程写入，再开始本轮
         conversation.addMessage(ChatMessage.of(ChatMessage.Role.USER, input));
         output.append("● " + input + "\n");
@@ -138,6 +139,7 @@ public class ExchangeRunner {
         List<ToolResult> turnResults = new ArrayList<>();
         List<Long> elapsedList = new ArrayList<>();
         Usage lastUsage = null;
+        Path deliveredPlan = null;
         while (true) {
             if (ctrlC.getAsBoolean()) {
                 agent.cancel();
@@ -161,7 +163,7 @@ public class ExchangeRunner {
                 }
                 printer.updateToolCalls(turnResults, elapsedList);
                 printer.finishTurn();
-                completeLoop(agent, live, writer);
+                deliveredPlan = completeLoop(agent, live, writer);
                 break;
             } else if (event instanceof StreamText streamText) {
                 printer.onDelta(streamText.text());
@@ -198,6 +200,7 @@ public class ExchangeRunner {
                 choice.response().answer(choiceAnswerer.apply(choice));
             }
         }
+        return deliveredPlan;
     }
 
     /** 循环轮数上限：配置缺失时用默认值（与 ConfigValidator 一致） */
@@ -243,8 +246,9 @@ public class ExchangeRunner {
         }
     }
 
-    /** 循环收尾：按终止原因补提示（MAX_ITERATIONS / PLAN_DELIVERED / CANCELED / ERROR） */
-    private void completeLoop(Agent agent, LiveRegionRenderer live, Writer writer) {
+    /** 循环收尾：按终止原因补提示（MAX_ITERATIONS / PLAN_DELIVERED / CANCELED / ERROR）；
+     *  返回计划交付的落盘路径（非计划交付返回 null），供上层记为会话内状态 */
+    private Path completeLoop(Agent agent, LiveRegionRenderer live, Writer writer) {
         switch (agent.termination()) {
             case MAX_ITERATIONS -> {
                 output.appendLine("（达到最大轮数，已停止执行）");
@@ -265,6 +269,7 @@ public class ExchangeRunner {
                 }
                 output.appendLine("输入 /do 退出 plan 模式开始执行");
                 live.appendCommitted(writer, "输入 /do 退出 plan 模式开始执行");
+                return plan;
             }
             case CANCELED -> {
                 output.appendLine("（已中断）");
@@ -273,5 +278,6 @@ public class ExchangeRunner {
             case ERROR -> { /* ErrorEvent 已输出错误行，无需重复 */ }
             case NORMAL -> { /* 自然收尾，无提示 */ }
         }
+        return null;
     }
 }

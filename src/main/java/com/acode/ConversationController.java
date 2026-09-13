@@ -53,7 +53,6 @@ import com.acode.tool.ToolContext;
 import com.acode.tool.ToolRegistry;
 import com.acode.tool.ToolResult;
 import com.acode.ui.AcodeTerminal;
-import com.acode.ui.CommandRouter;
 import com.acode.ui.ConfirmationPrompt;
 import com.acode.ui.HistoryRenderer;
 import com.acode.ui.InputPane;

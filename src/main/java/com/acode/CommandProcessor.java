@@ -1,24 +1,23 @@
 package com.acode;
 
+import com.acode.command.CommandDispatcher;
 import com.acode.command.CommandRegistry;
+import com.acode.command.CommandResult;
 import com.acode.conversation.Conversation;
 import com.acode.permission.PermissionChecker;
-import com.acode.permission.PermissionMode;
 import com.acode.session.SessionManager;
 import com.acode.ui.AcodeTerminal;
-import com.acode.ui.CommandRouter;
 import com.acode.ui.InputPane;
-import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
 import com.acode.ui.RenderContext;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.UserInterruptException;
 
-import java.io.Writer;
+import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
-/** 主循环命令分发：读输入 → 路由 → 执行各命令（/clear /help /compact /resume /plan /do /permission-mode /chat）。 */
+/** 主循环：读一行 → 交给命令调度器 → 按返回结果决定去留；两种退出路径都关闭会话。 */
 public class CommandProcessor {
 
     private final AcodeTerminal tui;
@@ -30,11 +29,8 @@ public class CommandProcessor {
     private final Consumer<String> chatHandler;
     private final Consumer<Boolean> planModeSetter;
 
-    /** 手动压缩处理回调（ConversationController 装配时注入；缺省空操作，存量构造/测试兼容） */
-    private Runnable compactHandler = () -> { };
-
-    /** 记忆命令处理回调（参数为 /memory 之后的剩余文本；缺省空操作） */
-    private Consumer<String> memoryHandler = arg -> { };
+    /** 命令调度器：由装配方注入（T12），注入前主循环不可用 */
+    private CommandDispatcher commandDispatcher;
 
     public CommandProcessor(AcodeTerminal tui, OutputPane output, RenderContext renderContext,
                             Conversation conversation, SessionManager sessionManager,
@@ -50,24 +46,15 @@ public class CommandProcessor {
         this.planModeSetter = planModeSetter;
     }
 
-    /** 注入手动 /compact 处理回调（上下文管理装配后调用；空闲态同步执行压缩）。 */
-    public void setCompactHandler(Runnable compactHandler) {
-        if (compactHandler != null) {
-            this.compactHandler = compactHandler;
-        }
-    }
-
-    /** 注入 /memory 处理回调（记忆装配后调用）。 */
-    public void setMemoryHandler(Consumer<String> memoryHandler) {
-        if (memoryHandler != null) {
-            this.memoryHandler = memoryHandler;
+    /** 注入命令调度器：主循环的每一行输入都交给它执行 */
+    public void setCommandDispatcher(CommandDispatcher dispatcher) {
+        if (dispatcher != null) {
+            this.commandDispatcher = dispatcher;
         }
     }
 
     public void mainLoop() {
         InputPane input = new InputPane(tui.terminal(), "> ", new CommandRegistry());
-        LiveRegionRenderer live = renderContext.liveRenderer();
-        Writer writer = renderContext.screenWriter();
         while (true) {
             String line;
             try {
@@ -76,72 +63,15 @@ public class CommandProcessor {
                 sessionManager.closeSession();
                 return;
             }
-            switch (CommandRouter.route(line)) {
-                case QUIT -> {
-                    sessionManager.closeSession();
-                    return;
-                }
-                case CLEAR -> {
-                    conversation.clear();
-                    live.clearScreen(writer);
-                    output.clear();
-                    output.appendLine("（已清空）");
-                    live.appendCommitted(writer, "（已清空）");
-                }
-                case HELP -> {
-                    output.append(CommandRouter.HELP_TEXT);
-                    live.appendCommitted(writer, CommandRouter.HELP_TEXT);
-                }
-                case RESUME -> sessionManager.selectSession();
-                case PLAN -> {
-                    planModeSetter.accept(true);
-                    output.appendLine("（已进入规划模式：只读探索，计划落盘到 .acode/plans/）");
-                    live.appendCommitted(writer, "（已进入规划模式：只读探索，计划落盘到 .acode/plans/）");
-                }
-                case DO -> {
-                    planModeSetter.accept(false);
-                    output.appendLine("（已退出规划模式，开始执行）");
-                    live.appendCommitted(writer, "（已退出规划模式，开始执行）");
-                }
-                case COMPACT -> compactHandler.run();
-                case MEMORY -> memoryHandler.accept(
-                        line.trim().substring("/memory".length()).trim());
-                case PERMISSION_MODE -> handlePermissionMode(line.trim().substring("/permission-mode".length()).trim(), live, writer);
-                case SKIP -> {
-                    // 空白输入，忽略
-                }
-                case CHAT -> chatHandler.accept(line);
+            if (handleLine(line) == CommandResult.EXIT) {
+                sessionManager.closeSession();
+                return;
             }
         }
     }
 
-    /**
-     * /permission-mode 切档：无参数输出当前模式；参数须为 4 合法值之一（大小写敏感、无多余参数）。
-     * 非法值输出错误、模式不变；合法切档只改内存 volatile mode，不写回 config.yaml。
-     */
-    void handlePermissionMode(String arg, LiveRegionRenderer live, Writer writer) {
-        String modeArg = arg == null ? "" : arg.trim();
-        if (modeArg.isEmpty()) {
-            String line = "当前权限模式：" + currentPermissionModeName();
-            output.appendLine(line);
-            live.appendCommitted(writer, line);
-            return;
-        }
-        PermissionMode mode = PermissionMode.fromConfig(modeArg);
-        if (mode == null) {
-            String line = "（非法权限模式：" + modeArg + "，可选：default/acceptEdits/plan/bypassPermissions）";
-            output.appendLine(line);
-            live.appendCommitted(writer, line);
-            return;
-        }
-        PermissionChecker checker = checkerSupplier.get();
-        checker.setMode(mode);
-        String line = "（已切换到权限模式：" + mode.configValue() + "）";
-        output.appendLine(line);
-        live.appendCommitted(writer, line);
-    }
-
-    private String currentPermissionModeName() {
-        return checkerSupplier.get().mode().configValue();
+    /** 单行输入：原样交给调度器，返回值即主循环去留 */
+    CommandResult handleLine(String line) {
+        return Objects.requireNonNull(commandDispatcher, "命令调度器未注入").dispatch(line);
     }
 }

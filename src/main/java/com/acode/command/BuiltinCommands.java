@@ -55,6 +55,7 @@ public final class BuiltinCommands {
         registry.register(clear());
         registry.register(plan());
         registry.register(executePlan());
+        registry.register(review());
     }
 
     /** /help：无参数按类型分三段（本地 / 本地界面 / 提示词）列出可见命令；带参数输出指定命令的详情 */
@@ -132,6 +133,15 @@ public final class BuiltinCommands {
             } catch (IOException e) {
                 emit(ctx.ui(), List.of("读取计划失败：" + e.getMessage()));
             }
+            return CommandResult.CONTINUE;
+        });
+    }
+
+    /** /review：构造预设审查提示词经对话通道发给 Agent（不在本地完成工作、不产生本地输出）；带参数时并入额外关注点 */
+    static Command review() {
+        return new Command("review", List.of(), "审查代码变更", "/review",
+                CommandType.PROMPT, "<额外关注点>", false, ctx -> {
+            ctx.ui().submitUserInput(ReviewPrompt.instruction(ctx.args()));
             return CommandResult.CONTINUE;
         });
     }

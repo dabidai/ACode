@@ -196,7 +196,6 @@ class HelpStatusCommandTest {
     void helpGroupsSectionsByTypeInRegistrationOrder() {
         CommandRegistry registry = new CommandRegistry();
         BuiltinCommands.registerAll(registry);
-        registry.register(fake("review", CommandType.PROMPT));
         registry.register(fake("execute", CommandType.LOCAL_UI));
 
         FakeUi ui = new FakeUi(new UIController.ContextUsage(0, 0));

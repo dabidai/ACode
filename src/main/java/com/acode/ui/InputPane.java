@@ -1,5 +1,6 @@
 package com.acode.ui;
 
+import com.acode.command.CommandRegistry;
 import org.jline.keymap.KeyMap;
 import org.jline.reader.Binding;
 import org.jline.reader.LineReader;
@@ -21,13 +22,13 @@ public class InputPane {
     private final LineReader reader;
     private final String prompt;
 
-    public InputPane(Terminal terminal, String prompt) {
+    public InputPane(Terminal terminal, String prompt, CommandRegistry registry) {
         this.prompt = prompt;
         this.reader = LineReaderBuilder.builder()
                 .terminal(terminal)
                 .appName("acode")
                 .option(LineReader.Option.ERASE_LINE_ON_FINISH, true)
-                .completer(new SlashCompleter())
+                .completer(new SlashCompleter(registry))
                 .build();
         bindKeys();
     }

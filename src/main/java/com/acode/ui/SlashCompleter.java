@@ -1,30 +1,26 @@
 package com.acode.ui;
 
+import com.acode.command.Command;
+import com.acode.command.CommandRegistry;
 import org.jline.reader.Candidate;
 import org.jline.reader.Completer;
 import org.jline.reader.LineReader;
 import org.jline.reader.ParsedLine;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
- * T2 探针：斜杠命令 Tab 补全最小实现。
- * 候选硬编码为本章内置命令；T11 按验证结论换成注册中心可见清单。
+ * 斜杠命令 Tab 补全：候选来自注册中心可见清单（仅斜杠给全部、有前缀按前缀过滤、大小写不敏感），
+ * 每条候选带命令名与描述；非斜杠开头或已进入参数区时不干预。
  */
 public class SlashCompleter implements Completer {
 
-    private static final List<Candidate> COMMANDS = List.of(
-            new Candidate("/help", "/help", null, "列出可用命令或查看命令详情", null, null, true),
-            new Candidate("/compact", "/compact", null, "压缩上下文，可带保留重点", null, null, true),
-            new Candidate("/resume", "/resume", null, "恢复历史会话", null, null, true),
-            new Candidate("/memory", "/memory", null, "查看 / 创建三层指令文件", null, null, true),
-            new Candidate("/permission", "/permission", null, "查看权限规则或切换模式", null, null, true),
-            new Candidate("/status", "/status", null, "一屏查看当前状态", null, null, true),
-            new Candidate("/quit", "/quit", null, "退出 ACode", null, null, true),
-            new Candidate("/clear", "/clear", null, "清空当前对话", null, null, true),
-            new Candidate("/plan", "/plan", null, "切换规划模式", null, null, true),
-            new Candidate("/do", "/do", null, "执行最近交付的计划", null, null, true),
-            new Candidate("/review", "/review", null, "审查未提交变更", null, null, true));
+    private final CommandRegistry registry;
+
+    public SlashCompleter(CommandRegistry registry) {
+        this.registry = registry;
+    }
 
     @Override
     public void complete(LineReader reader, ParsedLine line, List<Candidate> candidates) {
@@ -32,9 +28,11 @@ public class SlashCompleter implements Completer {
         if (!buffer.startsWith("/") || buffer.indexOf(' ') >= 0) {
             return;
         }
-        for (Candidate cmd : COMMANDS) {
-            if (cmd.value().startsWith(buffer)) {
-                candidates.add(cmd);
+        String prefix = buffer.substring(1).toLowerCase(Locale.ROOT);
+        for (Command command : registry.visible()) {
+            if (command.name().toLowerCase(Locale.ROOT).startsWith(prefix)) {
+                String name = "/" + command.name();
+                candidates.add(new Candidate(name, name, null, command.description(), null, null, true));
             }
         }
     }

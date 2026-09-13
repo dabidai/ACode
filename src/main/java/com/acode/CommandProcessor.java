@@ -1,5 +1,6 @@
 package com.acode;
 
+import com.acode.command.CommandRegistry;
 import com.acode.conversation.Conversation;
 import com.acode.permission.PermissionChecker;
 import com.acode.permission.PermissionMode;
@@ -64,7 +65,7 @@ public class CommandProcessor {
     }
 
     public void mainLoop() {
-        InputPane input = new InputPane(tui.terminal(), "> ");
+        InputPane input = new InputPane(tui.terminal(), "> ", new CommandRegistry());
         LiveRegionRenderer live = renderContext.liveRenderer();
         Writer writer = renderContext.screenWriter();
         while (true) {

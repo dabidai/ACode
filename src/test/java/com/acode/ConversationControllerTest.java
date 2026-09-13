@@ -1,5 +1,7 @@
 package com.acode;
 
+import com.acode.command.Command;
+import com.acode.command.CommandResult;
 import com.acode.config.AppConfig;
 import com.acode.permission.PermissionResponse;
 import com.acode.prompt.PromptBuilder;
@@ -786,5 +788,119 @@ class ConversationControllerTest {
 
         assertEquals(0, asks.get(), "acceptEdits 模式下写文件不应弹确认");
         assertEquals("hi", Files.readString(target), "acceptEdits 模式应直接放行写入");
+    }
+
+    // ---- T12 装配：命令框架接入主流程 ----
+
+    /** 装配后的注册中心：11 条内置命令全部可见（补全与帮助的候选来源） */
+    @Test
+    void builtinCommandsRegisteredInAssembly() {
+        ConversationController controller = new ConversationController(
+                FakeProvider.scripted(List.of()), config(), false);
+
+        List<String> names = controller.commandRegistry.visible().stream()
+                .map(Command::name).toList();
+
+        assertEquals(List.of("help", "compact", "resume", "memory", "permission",
+                        "status", "quit", "clear", "plan", "do", "review"), names,
+                "注册中心应在构造期装配全部内置命令，顺序即展示顺序");
+    }
+
+    /** /status 经真实装配的调度器执行：版本串与横幅同源（同一常量） */
+    @Test
+    void statusCommandThroughAssembledDispatcherSharesVersionWithBanner() {
+        FakeProvider provider = FakeProvider.scripted(List.of());
+        ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
+        controller.initSessionState();
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+
+        assertEquals(CommandResult.CONTINUE, controller.commandProcessor().handleLine("/status"));
+
+        String joined = String.join("\n", output.lines());
+        assertTrue(ConversationController.BANNER.contains(ConversationController.VERSION),
+                "横幅应引用版本常量");
+        assertTrue(joined.contains("ACode 状态"), "应输出状态聚合：" + joined);
+        assertTrue(joined.contains("版本：" + ConversationController.VERSION),
+                "状态命令应读同一版本常量：" + joined);
+    }
+
+    /** /help 经真实装配的调度器执行：列出注册中心的可见命令 */
+    @Test
+    void helpCommandThroughAssembledDispatcherListsBuiltinCommands() {
+        FakeProvider provider = FakeProvider.scripted(List.of());
+        ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
+        controller.initSessionState();
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+
+        controller.commandProcessor().handleLine("/help");
+
+        String joined = String.join("\n", output.lines());
+        assertTrue(joined.contains("可用命令："), "帮助应列出命令清单：" + joined);
+        assertTrue(joined.contains("/review"), "帮助应含 /review：" + joined);
+        assertTrue(joined.contains("/quit"), "帮助应含 /quit：" + joined);
+        assertEquals(0, provider.receivedRequests().size(), "本地命令不应发起模型请求");
+    }
+
+    /** 提示词命令经真实装配走对话通道：/review 无参数只发一次对话请求 */
+    @Test
+    void promptCommandThroughAssembledDispatcherGoesThroughChatChannel() {
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.delta("审查完成"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
+        controller.initSessionState();
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+
+        controller.commandProcessor().handleLine("/review");
+
+        assertEquals(1, provider.receivedRequests().size(), "提示词命令应经对话通道发一次请求");
+        assertTrue(String.join("\n", output.lines()).contains("审查完成"),
+                "Agent 回复应进输出区");
+    }
+
+    /** /plan 带参数经真实装配：切规划模式并发起对话任务 */
+    @Test
+    void planCommandWithArgsThroughAssembledDispatcherSwitchesModeAndSubmits() throws Exception {
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.delta("计划中"), FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
+        controller.initSessionState();
+        OutputPane output = new OutputPane();
+        controller.setOutput(output);
+
+        controller.commandProcessor().handleLine("/plan 设计一个登录页");
+
+        Field planMode = ConversationController.class.getDeclaredField("planMode");
+        planMode.setAccessible(true);
+        assertTrue(planMode.getBoolean(controller), "带参数应切换规划模式");
+        assertEquals(1, provider.receivedRequests().size(), "参数应作为任务发给 Agent");
+        assertTrue(String.join("\n", output.lines()).contains("计划中"), "Agent 回复应进输出区");
+    }
+
+    /** /clear 的清除钩子联动复位最近一次规划交付的落盘位置 */
+    @Test
+    void clearHookResetsDeliveredPlanPath() throws Exception {
+        FakeProvider provider = FakeProvider.scripted(List.of(
+                List.of(FakeProvider.delta("计划：重构 X"),
+                        FakeProvider.toolUse("id-1", "ExitPlanMode", JSON.createObjectNode()),
+                        FakeProvider.complete())));
+        ConversationController controller = new ConversationController(provider, config(), false);
+        controller.setProjectRoot(tempDir);
+        controller.setOutput(new OutputPane());
+        Field planMode = ConversationController.class.getDeclaredField("planMode");
+        planMode.setAccessible(true);
+        planMode.setBoolean(controller, true);
+        controller.handleExchange("做个计划", () -> false, () -> { });
+        assertTrue(controller.lastDeliveredPlanPath() != null, "计划交付后应有落盘记录");
+
+        controller.conversation().clear(); // /clear 走清除钩子
+
+        assertNull(controller.lastDeliveredPlanPath(), "清空应复位最近计划落盘位置");
     }
 }

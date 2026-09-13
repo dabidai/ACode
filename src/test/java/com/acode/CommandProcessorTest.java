@@ -6,7 +6,6 @@ import com.acode.command.CommandDispatcher;
 import com.acode.command.CommandRegistry;
 import com.acode.command.CommandResult;
 import com.acode.command.CommandType;
-import com.acode.conversation.Conversation;
 import com.acode.ui.MenuEntry;
 import com.acode.ui.UIController;
 import org.junit.jupiter.api.Test;
@@ -49,14 +48,12 @@ class CommandProcessorTest {
         }
     }
 
-    /** 构造真实调度器注入处理器（tui/output/会话等仅存于构造参数，handleLine 不触碰） */
+    /** 构造真实调度器注入处理器（tui/会话仅存于构造参数，handleLine 不触碰） */
     private static CommandProcessor processor(CommandRegistry registry, RecordingUi ui, List<String> chat) {
         CommandDispatcher dispatcher = new CommandDispatcher(registry,
                 args -> new CommandContext(args, ui, null, null, null, null, null, null, null),
                 chat::add);
-        CommandProcessor processor = new CommandProcessor(null, null, null,
-                new Conversation("m", false, 4096, 2000), null,
-                () -> null, chat::add, b -> { });
+        CommandProcessor processor = new CommandProcessor(null, null, registry);
         processor.setCommandDispatcher(dispatcher);
         return processor;
     }
@@ -110,9 +107,7 @@ class CommandProcessorTest {
 
     @Test
     void missingDispatcherFailsFast() {
-        CommandProcessor processor = new CommandProcessor(null, null, null,
-                new Conversation("m", false, 4096, 2000), null,
-                () -> null, s -> { }, b -> { });
+        CommandProcessor processor = new CommandProcessor(null, null, new CommandRegistry());
 
         NullPointerException e = assertThrows(NullPointerException.class, () -> processor.handleLine("x"));
 

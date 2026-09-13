@@ -15,6 +15,10 @@ import com.acode.agent.AgentEvent.UsageEvent;
 import com.acode.agent.AskUserTool;
 import com.acode.agent.EventConfirmationGate;
 import com.acode.agent.ExitPlanModeTool;
+import com.acode.command.BuiltinCommands;
+import com.acode.command.CommandContext;
+import com.acode.command.CommandDispatcher;
+import com.acode.command.CommandRegistry;
 import com.acode.config.AppConfig;
 import com.acode.config.ConfigException;
 import com.acode.config.ConfigLoader;
@@ -57,12 +61,16 @@ import com.acode.ui.ConfirmationPrompt;
 import com.acode.ui.HistoryRenderer;
 import com.acode.ui.InputPane;
 import com.acode.ui.LiveRegionRenderer;
+import com.acode.ui.MenuEntry;
 import com.acode.ui.OutputPane;
 import com.acode.ui.PromptAnswerer;
 import com.acode.ui.RenderContext;
+import com.acode.ui.SelectionMenu;
 import com.acode.ui.StreamPrinter;
 import com.acode.ui.TerminalMenuKeySource;
+import com.acode.ui.TerminalUIController;
 import com.acode.ui.ToolCallDisplay;
+import com.acode.ui.UIController;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.UserInterruptException;
 import org.slf4j.Logger;
@@ -94,19 +102,25 @@ public class ConversationController {
 
     private static final int MAX_TOKENS = 8192;
 
-    private static final String BANNER = """
+    /** 版本串：横幅与 /status 同源（不新增版本机制，只是把艺术字里的串提炼出来） */
+    static final String VERSION = "v0.1.0";
+
+    /** 启动横幅（版本行引用 {@link #VERSION}，与命令层读同一处）；包可见供测试断言同源 */
+    static final String BANNER = """
              ___   ____    ___   ___   ____
             / _ \\ / ___|  / _ \\ / _ \\ |  _ \\
            | | | | |     | | | | | | || | | |
            | |_| | |___  | |_| | |_| || |_| |
             \\___/ \\____|  \\___/ \\___/ |____/
-                          ACode v0.1.0
-            """;
+                          ACode %s
+            """.formatted(VERSION);
 
     private final ChatProvider provider;
     private final AppConfig config;
     private final Conversation conversation;
     private final ToolRegistry toolRegistry;
+    /** 命令注册中心：构造期装配全部内置命令（注册顺序即帮助与补全展示顺序）；包可见供测试断言 */
+    final CommandRegistry commandRegistry;
     private final boolean resume;
     private final SessionManager sessionManager;
     private boolean sessionManagerAttached;
@@ -183,6 +197,9 @@ public class ConversationController {
         DefaultToolset.registerAll(toolRegistry);
         toolRegistry.register(new ExitPlanModeTool());
         toolRegistry.register(new AskUserTool());
+        // 命令框架装配：一次性注册全部内置命令，注册顺序即帮助与补全的展示顺序
+        this.commandRegistry = new CommandRegistry();
+        BuiltinCommands.registerAll(commandRegistry);
         this.mcpManager = new McpManager(config, projectRoot);
         // 连接在 start() 里 UI 就位后做：连接耗时（含超时）不该挡在 banner 之前，
         // 告警也要落进输出区而不是裸 stderr
@@ -201,10 +218,11 @@ public class ConversationController {
         initSessionState();
     }
 
-    /** 清空点钩子：上下文管理运行期状态与记忆提取运行态一并复位（/clear、加载会话联动） */
+    /** 清空点钩子：上下文管理运行期状态、记忆提取运行态与最近计划落盘位置一并复位（/clear、加载会话联动） */
     private void resetContextStateOnClear() {
         contextManager().reset();
         memoryManager.reset();
+        deliveredPlanPath = null;
     }
 
     /**
@@ -351,14 +369,49 @@ public class ConversationController {
         sessionManager().renderLoaded(action, session.id(), loaded.messages());
     }
 
-    /** 主循环命令分发：惰性构造（首次使用时以当前 tui/output/应答器装配）。 */
-    private CommandProcessor commandProcessor() {
+    /**
+     * 主循环命令分发：惰性装配（首次使用时以当前 tui/output 构建界面操作接口、
+     * 打包命令上下文、注册中心与对话通道交给调度器）。包可见供测试经 handleLine 驱动。
+     */
+    CommandProcessor commandProcessor() {
         if (commandProcessor == null) {
-            commandProcessor = new CommandProcessor(tui, output, renderContext, conversation,
-                    sessionManager(), this::permissionChecker, this::handleChat,
-                    planMode -> this.planMode = planMode);
+            UIController ui = new TerminalUIController(output, renderContext,
+                    this::handleChat,
+                    planMode -> this.planMode = planMode,
+                    () -> new UIController.ContextUsage(
+                            conversation.estimateContextTokens(), conversation.maxContextTokens()),
+                    this::selectMenu,
+                    this::clearScreenAndNewSession,
+                    this::lastDeliveredPlanPath);
+            // 上下文工厂：只有 args 每次不同，其余依赖装配时固定打包
+            PermissionChecker checker = permissionChecker();
+            ContextManager contexts = contextManager();
+            SessionManager sessions = sessionManager();
+            CommandDispatcher dispatcher = new CommandDispatcher(commandRegistry,
+                    args -> new CommandContext(args, ui, checker, contexts, memoryManager,
+                            sessions, projectRoot, toolRegistry, VERSION),
+                    this::handleChat);
+            CommandProcessor processor = new CommandProcessor(tui, sessions, commandRegistry);
+            processor.setCommandDispatcher(dispatcher);
+            commandProcessor = processor;
         }
         return commandProcessor;
+    }
+
+    /** 弹选择菜单（/resume、/memory 共用）：沿用既有 SelectionMenu overlay 渲染与终端按键源 */
+    private int selectMenu(List<MenuEntry> entries, String title) {
+        LiveRegionRenderer live = liveRenderer();
+        Writer writer = screenWriter();
+        live.commitRegion(); // 菜单前的活跃区留作历史，菜单从下方空白处画起（同 selectSession 先例）
+        return SelectionMenu.of(entries, title, 0)
+                .select(live, writer, new TerminalMenuKeySource(tui.terminal().reader()));
+    }
+
+    /** /clear 三步语义：清空对话历史（联动清除钩子）→ 整屏清空 → 输出区重置；「（已清空）」文案由命令输出 */
+    private void clearScreenAndNewSession() {
+        conversation.clear();
+        liveRenderer().clearScreen(screenWriter());
+        output.clear();
     }
 
     /** 上下文管理门面：懒装配一次（provider/conversation/工作目录/预算策略）；clear 钩子已挂 conversation */
@@ -488,8 +541,11 @@ public class ConversationController {
                         memoryManager.store().userScope().root()));
     }
 
-    /** raw 模式下检测 Ctrl+C（0x03 字节）；命中则消费该字节。 */
+    /** raw 模式下检测 Ctrl+C（0x03 字节）；命中则消费该字节。无终端（纯测试环境）不检测。 */
     private boolean ctrlCPressed() {
+        if (tui == null) {
+            return false;
+        }
         try {
             if (tui.terminal().reader().peek(10) == 0x03) {
                 tui.terminal().reader().read(0);

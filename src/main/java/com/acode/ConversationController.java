@@ -88,6 +88,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
@@ -400,6 +401,9 @@ public class ConversationController {
 
     /** 弹选择菜单（/resume、/memory 共用）：沿用既有 SelectionMenu overlay 渲染与终端按键源 */
     private int selectMenu(List<MenuEntry> entries, String title) {
+        if (menuSelector != null) {
+            return menuSelector.apply(entries, title);
+        }
         LiveRegionRenderer live = liveRenderer();
         Writer writer = screenWriter();
         live.commitRegion(); // 菜单前的活跃区留作历史，菜单从下方空白处画起（同 selectSession 先例）
@@ -449,6 +453,11 @@ public class ConversationController {
     /** 测试用：注入选择应答器（跳过真实终端读键）。 */
     void setChoiceAnswerer(Function<ChoiceRequestEvent, String> answerer) {
         this.choiceAnswerer = answerer;
+    }
+
+    /** 测试用：注入选择菜单入口（跳过真实终端按键；/resume、/memory 共用）。 */
+    void setMenuSelector(BiFunction<List<MenuEntry>, String, Integer> menuSelector) {
+        this.menuSelector = menuSelector;
     }
 
     /** 测试用：注入权限检查器（供 /permission-mode 命令与执行器装配）。 */
@@ -517,8 +526,11 @@ public class ConversationController {
         return exchangeRunner;
     }
 
+    /** 选择菜单入口（/resume、/memory 共用）；测试可注入替身跳过真实终端按键。 */
+    private BiFunction<List<MenuEntry>, String, Integer> menuSelector;
+
     /** 权限检查器：懒构建（与 /permission-mode 共用，经 Supplier 传入 ExchangeRunner）。 */
-    private PermissionChecker permissionChecker() {
+    PermissionChecker permissionChecker() {
         if (permissionChecker == null) {
             permissionChecker = buildPermissionChecker();
         }

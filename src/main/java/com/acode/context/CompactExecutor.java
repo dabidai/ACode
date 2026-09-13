@@ -85,6 +85,11 @@ public class CompactExecutor {
      * manual=false 仅当 needsAutoCompact 为真才有意义（调用方已判守卫）。
      */
     public Result run(boolean manual) {
+        return run(manual, null);
+    }
+
+    /** 带保留重点的压缩：focus 非空时追加进摘要指令末尾（空则行为与 run(manual) 一致） */
+    public Result run(boolean manual, String focus) {
         List<ChatMessage> history = conversation.history();
         CompactionPlanner.Partition plan = planner.plan(history);
         int before = conversation.estimateContextTokens();
@@ -92,7 +97,7 @@ public class CompactExecutor {
             return Result.noChange(before);
         }
         List<ChatMessage> region = planner.summaryRegion(history, plan);
-        String summary = requestSummary(region);
+        String summary = requestSummary(region, focus);
         if (summary == null) {
             consecutiveFailures++;
             return Result.failure("摘要生成失败", before);
@@ -136,13 +141,13 @@ public class CompactExecutor {
      * 生成摘要正文：发一次不携带工具、thinking 关闭、max_tokens 独立给足的摘要请求并解析两阶段输出。
      * 摘要请求自身"上下文超长" → 按丢最旧分组重试；仍失败返回 null（调用方计熔断）。
      */
-    private String requestSummary(List<ChatMessage> region) {
+    private String requestSummary(List<ChatMessage> region, String focus) {
         List<ChatMessage> working = new ArrayList<>(region);
         int overlongDrops = 0;
         boolean ratioDropped = false;
         while (!working.isEmpty()) {
             SummaryCollector collector = new SummaryCollector();
-            provider.streamChat(summaryRequest(working), collector);
+            provider.streamChat(summaryRequest(working, focus), collector);
             if (collector.error == null) {
                 String summary = parseSummary(collector.text.toString());
                 return summary == null || summary.isEmpty() ? null : summary;
@@ -164,9 +169,9 @@ public class CompactExecutor {
     }
 
     /** 组装摘要请求：SYSTEM 指令首条 + 摘要区消息；不设 tools、thinking 关闭、max_tokens 用独立摘要常量 */
-    private ChatRequest summaryRequest(List<ChatMessage> region) {
+    private ChatRequest summaryRequest(List<ChatMessage> region, String focus) {
         List<ChatMessage> messages = new ArrayList<>(region.size() + 1);
-        messages.add(ChatMessage.of(ChatMessage.Role.SYSTEM, SummaryPrompt.instruction()));
+        messages.add(ChatMessage.of(ChatMessage.Role.SYSTEM, SummaryPrompt.instruction(focus)));
         messages.addAll(region);
         return ChatRequest.builder()
                 .model(conversation.model())

@@ -151,4 +151,24 @@ class CompactExecutorTest {
         assertEquals(ASSISTANT, provider.receivedRequests().get(1).messages().get(1).role(),
                 "丢走孤立 user 后，重试请求 content 首条为 assistant（前置成立）");
     }
+
+    @Test
+    void runWithFocusIncludesFocusTextInSummaryInstruction() {
+        Conversation c = compressibleConversation(200_000, 10_000);
+        FakeProvider provider = FakeProvider.streaming("<summary>压缩正文</summary>");
+        CompactExecutor ex = executor(provider, c);
+        assertTrue(ex.run(true, "数据库迁移方案").changed(), "带保留重点压缩应成功");
+        String system = provider.receivedRequests().get(0).messages().get(0).content();
+        assertTrue(system.contains("压缩时请特别保留：数据库迁移方案"), "摘要指令末尾含保留重点");
+    }
+
+    @Test
+    void runWithoutFocusKeepsSummaryInstructionUnchanged() {
+        Conversation c = compressibleConversation(200_000, 10_000);
+        FakeProvider provider = FakeProvider.streaming("<summary>压缩正文</summary>");
+        CompactExecutor ex = executor(provider, c);
+        assertTrue(ex.run(true).changed(), "不带保留重点压缩应成功");
+        String system = provider.receivedRequests().get(0).messages().get(0).content();
+        assertEquals(SummaryPrompt.instruction(), system, "不带重点时摘要指令与改动前逐字相同");
+    }
 }

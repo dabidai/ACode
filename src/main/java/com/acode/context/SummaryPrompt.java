@@ -47,4 +47,15 @@ public final class SummaryPrompt {
                 只输出 <analysis> 与 <summary> 两种标签内容，不要输出其他解释或寒暄。
                 """;
     }
+
+    /**
+     * 带保留重点的摘要指令：在固定指令末尾追加「压缩时请特别保留：<重点>」。
+     * focus 为 null 或空白时与 instruction() 逐字相同。
+     */
+    public static String instruction(String focus) {
+        if (focus == null || focus.isBlank()) {
+            return instruction();
+        }
+        return instruction() + "压缩时请特别保留：" + focus + "\n";
+    }
 }

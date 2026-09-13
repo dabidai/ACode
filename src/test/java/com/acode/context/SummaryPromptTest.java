@@ -2,6 +2,7 @@ package com.acode.context;
 
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** ch07 T4：SummaryPrompt 指令含 9 段结构、用户原文优先、两阶段、禁工具 等关键词。 */
@@ -25,5 +26,15 @@ class SummaryPromptTest {
                 "草稿丢弃");
         assertTrue(p.contains("只输出纯文本"), "只输出纯文本");
         assertTrue(p.contains("禁止调用任何工具"), "禁止工具");
+    }
+
+    @Test
+    void instructionWithFocusAppendsRetentionLineAtEnd() {
+        String base = SummaryPrompt.instruction();
+        String withFocus = SummaryPrompt.instruction("数据库迁移方案");
+        assertTrue(withFocus.startsWith(base), "带重点指令前缀与无参版逐字相同");
+        assertTrue(withFocus.contains("压缩时请特别保留：数据库迁移方案"), "末尾追加保留重点行");
+        assertEquals(base, SummaryPrompt.instruction(null), "null 重点退回无参指令");
+        assertEquals(base, SummaryPrompt.instruction("  "), "空白重点退回无参指令");
     }
 }

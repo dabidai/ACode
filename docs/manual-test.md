@@ -331,7 +331,9 @@
 
 - 构建：`mvn -DskipTests package`（构建环境 `JAVA_HOME=D:\java\jdk21`），运行 `java -jar target/acode.jar`。
 - 默认权限模式来自 `.acode/config.yaml` 的 `permission_mode`；未配置时按 default。
-- 每次切档用 `/permission-mode <模式>`（即时生效、不写回 config）。
+- 每次切档用 `/permission <模式>`（即时生效、不写回 config）。
+  **注**：切档命令在 ch09 已由 `/permission-mode` 改名为 `/permission`（不留别名；无参只查看当前模式
+  与三层规则清单，**带参数才切档**）。本节步骤已按现名更新，ch05 当时跑的是旧名。
 
 ## PERM1 default 模式：读不弹、写/命令弹三选一
 
@@ -347,19 +349,19 @@
 
 ## PERM3 acceptEdits：写不弹、命令弹
 
-1. `/permission-mode acceptEdits`。
+1. `/permission acceptEdits`。
 2. 触发 `WriteFile`/`EditFile`：预期**无弹窗**直接执行。
 3. 触发 `Bash`：预期**仍弹三选一**。
 
 ## PERM4 plan 模式：只读 + 计划文件放行
 
-1. `/permission-mode plan`。
+1. `/permission plan`。
 2. `ReadFile` 正常；写非计划文件（如改 `src/` 下文件）被确认/拒绝。
 3. `/plan` 进入规划并交付：写入 `{工作目录}/.acode/plans/` 的计划文件**自动放行、无弹窗**。
 
 ## PERM5 bypassPermissions：全放行但黑名单仍生效
 
-1. `/permission-mode bypassPermissions`。
+1. `/permission bypassPermissions`。
 2. 触发 `WriteFile`/`Bash`：预期**全程无弹窗**。
 3. 仍执行 `rm -rf /`：预期**仍被拦截**、结果显示「权限拒绝」。
 
@@ -381,11 +383,11 @@
 3. 同一操作第二次调用：**不再弹窗**、直接执行。
 4. 退出重启 ACode：规则仍在，同类操作仍自动放行（持久化生效）。
 
-## PERM8 /permission-mode 切档即时生效
+## PERM8 /permission 切档即时生效
 
-1. `/permission-mode`（无参数）→ 输出当前模式。
-2. `/permission-mode acceptEdits` → 输出已切换；`WriteFile` 不再弹窗。
-3. `/permission-mode ACCEPT_EDITS` / `yolo` / `acceptEdits extra` → 输出非法提示、模式不变。
+1. `/permission`（无参数）→ 输出当前模式与三层规则清单（**不是**切档）。
+2. `/permission acceptEdits` → 输出已切换；`WriteFile` 不再弹窗。
+3. `/permission ACCEPT_EDITS` / `yolo` / `acceptEdits extra` → 输出非法提示、模式不变。
 4. 检查 `.acode/config.yaml` 内容不变；重启后按 config 值恢复。
 
 ---

@@ -94,6 +94,12 @@
 
 ## T8 /permission-mode 运行时切档
 
+> **注（ch09 后补）**：命令与实现都变了。本节带 `[x]` 的条目**保持原文**——它们记录的是 ch05
+> 当时用旧名跑出的结果（`CommandRouter` 那一层后来也被 ch09 的 `CommandDispatcher` 取代了），
+> 改成现名等于篡改记录。当前形态是 `/permission <模式>`：**无参只查看**模式与三层规则清单、
+> **带参数才切档**，不留别名。手测手册（`docs/manual-test.md` 阶段五 PERM1–PERM8）的步骤
+> 已同步为现名，可直接照它跑。
+
 - [x] `CommandRouter.route("/permission-mode")` 返回 `Action.PERMISSION_MODE`；`"/permission-mode default"` 同样映射
 - [x] 终端输入 `/permission-mode acceptEdits` → 输出当前模式为 acceptEdits（checker 模式已切换）
 - [x] `/permission-mode acceptEdits `（尾随空白，trim 后合法）→ 切换成功
@@ -125,9 +131,9 @@
 
 - [ ] 真实 API：default 模式 → ReadFile 无弹窗、WriteFile/Bash 弹「放行 / 始终允许 / 拒绝」三选一
 - [ ] 真实 API：Bash `rm -rf /` → 被硬拦截，工具结果显示「权限拒绝」，Agent 换策略继续，会话正常结束
-- [ ] 真实 API：`/permission-mode acceptEdits` → WriteFile 无弹窗、Bash 仍弹窗
-- [ ] 真实 API：`/permission-mode plan` → ReadFile 正常、写非计划文件被确认/拒绝、`{工作目录}/.acode/plans/` 下计划文件写入放行
-- [ ] 真实 API：`/permission-mode bypassPermissions` → 全程无弹窗、`rm -rf /` 仍被拦截
+- [ ] 真实 API：`/permission acceptEdits` → WriteFile 无弹窗、Bash 仍弹窗
+- [ ] 真实 API：`/permission plan` → ReadFile 正常、写非计划文件被确认/拒绝、`{工作目录}/.acode/plans/` 下计划文件写入放行
+- [ ] 真实 API：`/permission bypassPermissions` → 全程无弹窗、`rm -rf /` 仍被拦截
 - [ ] 真实 API：`ReadFile(*.env*)` 规则 → ReadFile `.env` 被拒（deny 原因返回模型）
 - [ ] 真实 API：确认「始终允许」后退出重启 → `.acode/permissions.local.yaml` 规则仍在，同类操作仍自动放行（持久化生效）
 - [x] 全程 `mvn test` 全绿（构建环境 `JAVA_HOME=D:\java\jdk21`；新增 permission 包测试均无网络依赖）

@@ -1,13 +1,19 @@
 package com.acode.ui;
 
 import com.acode.config.AppConfig;
+import org.jline.terminal.Size;
+import org.jline.terminal.Terminal;
+import org.jline.terminal.TerminalBuilder;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.StringWriter;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -56,5 +62,37 @@ class RenderContextTest {
         StringWriter injected = new StringWriter();
         rc.setScreenWriter(injected);
         assertSame(injected, rc.screenWriter(), "注入的输出目标应优先返回同一实例");
+    }
+
+    @Test
+    void liveRendererIsReusedAcrossCallsWhenTuiAttached() throws Exception {
+        RenderContext rc = renderContext();
+        try (AcodeTerminal tui = virtualTerminal(80, 24)) {
+            rc.attachTui(tui);
+            assertSame(rc.liveRenderer(), rc.liveRenderer(),
+                    "真实终端路径下必须复用同一渲染器，否则 rowsWritten 状态会分散到各实例、重绘错位");
+        }
+    }
+
+    @Test
+    void attachTuiInvalidatesCachedLiveRenderer() throws Exception {
+        RenderContext rc = renderContext();
+        try (AcodeTerminal first = virtualTerminal(80, 24);
+             AcodeTerminal second = virtualTerminal(120, 40)) {
+            rc.attachTui(first);
+            LiveRegionRenderer before = rc.liveRenderer();
+            rc.attachTui(second);
+            assertNotSame(before, rc.liveRenderer(), "换终端后缓存必须失效，否则会按旧终端尺寸定位");
+        }
+    }
+
+    /** 测试用虚拟终端：固定尺寸、无系统终端依赖 */
+    private static AcodeTerminal virtualTerminal(int columns, int rows) throws Exception {
+        Terminal terminal = TerminalBuilder.builder()
+                .system(false)
+                .streams(new ByteArrayInputStream(new byte[0]), new ByteArrayOutputStream())
+                .size(new Size(columns, rows))
+                .build();
+        return new AcodeTerminal(terminal);
     }
 }

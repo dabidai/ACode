@@ -15,7 +15,8 @@ public class AcodeTerminal implements AutoCloseable {
 
     private final Terminal terminal;
 
-    private AcodeTerminal(Terminal terminal) {
+    /** 包可见：测试用虚拟终端（TerminalBuilder + 固定尺寸）构造，生产路径只走 {@link #open()}。 */
+    AcodeTerminal(Terminal terminal) {
         this.terminal = terminal;
     }
 

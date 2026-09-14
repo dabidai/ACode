@@ -13,6 +13,8 @@ public final class RenderContext {
 
     private final AppConfig config;
     private LiveRegionRenderer live;
+    /** 真实终端路径的渲染器单例：跨组件共享 rowsWritten 等定位状态。 */
+    private LiveRegionRenderer cachedLive;
     private Writer screenWriter;
     private AcodeTerminal tui;
 
@@ -20,8 +22,11 @@ public final class RenderContext {
         this.config = config;
     }
 
-    /** 绑定真实终端（start() 调用）；测试注入路径不调用。 */
+    /** 绑定真实终端（start() 调用）；测试注入路径不调用。换终端时缓存失效。 */
     public void attachTui(AcodeTerminal tui) {
+        if (this.tui != tui) {
+            cachedLive = null;
+        }
         this.tui = tui;
     }
 
@@ -35,17 +40,25 @@ public final class RenderContext {
         this.screenWriter = writer;
     }
 
-    /** 活跃区渲染器：测试注入优先，否则按终端尺寸实时新建（窗口变化随读随取）。 */
+    /**
+     * 活跃区渲染器：测试注入优先；真实终端路径下**建一次、全程复用**。
+     * 复用是必需的——rowsWritten 记录「活跃区已写行数」，重绘时靠它上移回区顶；
+     * 若每次调用都新建，各调用点（本轮对话 / 会话菜单 / 命令输出）各记各的账，
+     * 上移行数就会与实际屏幕内容对不上、重绘错位。尺寸仍是随读随取（构造器收的是 supplier）。
+     */
     public LiveRegionRenderer liveRenderer() {
         // 测试注入的假渲染器
         if (live != null) {
             return live;
         }
-        // 真实终端尺寸时读取
+        // 真实终端：单例复用，跨组件共享定位状态
         if (tui != null) {
-            return new LiveRegionRenderer(tui::width, tui::height);
+            if (cachedLive == null) {
+                cachedLive = new LiveRegionRenderer(tui::width, tui::height);
+            }
+            return cachedLive;
         }
-        // 无终端时设定
+        // 无终端时不缓存：避免测试间共享状态
         return new LiveRegionRenderer(80, 24);
     }
 

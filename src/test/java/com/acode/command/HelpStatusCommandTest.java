@@ -12,12 +12,14 @@ import com.acode.permission.RuleEngine;
 import com.acode.provider.FakeProvider;
 import com.acode.session.SessionManager;
 import com.acode.session.SessionStore;
+import com.acode.testutil.AnsiTestSupport;
 import com.acode.tool.BaseTool;
 import com.acode.tool.ParamSpec;
 import com.acode.tool.Permission;
 import com.acode.tool.ToolContext;
 import com.acode.tool.ToolRegistry;
 import com.acode.tool.ToolResult;
+import com.acode.ui.AnsiPalette;
 import com.acode.ui.MenuEntry;
 import com.acode.ui.SlashCompleter;
 import com.acode.ui.UIController;
@@ -34,6 +36,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static com.acode.testutil.AnsiTestSupport.stripAnsi;
 
 class HelpStatusCommandTest {
 
@@ -188,8 +191,10 @@ class HelpStatusCommandTest {
             assertTrue(output.contains(nameColumn(command)), "帮助应含 /" + command.name());
         }
         assertTrue(output.contains("/quit"), "退出命令应出现在帮助中");
-        long nameLines = lines.stream().filter(l -> l.startsWith("  /")).count();
+        long nameLines = stripAnsi(lines).stream().filter(l -> l.startsWith("  /")).count();
         assertEquals(registry.visible().size(), nameLines, "帮助条数应与可见清单一致");
+        assertTrue(output.contains(AnsiPalette.MODEL + "/help, /h"),
+                "命令名应上亮青色（去色后才谈得上等宽对齐）");
     }
 
     @Test
@@ -211,9 +216,10 @@ class HelpStatusCommandTest {
         }
         List<String> actual = new ArrayList<>();
         List<Integer> actualIdx = new ArrayList<>();
-        for (int i = 0; i < lines.size(); i++) {
-            if (lines.get(i).startsWith("  /")) {
-                actual.add(lines.get(i).substring(2).split(" {2,}")[0]);
+        List<String> plain = stripAnsi(lines); // 命令名上了色：结构化解析前先去掉 ANSI
+        for (int i = 0; i < plain.size(); i++) {
+            if (plain.get(i).startsWith("  /")) {
+                actual.add(plain.get(i).substring(2).split(" {2,}")[0]);
                 actualIdx.add(i);
             }
         }
@@ -289,11 +295,14 @@ class HelpStatusCommandTest {
         List<String> lines = run(registry, "status", null, ui);
         String output = String.join("\n", lines);
 
-        assertEquals("ACode 状态", lines.get(0));
-        assertEquals("─".repeat(13), lines.get(1));
-        assertTrue(output.contains("模式：default"));
-        assertTrue(output.contains("工作目录：" + tempDir));
-        assertTrue(output.contains("版本：" + VERSION));
+        assertEquals("ACode 状态", lines.get(0), "标题不上色，仍是纯文本行");
+        String plain = stripAnsi(output);
+        assertEquals("─".repeat(13), stripAnsi(lines.get(1)), "分隔线仍是 13 个 ─（暗色只包在两侧，可见文本不变）");
+        assertTrue(plain.contains("模式：default"));
+        assertTrue(plain.contains("工作目录：" + tempDir));
+        assertTrue(plain.contains("版本：" + VERSION));
+        assertTrue(output.contains(AnsiPalette.DIM + "模式：" + AnsiPalette.RESET + AnsiPalette.MODE + "default"),
+                "标签应暗色、模式值应亮黄色");
     }
 
     @Test
@@ -304,7 +313,7 @@ class HelpStatusCommandTest {
         FakeUi ui = new FakeUi(new UIController.ContextUsage(45_230, 200_000));
         String output = String.join("\n", run(registry, "status", null, ui));
 
-        assertTrue(output.contains("Token：45,230 / 200,000（23%）"),
+        assertTrue(stripAnsi(output).contains("Token：45,230 / 200,000（23%）"),
                 "千位应加逗号、占比按占用除以上限取整");
     }
 
@@ -319,7 +328,7 @@ class HelpStatusCommandTest {
         String output = String.join("\n", run(registry, "status", null, ui, store(), tools));
 
         assertEquals(5, tools.availableList().size());
-        assertTrue(output.contains("工具：" + tools.availableList().size() + " 个已启用"),
+        assertTrue(stripAnsi(output).contains("工具：" + tools.availableList().size() + " 个已启用"),
                 "工具数应与注册表已启用数量一致");
     }
 
@@ -341,7 +350,7 @@ class HelpStatusCommandTest {
                 + " · project " + countOf(store, MemoryType.PROJECT) + " 条"
                 + " · reference " + countOf(store, MemoryType.REFERENCE) + " 条";
         assertEquals("记忆：user 3 条 · feedback 1 条 · project 5 条 · reference 2 条", expected);
-        assertTrue(output.contains(expected), "四类记忆条数应与存储实际一致");
+        assertTrue(stripAnsi(output).contains(expected), "四类记忆条数应与存储实际一致");
     }
 
     private static void writeSome(MemoryStore store, MemoryType type, int n, String prefix) {

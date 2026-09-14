@@ -15,6 +15,7 @@ import com.acode.provider.ChatProvider;
 import com.acode.provider.ChatRequest;
 import com.acode.provider.FakeProvider;
 import com.acode.session.SessionCodec;
+import com.acode.testutil.AnsiTestSupport;
 import com.acode.tool.Permission;
 import com.acode.tool.Tool;
 import com.acode.tool.ToolContext;
@@ -110,6 +111,11 @@ class CommandSystemEndToEndTest {
 
     private List<String> delta(int before) {
         return output.lines().subList(before, output.lineCount());
+    }
+
+    /** delta 的可见文本视图：/status 与 /help 已上色，内容断言要去掉 ANSI 再比 */
+    private List<String> deltaPlain(int before) {
+        return AnsiTestSupport.stripAnsi(delta(before));
     }
 
     private static long chatRequests(FakeProvider provider) {
@@ -241,8 +247,8 @@ class CommandSystemEndToEndTest {
         before = output.lineCount();
         line(controller, "/status");
         assertEquals(chatBefore, chatRequests(provider), "/status 不发对话请求");
-        assertTrue(delta(before).contains("模式：default"));
-        assertTrue(delta(before).contains("版本：v0.1.0"));
+        assertTrue(deltaPlain(before).contains("模式：default"));
+        assertTrue(deltaPlain(before).contains("版本：v0.1.0"));
 
         before = output.lineCount();
         line(controller, "/compact");
@@ -365,7 +371,7 @@ class CommandSystemEndToEndTest {
 
         before = output.lineCount();
         line(controller, "/status");
-        assertTrue(delta(before).contains("模式：acceptEdits"), "切档后状态随之变化");
+        assertTrue(deltaPlain(before).contains("模式：acceptEdits"), "切档后状态随之变化");
 
         before = output.lineCount();
         line(controller, "/permission nosuchmode");
@@ -492,7 +498,7 @@ class CommandSystemEndToEndTest {
 
         int before = output.lineCount();
         line(controller, "/help");
-        List<String> help = delta(before);
+        List<String> help = deltaPlain(before);
         int quitIdx = -1;
         for (int i = 0; i < help.size(); i++) {
             if (help.get(i).startsWith("  /quit")) {
@@ -536,13 +542,14 @@ class CommandSystemEndToEndTest {
         line(controller, "/permission acceptEdits");
         before = output.lineCount();
         line(controller, "/status");
-        assertTrue(delta(before).contains("模式：acceptEdits"));
-        assertTrue(delta(before).stream().anyMatch(l -> l.contains("记忆：user 0 条")), delta(before).toString());
+        assertTrue(deltaPlain(before).contains("模式：acceptEdits"));
+        assertTrue(deltaPlain(before).stream().anyMatch(l -> l.contains("记忆：user 0 条")),
+                deltaPlain(before).toString());
 
         controller.memoryManager().store().write(MemoryType.USER, "pref-7", "用户偏好", "正文");
         before = output.lineCount();
         line(controller, "/status");
-        assertTrue(delta(before).stream().anyMatch(l -> l.contains("记忆：user 1 条")),
+        assertTrue(deltaPlain(before).stream().anyMatch(l -> l.contains("记忆：user 1 条")),
                 "直接写记忆后 /status 条数随之增加");
 
         PermissionChecker checker = controller.permissionChecker();

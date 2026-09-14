@@ -14,6 +14,7 @@ import com.acode.provider.TextBlock;
 import com.acode.provider.ToolResultBlock;
 import com.acode.provider.ToolUseBlock;
 import com.acode.provider.Usage;
+import com.acode.testutil.AnsiTestSupport;
 import com.acode.ui.HistoryRenderer;
 import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
@@ -819,11 +820,12 @@ class ConversationControllerTest {
         assertEquals(CommandResult.CONTINUE, controller.commandProcessor().handleLine("/status"));
 
         String joined = String.join("\n", output.lines());
+        String plain = AnsiTestSupport.stripAnsi(joined); // /status 已上色：内容断言按可见文本比
         assertTrue(ConversationController.BANNER.contains(ConversationController.VERSION),
                 "横幅应引用版本常量");
-        assertTrue(joined.contains("ACode 状态"), "应输出状态聚合：" + joined);
-        assertTrue(joined.contains("版本：" + ConversationController.VERSION),
-                "状态命令应读同一版本常量：" + joined);
+        assertTrue(plain.contains("ACode 状态"), "应输出状态聚合：" + plain);
+        assertTrue(plain.contains("版本：" + ConversationController.VERSION),
+                "状态命令应读同一版本常量：" + plain);
     }
 
     /** /help 经真实装配的调度器执行：列出注册中心的可见命令 */

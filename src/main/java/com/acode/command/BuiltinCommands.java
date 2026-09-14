@@ -11,6 +11,7 @@ import com.acode.permission.RuleEngine;
 import com.acode.prompt.ProjectInstructions;
 import com.acode.provider.ChatMessage;
 import com.acode.session.Session;
+import com.acode.ui.AnsiPalette;
 import com.acode.ui.MenuEntry;
 import com.acode.ui.UIController;
 
@@ -29,7 +30,7 @@ import java.util.Locale;
  */
 public final class BuiltinCommands {
 
-    /** /status 标题下的分隔线，与验收清单逐字一致 */
+    /** /status 标题下的分隔线，与验收清单逐字一致（暗色只在调用点包一层 DIM，可见文本不变） */
     private static final String DIVIDER = "─".repeat(13);
     /** /status 四类记忆的展示顺序（固定） */
     private static final List<MemoryType> MEMORY_ORDER = List.of(
@@ -271,8 +272,9 @@ public final class BuiltinCommands {
             firstSection = false;
             for (Command command : section) {
                 String column = nameColumn(command);
-                lines.add("  " + column
-                        + " ".repeat(nameWidth - column.length() + 4) + command.description());
+                lines.add("  " + AnsiPalette.MODEL + column + AnsiPalette.RESET
+                        + " ".repeat(nameWidth - column.length() + 4)
+                        + AnsiPalette.DIM + command.description() + AnsiPalette.RESET);
             }
         }
         lines.add("");
@@ -316,15 +318,21 @@ public final class BuiltinCommands {
         int percent = (int) Math.round(usage.used() * 100.0 / usage.max());
         List<String> lines = new ArrayList<>();
         lines.add("ACode 状态");
-        lines.add(DIVIDER);
-        lines.add("模式：" + ctx.permissionChecker().mode().configValue());
-        lines.add("Token：" + grouped(usage.used()) + " / " + grouped(usage.max())
+        lines.add(AnsiPalette.DIM + DIVIDER + AnsiPalette.RESET);
+        lines.add(label("模式：") + AnsiPalette.MODE
+                + ctx.permissionChecker().mode().configValue() + AnsiPalette.RESET);
+        lines.add(label("Token：") + grouped(usage.used()) + " / " + grouped(usage.max())
                 + "（" + percent + "%）");
-        lines.add("工具：" + ctx.toolRegistry().availableList().size() + " 个已启用");
-        lines.add("记忆：" + memorySummary(ctx.memoryManager().store()));
-        lines.add("工作目录：" + ctx.workingDirectory());
-        lines.add("版本：" + ctx.version());
+        lines.add(label("工具：") + ctx.toolRegistry().availableList().size() + " 个已启用");
+        lines.add(label("记忆：") + memorySummary(ctx.memoryManager().store()));
+        lines.add(label("工作目录：") + ctx.workingDirectory());
+        lines.add(label("版本：") + ctx.version());
         return lines;
+    }
+
+    /** 状态项标签统一暗色，让值更醒目（占比仍按验收清单取整、Token 行不加进度条） */
+    private static String label(String text) {
+        return AnsiPalette.DIM + text + AnsiPalette.RESET;
     }
 
     private static String grouped(int value) {

@@ -42,7 +42,7 @@ usage: in 92391 · cache_read 81152 · cache_write 0 · out 127
 ```
 usage: in 92391 · cache_read 81152 · out 127 · 2.1s   ← 进回滚（与现状一致）
 ──────────────────────────────────────                ← 分隔线（暗灰）
-[default] · /permission-mode 切换                       ← 模式行（亮黄 + 暗灰）
+[default] · /permission <模式>                           ← 模式行（亮黄 + 暗灰）
 ──────────────────────────────────────                ← 分隔线（暗灰）
 >* █                                                   ← 提示符（> 改成 >*）
 ──────────────────────────────────────                ← 页脚分隔线（暗灰）
@@ -98,8 +98,10 @@ deepseek-v4-flash · ctx ▓▓░░░░░░░░ 12% · …/ACode       �
 | `ui/MarkdownRenderer.java` | `RESET`→`AnsiPalette.RESET`、`STYLE_INLINE_CODE`→`AnsiPalette.BAR`。标题蓝 `\033[1;34m` **不并入色板**（它是 Markdown 语义色，不是状态栏配色）；`STYLE_BOLD` 是 SGR 属性、`STYLE_CODE_BLOCK` 是背景色，均不动 |
 | `ui/SelectionMenu.java` | **无需改动**（查证更正见上） |
 
-`modeLine` 的第二段改为 `/permission-mode 切换`：PR 写的是 `Shift+Tab to [next]`，但我们不实现
-Shift+Tab（键位在本分支不存在），照抄会印一个按了没反应的提示。换成真实可用的命令。
+`modeLine` 的第二段改为 `/permission <模式>`：PR 写的是 `Shift+Tab to [next]`，但我们不实现
+Shift+Tab（键位在本分支不存在），照抄会印一个按了没反应的提示。换成真实可用的命令——
+注意命令名是 **ch09 改名后的 `/permission`**（无参只查看规则、带参数才切档），不是旧名
+`/permission-mode`；初稿这里写错过一次，由用户问出来才发现。
 `modeLine(mode, width)` 因此是单参形式、无 `nextMode` 形参。
 
 `ctxBarFilled` / `ctxPercentText` 在 PR 里是包内可见，这里放开为 `public`——块 D 的

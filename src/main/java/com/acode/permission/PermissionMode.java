@@ -38,7 +38,7 @@ public enum PermissionMode {
         };
     }
 
-    /** config 键 / /permission-mode 命令的合法值；null/非法返回 null。 */
+    /** config 键 / /permission 命令的合法值；null/非法返回 null。 */
     public static PermissionMode fromConfig(String value) {
         if (value == null) {
             return null;

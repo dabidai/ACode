@@ -16,14 +16,15 @@ public final class StatusBar {
     public static final int BAR_CELLS = 10;
     /**
      * 模式行第二段。本项目没有 Shift+Tab 切档键位（PR #2 的 InputPane.RowRewriter 未采纳），
-     * 所以这里给的是真实可用的命令，不写做不到的键位提示。
+     * 所以这里给的是真实可用的命令，不写做不到的键位提示——命令名是 ch09 改名后的
+     * {@code /permission}（无参只查看规则，带参数才切档），不是旧名 {@code /permission-mode}。
      */
-    private static final String MODE_HINT = " · /permission-mode 切换";
+    private static final String MODE_HINT = " · /permission <模式>";
 
     private StatusBar() {
     }
 
-    /** 权限模式行：{@code [default] · /permission-mode 切换}（模式名亮黄、提示暗灰）。 */
+    /** 权限模式行：{@code [default] · /permission <模式>}（模式名亮黄、提示暗灰）。 */
     public static String modeLine(String mode, int width) {
         String plain = "[" + mode + "]" + MODE_HINT;
         if (displayWidth(plain) > width) {

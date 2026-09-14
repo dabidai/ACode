@@ -20,7 +20,7 @@ class StatusBarTest {
     /** 触发路径左截断用的长路径：盘符 + 中文目录名 + 很深的子目录。 */
     private static final String LONG_PATH = "D:\\Code\\claude\\ACode\\文档目录\\很深的子目录\\project";
     private static final String DEEPEST_DIR = "很深的子目录";
-    private static final String POLICY_HINT = "/permission-mode";
+    private static final String POLICY_HINT = "/permission";
 
     /** 去掉 SGR 序列（\033[0m、\033[36m、\033[1;33m 等），拿回纯文本再量宽度。 */
     private static String stripAnsi(String s) {

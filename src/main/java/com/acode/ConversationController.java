@@ -147,7 +147,7 @@ public class ConversationController {
     private Function<ChoiceRequestEvent, String> choiceAnswerer =
             event -> promptAnswerer().answerChoicePrompt(event);
 
-    /** 权限检查器：在 handleExchange 装配注入；/permission-mode 命令即时切档用。 */
+    /** 权限检查器：在 handleExchange 装配注入；/permission 命令即时切档用。 */
     private PermissionChecker permissionChecker;
 
     private ExchangeRunner exchangeRunner;
@@ -491,7 +491,7 @@ public class ConversationController {
         this.menuSelector = menuSelector;
     }
 
-    /** 测试用：注入权限检查器（供 /permission-mode 命令与执行器装配）。 */
+    /** 测试用：注入权限检查器（供 /permission 命令与执行器装配）。 */
     void setPermissionChecker(PermissionChecker permissionChecker) {
         this.permissionChecker = permissionChecker;
     }
@@ -560,7 +560,7 @@ public class ConversationController {
     /** 选择菜单入口（/resume、/memory 共用）；测试可注入替身跳过真实终端按键。 */
     private BiFunction<List<MenuEntry>, String, Integer> menuSelector;
 
-    /** 权限检查器：懒构建（与 /permission-mode 共用，经 Supplier 传入 ExchangeRunner）。 */
+    /** 权限检查器：懒构建（与 /permission 共用，经 Supplier 传入 ExchangeRunner）。 */
     PermissionChecker permissionChecker() {
         if (permissionChecker == null) {
             permissionChecker = buildPermissionChecker();

@@ -20,9 +20,9 @@ public class ToolCallDisplay {
     static final String STYLE_RUNNING = "\033[33m";  // 黄色：进行中
     public static final String STYLE_OK = "\033[32m";       // 绿色：成功
     public static final String STYLE_ERR = "\033[31m";      // 红色：失败
-    static final String STYLE_NAME = "\033[1;36m";   // 亮青色：工具名
-    static final String STYLE_DIM = "\033[90m";      // 灰色：耗时脚注
-    static final String RESET = "\033[0m";
+    static final String STYLE_NAME = AnsiPalette.MODEL;   // 亮青色：工具名（与状态栏同源）
+    static final String STYLE_DIM = AnsiPalette.DIM;      // 灰色：耗时脚注
+    static final String RESET = AnsiPalette.RESET;
 
     static final int MAX_PARAM_LENGTH = 40;
     static final int MAX_DISPLAY_LINES = 300;

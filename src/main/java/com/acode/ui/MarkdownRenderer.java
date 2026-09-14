@@ -8,10 +8,10 @@ package com.acode.ui;
  */
 public class MarkdownRenderer {
 
-    static final String RESET = "\033[0m";
+    static final String RESET = AnsiPalette.RESET;
     static final String STYLE_HEADING = "\033[1;34m";
     static final String STYLE_BOLD = "\033[1m";
-    static final String STYLE_INLINE_CODE = "\033[36m";
+    static final String STYLE_INLINE_CODE = AnsiPalette.BAR;
     static final String STYLE_CODE_BLOCK = "\033[48;5;236m";
 
     private final StringBuilder text = new StringBuilder();

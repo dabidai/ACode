@@ -5,8 +5,10 @@ import org.junit.jupiter.api.Test;
 
 import java.io.StringWriter;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LiveRegionRendererTest {
@@ -226,5 +228,71 @@ class LiveRegionRendererTest {
         LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
         renderer.appendCommitted(sw, "a\n\nb\n");
         assertEquals("a\r\n\r\nb\r\n", sw.toString());
+    }
+
+    // ---- 新增：等待输入帧的渲染与擦除（输入框边框） ----
+
+    /** 光标上移序列 \033[<n>A：擦除归零后重绘不得再含（否则真机上整体错位） */
+    private static final Pattern CURSOR_UP = Pattern.compile("\033\\[\\d*A");
+
+    @Test
+    void renderWaitingFrameWritesExactByteSequence() {
+        LiveRegionRenderer renderer = new LiveRegionRenderer(40, 10);
+        StringWriter sw = new StringWriter();
+        String modeHint = "[默认模式] Shift+Tab 切换";
+        String divider = "─".repeat(40);
+        String footerModel = "claude-sonnet-4-5 · 12% · D:\\Code\\claude\\ACode";
+
+        renderer.renderWaitingFrame(sw, modeHint, divider, divider, footerModel);
+
+        String expected = modeHint + "\r\n"
+                + divider + "\r\n"
+                + "\r\n"                 // 预留的提示符行（稍后由 JLine 覆盖）
+                + divider + "\r\n"
+                + footerModel + "\r\n"
+                + "\033[3A";             // 上移 3 行回到预留的提示符行
+        assertEquals(expected, sw.toString(), "帧字节必须逐字相等：上移行数错一即整体错位");
+    }
+
+    @Test
+    void renderWaitingFrameDoesNotChangeRowsWritten() {
+        LiveRegionRenderer renderer = new LiveRegionRenderer(40, 10);
+
+        renderer.renderWaitingFrame(new StringWriter(), "m", "d", "fd", "f");
+
+        assertEquals(0, renderer.rowsWritten(), "等待帧不计入活跃区已写行数");
+
+        renderer.redraw(new StringWriter(), List.of("a", "b"));
+        assertEquals(2, renderer.rowsWritten());
+
+        renderer.renderWaitingFrame(new StringWriter(), "m", "d", "fd", "f");
+
+        assertEquals(2, renderer.rowsWritten(), "等待帧不参与活跃区记账：调用前后已写行数不变");
+    }
+
+    @Test
+    void clearBelowCursorWritesEraseToScreenEndOnly() {
+        LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
+        StringWriter sw = new StringWriter();
+
+        renderer.clearBelowCursor(sw);
+
+        assertEquals("\033[J", sw.toString(), "只清到屏尾：不移动光标、不写任何其他字节");
+        assertFalse(CURSOR_UP.matcher(sw.toString()).find(), "清屏不等于上移，不得含光标上移序列");
+    }
+
+    @Test
+    void clearBelowCursorResetsRowsWrittenSoNextRedrawStartsInPlace() {
+        LiveRegionRenderer renderer = new LiveRegionRenderer(20, 10);
+        renderer.redraw(new StringWriter(), List.of("a", "b"));
+        assertEquals(2, renderer.rowsWritten());
+
+        renderer.clearBelowCursor(new StringWriter());
+
+        assertEquals(0, renderer.rowsWritten(), "擦除后重锚定：光标下方的页脚不再计入已写行数");
+        StringWriter sw = new StringWriter();
+        renderer.redraw(sw, List.of("c"));
+        assertEquals("\033[J" + "c\r\n", sw.toString(), "归零后重绘就地清屏重写，不再上移");
+        assertFalse(CURSOR_UP.matcher(sw.toString()).find(), "输出不得含任何光标上移序列");
     }
 }

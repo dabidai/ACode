@@ -152,6 +152,33 @@ public class LiveRegionRenderer {
     }
 
     /**
+     * 擦掉光标以下的所有残留并重锚定状态。等待帧把页脚画在提示符行**下方**，而 JLine 的
+     * ERASE_LINE_ON_FINISH 只擦提示符行本身，于是回车后页脚那两行仍留在屏上；appendCommitted
+     * 写「行\r\n」时不先清行，短文本盖不住长页脚的尾巴，就会糊进下一条输出里。交换/命令输出
+     * 开始前必须先擦干净。\033[J 不移动光标，光标停在原处，后续追加正好从提示符行接着写。
+     */
+    public void clearBelowCursor(Writer out) {
+        writeRaw(out, "\033[J");
+        rowsWritten = 0;
+    }
+
+    /**
+     * 渲染等待输入帧：模式提示行 + 分隔线（提示符**上方**）→ 预留提示符空行 →
+     * 页脚分隔线 + 模型信息行（提示符**下方**）→ 光标上移 3 行回到预留的提示符行，
+     * 随后由 JLine 在此绘制 {@code >*} 提示符。光标最终落在帧内第 3 行。
+     * 相对上移对「页脚落在屏幕末行、写入触发滚动」是安全的：内容与光标同步位移，偏移恒为 3。
+     */
+    public void renderWaitingFrame(Writer out, String modeHint, String divider,
+                                   String footerDivider, String footerModel) {
+        appendCommitted(out, modeHint);
+        appendCommitted(out, divider);
+        writeRaw(out, "\r\n");            // 预留提示符行（稍后由 JLine 的提示符覆盖）
+        appendCommitted(out, footerDivider);
+        appendCommitted(out, footerModel);
+        writeRaw(out, "\033[3A");         // 回到预留的提示符行
+    }
+
+    /**
      * 追加已提交内容：按 \n 拆行后每行写 行\r\n，原生折行进回滚、可划选复制，
      * 不计已写行数（banner / 输入 / 历史 / 状态行用）。结尾换行不产生多余空行。
      */

@@ -62,6 +62,11 @@ public final class RenderContext {
         return new LiveRegionRenderer(80, 24);
     }
 
+    /** 终端宽度：等待帧的模式行/页脚按它排版；无真实终端（测试路径）时按 80 估。 */
+    public int terminalWidth() {
+        return tui != null ? tui.width() : 80;
+    }
+
     /** 活跃区输出目标：测试注入优先，否则用终端 writer；无终端时丢弃到 StringWriter。 */
     public Writer screenWriter() {
         // 测试注入的StringWriter

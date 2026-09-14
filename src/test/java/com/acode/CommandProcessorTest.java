@@ -113,4 +113,127 @@ class CommandProcessorTest {
 
         assertTrue(e.getMessage().contains("命令调度器未注入"), "未装配时应明确报错而不是静默失效");
     }
+
+    // ---- 新增：输入框边框的擦画时序（step） ----
+
+    /** 记录动作次序的输入框替身：draw/erase 与调度器事件写进同一个列表 */
+    private static final class RecordingFrame implements CommandProcessor.InputFrame {
+        private final List<String> events;
+
+        RecordingFrame(List<String> events) {
+            this.events = events;
+        }
+
+        @Override
+        public void draw() {
+            events.add("draw");
+        }
+
+        @Override
+        public void erase() {
+            events.add("erase");
+        }
+    }
+
+    /**
+     * 真实调度器 + 事件化对话通道：CommandDispatcher 是 final 类、无法做替身，故用真实调度器；
+     * 对话通道与命令处理函数把调用记进 events，与帧动作同列一处，从而能断言三者的先后次序。
+     */
+    private static CommandProcessor eventProcessor(CommandRegistry registry, List<String> events) {
+        CommandDispatcher dispatcher = new CommandDispatcher(registry,
+                args -> new CommandContext(args, new RecordingUi(), null, null, null, null, null, null, null),
+                line -> events.add("dispatch"));
+        CommandProcessor processor = new CommandProcessor(null, null, registry);
+        processor.setCommandDispatcher(dispatcher);
+        return processor;
+    }
+
+    /** 处理函数即事件化调度：记录一次 dispatch 并返回固定结果 */
+    private static Command exitCommand(List<String> events) {
+        return new Command("quit", List.of(), "退出", "/quit", CommandType.LOCAL, null, false, ctx -> {
+            events.add("dispatch");
+            return CommandResult.EXIT;
+        });
+    }
+
+    @Test
+    void stepRunsEraseThenDispatchThenDraw() {
+        List<String> events = new ArrayList<>();
+        CommandProcessor processor = eventProcessor(new CommandRegistry(), events);
+        processor.setInputFrame(new RecordingFrame(events));
+
+        assertEquals(CommandResult.CONTINUE, processor.step("hello"));
+
+        assertEquals(List.of("erase", "dispatch", "draw"), events,
+                "非空行：先擦页脚（让输出有干净地盘）→ 派发 → 回来重画帧");
+    }
+
+    @Test
+    void stepOnEmptyLineDispatchesWithoutEraseOrDraw() {
+        List<String> events = new ArrayList<>();
+        CommandProcessor processor = eventProcessor(new CommandRegistry(), events);
+        processor.setInputFrame(new RecordingFrame(events));
+
+        assertEquals(CommandResult.CONTINUE, processor.step(""), "空白行仍走调度器，返回值如实传导");
+
+        assertEquals(List.of(), events, "空白行不产出一字：既不 erase 也不 draw（页脚原地留存）");
+    }
+
+    @Test
+    void stepOnWhitespaceLineDispatchesWithoutEraseOrDraw() {
+        List<String> events = new ArrayList<>();
+        CommandProcessor processor = eventProcessor(new CommandRegistry(), events);
+        processor.setInputFrame(new RecordingFrame(events));
+
+        assertEquals(CommandResult.CONTINUE, processor.step("   "));
+
+        assertEquals(List.of(), events, "全空白行与空串同待遇：帧无操作");
+    }
+
+    @Test
+    void blankLineStillGoesThroughDispatcher() {
+        // 帧已注入时空白行不产生任何事件，故用「未注入调度器」反证它确实走到了调度器
+        CommandProcessor processor = new CommandProcessor(null, null, new CommandRegistry());
+        processor.setInputFrame(new RecordingFrame(new ArrayList<>()));
+
+        NullPointerException e = assertThrows(NullPointerException.class, () -> processor.step("   "));
+
+        assertTrue(e.getMessage().contains("命令调度器未注入"), "空白行不得短路跳过调度器");
+    }
+
+    @Test
+    void exitResultErasesButSkipsRedraw() {
+        List<String> events = new ArrayList<>();
+        CommandRegistry registry = new CommandRegistry();
+        registry.register(exitCommand(events));
+        CommandProcessor processor = eventProcessor(registry, events);
+        processor.setInputFrame(new RecordingFrame(events));
+
+        assertEquals(CommandResult.EXIT, processor.step("/quit"));
+
+        assertEquals(List.of("erase", "dispatch"), events, "退出路径擦完就不再重画帧（随后即离开终端）");
+    }
+
+    @Test
+    void stepWithoutInputFrameStillDispatchesAndNeverThrows() {
+        List<String> events = new ArrayList<>();
+        CommandProcessor processor = eventProcessor(new CommandRegistry(), events);
+
+        assertEquals(CommandResult.CONTINUE, processor.step("hello"), "未注入帧时不得抛 NPE");
+
+        assertEquals(List.of("dispatch"), events, "无帧可擦可画，只经调度器");
+    }
+
+    @Test
+    void stepReturnsDispatcherResultVerbatim() {
+        CommandRegistry registry = new CommandRegistry();
+        registry.register(new Command("status", List.of(), "状态", "/status", CommandType.LOCAL, null, false,
+                ctx -> CommandResult.CONTINUE));
+        registry.register(exitCommand(new ArrayList<>()));
+        CommandProcessor processor = processor(registry, new RecordingUi(), new ArrayList<>());
+
+        assertEquals(CommandResult.CONTINUE, processor.step("/status"));
+        assertEquals(CommandResult.EXIT, processor.step("/quit"));
+        assertEquals(CommandResult.CONTINUE, processor.step("hello"));
+    }
 }

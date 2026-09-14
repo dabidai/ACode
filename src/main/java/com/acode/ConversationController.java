@@ -66,6 +66,7 @@ import com.acode.ui.OutputPane;
 import com.acode.ui.PromptAnswerer;
 import com.acode.ui.RenderContext;
 import com.acode.ui.SelectionMenu;
+import com.acode.ui.StatusBar;
 import com.acode.ui.StreamPrinter;
 import com.acode.ui.TerminalMenuKeySource;
 import com.acode.ui.TerminalUIController;
@@ -395,9 +396,38 @@ public class ConversationController {
                     this::handleChat);
             CommandProcessor processor = new CommandProcessor(tui, sessions, commandRegistry);
             processor.setCommandDispatcher(dispatcher);
+            processor.setInputFrame(new CommandProcessor.InputFrame() {
+                @Override
+                public void draw() {
+                    renderInputFrame();
+                }
+
+                @Override
+                public void erase() {
+                    renderContext.liveRenderer().clearBelowCursor(renderContext.screenWriter());
+                }
+            });
             commandProcessor = processor;
         }
         return commandProcessor;
+    }
+
+    /**
+     * 输入框边框：提示符上方一行权限模式 + 一行分隔线，下方一行分隔线 + 一行页脚
+     * （模型 · 上下文进度 · 工作目录）。每轮交换或命令输出之后重画一次，因此模式行总是新鲜的
+     * ——切档后下一次等输入就能看到新模式。
+     * <p>帧只进终端、不进 {@link OutputPane}：它是界面装饰而非输出内容，混进去会污染输出日志与
+     * 依赖 OutputPane 的断言。
+     */
+    private void renderInputFrame() {
+        int width = renderContext.terminalWidth();
+        String modeHint = StatusBar.modeLine(permissionChecker().mode().configValue(), width);
+        String divider = StatusBar.divider(width);
+        int max = conversation.maxContextTokens();
+        double ctxFraction = max <= 0 ? 0 : (double) conversation.estimateContextTokens() / max;
+        String footer = StatusBar.infoLine(conversation.model(), ctxFraction, projectRoot.toString(), width);
+        renderContext.liveRenderer().renderWaitingFrame(renderContext.screenWriter(),
+                modeHint, divider, divider, footer);
     }
 
     /** 弹选择菜单（/resume、/memory 共用）：沿用既有 SelectionMenu overlay 渲染与终端按键源 */

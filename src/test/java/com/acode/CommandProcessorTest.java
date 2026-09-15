@@ -298,4 +298,35 @@ class CommandProcessorTest {
     void defaultPromptIsGreaterSignAndSpace() {
         assertEquals("> ", InputPane.DEFAULT_PROMPT, "默认提示符应为 > 加一个空格（去掉 * 是本次需求验收点）");
     }
+
+    // ---- 新增：提示符显示的占行数（钉底时算输入框该沉到哪一行） ----
+
+    @Test
+    void displayRowsOfSingleLinePromptIsOne() {
+        assertEquals(1, CommandProcessor.displayRows("> "), "无换行的提示符只占一行");
+    }
+
+    @Test
+    void displayRowsCountsMultilinePromptDecorations() {
+        assertEquals(3, CommandProcessor.displayRows("模式行\n分隔线\n> "),
+                "模式行 + 分隔线 + 输入行应算 3 行（真机 pin 的 promptRows 就取这个数）");
+    }
+
+    @Test
+    void displayRowsCountsEveryNewline() {
+        assertEquals(4, CommandProcessor.displayRows("a\nb\nc\nd"), "三个换行 → 四行");
+    }
+
+    @Test
+    void displayRowsOfEmptyPromptIsOne() {
+        assertEquals(1, CommandProcessor.displayRows(""), "空串仍占一行，不得算成 0（否则提示符会沉进页脚）");
+    }
+
+    // ---- 新增：帧的默认页脚行数 ----
+
+    @Test
+    void frameDefaultsToZeroFooterRows() {
+        assertEquals(0, new RecordingFrame(new ArrayList<>()).footerRows(),
+                "测试路径的假帧没有底部状态区：默认 0 行，主循环据此跳过钉底");
+    }
 }

@@ -165,6 +165,12 @@ public class ConversationController {
     /** 页脚当前是否在屏上；resize 重排版不得把已收起的页脚又显示出来。 */
     private volatile boolean footerVisible;
 
+    /**
+     * 页脚占的行数：分隔线 + 状态行。{@link #drawFooter()} 推给状态区的行数必须与它一致——
+     * 主循环靠这个数把整个输入框沉到屏幕底部，多算一行输入框就会被压进页脚里。
+     */
+    private static final int FOOTER_ROWS = 2;
+
     /** 上下文管理门面（每会话一次装配；懒构造，捕获当时 projectRoot） */
     private ContextManager contextManager;
 
@@ -427,6 +433,12 @@ public class ConversationController {
                     int width = renderContext.terminalWidth();
                     return StatusBar.modeLine(permissionChecker().mode().configValue(), width)
                             + "\n" + StatusBar.divider(width);
+                }
+
+                /** 见 {@link #FOOTER_ROWS}：主循环据此把整个输入框沉到屏幕底部。 */
+                @Override
+                public int footerRows() {
+                    return FOOTER_ROWS;
                 }
 
                 @Override

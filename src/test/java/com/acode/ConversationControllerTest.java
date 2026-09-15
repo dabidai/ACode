@@ -928,4 +928,23 @@ class ConversationControllerTest {
         assertEquals(80, lines[1].length(), "无真实终端时宽度按 80 估算，分隔线应为 80 列");
         assertTrue(lines[1].matches("─+"), "第二行应是全宽分隔线，实际：" + lines[1]);
     }
+
+    /** 装配出的帧自报的页脚行数：主循环把它喂给 BottomAnchor 算「提示符首行」 */
+    @Test
+    void assembledFrameReportsFooterRowsForBottomAnchor() throws Exception {
+        ConversationController controller = new ConversationController(
+                FakeProvider.scripted(List.of()), config(), false);
+        controller.setProjectRoot(tempDir);
+        controller.initSessionState();
+        controller.setOutput(new OutputPane());
+        // inputFrame 是 CommandProcessor 的私有字段、无读取口：测试经反射取值（同 planMode 的做法）
+        Field inputFrame = CommandProcessor.class.getDeclaredField("inputFrame");
+        inputFrame.setAccessible(true);
+
+        CommandProcessor.InputFrame frame =
+                (CommandProcessor.InputFrame) inputFrame.get(controller.commandProcessor());
+
+        assertEquals(2, frame.footerRows(),
+                "页脚为分隔线 + 状态行共 2 行，且必须与 drawFooter 推给状态区的行数同源");
+    }
 }

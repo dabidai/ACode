@@ -5,6 +5,7 @@ import com.acode.command.CommandRegistry;
 import com.acode.command.CommandResult;
 import com.acode.session.SessionManager;
 import com.acode.ui.AcodeTerminal;
+import com.acode.ui.BottomAnchor;
 import com.acode.ui.InputPane;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.UserInterruptException;
@@ -29,6 +30,14 @@ public class CommandProcessor {
          */
         default String promptHeader() {
             return "";
+        }
+
+        /**
+         * 底部状态区占的行数，用来算输入框该沉到哪一行。默认 0（测试路径没有状态区，
+         * 主循环据此跳过钉底）。
+         */
+        default int footerRows() {
+            return 0;
         }
 
         /** 收起底部状态区，把底部行交还给即将写入的输出。 */
@@ -68,21 +77,28 @@ public class CommandProcessor {
      * 主循环：帧的擦与画都由 {@link #step} 统一负责，而不是让交换/命令各自处理——擦（\033[J）
      * 与画（接着光标写帧）是一对必须配对的光标操作，分散到多处方容易漏。Ctrl+C / Ctrl+D 不经
      * step，主循环自己收尾（输入行上方的装饰是提示符的一部分，随 JLine 一起消失，不留孤儿行）。
+     * <p>每轮读输入前后用 {@link BottomAnchor} 把输入框钉到屏幕底部、读完再挪回来；两条退出
+     * 路径都要回退，否则光标留在底部，后续输出会从那里往下写。
      */
     public void mainLoop() {
         InputPane input = new InputPane(tui.terminal(), InputPane.DEFAULT_PROMPT, registry);
+        BottomAnchor anchor = new BottomAnchor(tui.terminal());
         drawFrame();
         while (true) {
+            String prompt = prompt();
+            int pinned = pin(anchor, prompt);
             String line;
             try {
-                line = input.readLine(prompt());
+                line = input.readLine(prompt);
             } catch (UserInterruptException | EndOfFileException e) {
+                anchor.unpin(pinned);
                 if (inputFrame != null) {
                     inputFrame.erase();
                 }
                 sessionManager.closeSession();
                 return;
             }
+            anchor.unpin(pinned);
             if (step(line) == CommandResult.EXIT) {
                 sessionManager.closeSession();
                 return;
@@ -99,6 +115,33 @@ public class CommandProcessor {
         return header == null || header.isEmpty()
                 ? InputPane.DEFAULT_PROMPT
                 : header + "\n" + InputPane.DEFAULT_PROMPT;
+    }
+
+    /**
+     * 把输入框钉到屏幕底部，返回下移行数（0 表示没动）。
+     * <p>没有输入帧（测试路径）、没有页脚、或终端不回应光标查询时一律返回 0——
+     * 退回「输入框跟在内容后面」的行为，功能不受影响。
+     */
+    private int pin(BottomAnchor anchor, String prompt) {
+        if (inputFrame == null || tui == null) {
+            return 0;
+        }
+        int footerRows = inputFrame.footerRows();
+        if (footerRows <= 0) {
+            return 0;
+        }
+        return anchor.pin(tui.height(), footerRows, displayRows(prompt));
+    }
+
+    /** 提示符占的显示行数：换行数 + 1。装饰行与输入行都由厂商保证不折行（宽度已截断）。 */
+    static int displayRows(String prompt) {
+        int rows = 1;
+        for (int i = 0; i < prompt.length(); i++) {
+            if (prompt.charAt(i) == '\n') {
+                rows++;
+            }
+        }
+        return rows;
     }
 
     /**

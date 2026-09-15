@@ -1,12 +1,14 @@
 package com.acode.ui;
 
 import com.acode.config.AppConfig;
+import org.jline.utils.Status;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.io.UncheckedIOException;
 import java.io.Writer;
+import java.util.List;
 
 /** 活跃区渲染设施：live region 渲染器与屏幕输出目标的装配（测试注入优先、终端实时新建、tee 诊断）。 */
 public final class RenderContext {
@@ -17,6 +19,8 @@ public final class RenderContext {
     private LiveRegionRenderer cachedLive;
     private Writer screenWriter;
     private AcodeTerminal tui;
+    /** 底部常驻状态区（页脚）；真实终端路径下惰性建立后复用，测试路径恒为 null。 */
+    private Status status;
 
     public RenderContext(AppConfig config) {
         this.config = config;
@@ -26,6 +30,7 @@ public final class RenderContext {
     public void attachTui(AcodeTerminal tui) {
         if (this.tui != tui) {
             cachedLive = null;
+            status = null;
         }
         this.tui = tui;
     }
@@ -65,6 +70,36 @@ public final class RenderContext {
     /** 终端宽度：等待帧的模式行/页脚按它排版；无真实终端（测试路径）时按 80 估。 */
     public int terminalWidth() {
         return tui != null ? tui.width() : 80;
+    }
+
+    /**
+     * 底部常驻状态区（页脚）。**惰性建立、全程复用**：JLine 的 {@code Status} 是挂在 Terminal 上的
+     * 单例，重复取到的必然是同一个；这里缓存只是省一次查找。无终端或终端不支持时返回 null，
+     * 调用方按「无页脚」降级。
+     */
+    public Status status() {
+        if (status == null && tui != null) {
+            status = LiveRegionRenderer.statusOf(tui);
+        }
+        return status;
+    }
+
+    /** 更新底部状态区（页脚）。终端不支持状态区时静默降级——少一条页脚，功能不受影响。 */
+    public void updateStatusLines(List<String> lines) {
+        LiveRegionRenderer.updateStatus(status(), lines);
+    }
+
+    /** 收起底部状态区，把底部行还给输出（输出前调用，避免新内容画进状态区）。 */
+    public void hideStatusLines() {
+        LiveRegionRenderer.updateStatus(status(), List.of());
+    }
+
+    /** 退出前收起状态区：恢复滚动区，免得 shell 提示符被压在滚动区里。幂等。 */
+    public void closeStatus() {
+        if (status != null) {
+            status.close();
+            status = null;
+        }
     }
 
     /** 活跃区输出目标：测试注入优先，否则用终端 writer；无终端时丢弃到 StringWriter。 */

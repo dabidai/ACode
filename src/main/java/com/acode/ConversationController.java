@@ -312,6 +312,8 @@ public class ConversationController {
             // /quit 与异常退出都关闭会话句柄并清理 MCP 子进程，避免残留句柄与进程
             closeSession();
             closeMcpManager();
+            // 收起底部状态区（恢复终端滚动区），否则 shell 提示符会被压在滚动区里
+            renderContext.closeStatus();
         }
     }
 
@@ -397,14 +399,34 @@ public class ConversationController {
             CommandProcessor processor = new CommandProcessor(tui, sessions, commandRegistry);
             processor.setCommandDispatcher(dispatcher);
             processor.setInputFrame(new CommandProcessor.InputFrame() {
+                /** 已画到屏上的模式行原文；相同则不重复追加（见 draw 注释）。 */
+                private String lastModeLine;
+
                 @Override
                 public void draw() {
-                    renderInputFrame();
+                    renderModeLineIfChanged();
+                    renderFooter();
+                }
+
+                /**
+                 * 模式行画在提示符**上方**、走进回滚。它与页脚不同：页脚要跟着提示符常驻底部，
+                 * 模式行只在切档时变。不比对就会每轮往屏上多留一份「模式行 + 分隔线」——
+                 * 真机上正是这个把界面糊得看不出层次。
+                 */
+                private void renderModeLineIfChanged() {
+                    String modeLine = StatusBar.modeLine(
+                            permissionChecker().mode().configValue(), renderContext.terminalWidth());
+                    if (modeLine.equals(lastModeLine)) {
+                        return;
+                    }
+                    lastModeLine = modeLine;
+                    liveRenderer().appendCommitted(screenWriter(), modeLine);
+                    liveRenderer().appendCommitted(screenWriter(), StatusBar.divider(renderContext.terminalWidth()));
                 }
 
                 @Override
                 public void erase() {
-                    renderContext.liveRenderer().clearBelowCursor(renderContext.screenWriter());
+                    renderContext.hideStatusLines();
                 }
             });
             commandProcessor = processor;
@@ -413,21 +435,20 @@ public class ConversationController {
     }
 
     /**
-     * 输入框边框：提示符上方一行权限模式 + 一行分隔线，下方一行分隔线 + 一行页脚
-     * （模型 · 上下文进度 · 工作目录）。每轮交换或命令输出之后重画一次，因此模式行总是新鲜的
-     * ——切档后下一次等输入就能看到新模式。
-     * <p>帧只进终端、不进 {@link OutputPane}：它是界面装饰而非输出内容，混进去会污染输出日志与
+     * 页脚：分隔线 + 一行状态（模型 · 上下文进度 · 工作目录），画在**提示符下方**的底部常驻
+     * 状态区里（JLine {@link org.jline.utils.Status}，见 {@link LiveRegionRenderer#statusOf}）。
+     * 提示符上方另有模式行与分隔线，由 {@code InputFrame.draw} 单独负责。
+     * <p>交给 {@code Status} 而不是自己维护光标，是因为那片区域必须让 JLine 一起记账：它算提示符
+     * 可用行数时会扣掉状态区的行数，多行输入只会在状态区之上滚动，不会压上来。
+     * <p>页脚只进终端、不进 {@link OutputPane}：它是界面装饰而非输出内容，混进去会污染输出日志与
      * 依赖 OutputPane 的断言。
      */
-    private void renderInputFrame() {
+    private void renderFooter() {
         int width = renderContext.terminalWidth();
-        String modeHint = StatusBar.modeLine(permissionChecker().mode().configValue(), width);
-        String divider = StatusBar.divider(width);
         int max = conversation.maxContextTokens();
         double ctxFraction = max <= 0 ? 0 : (double) conversation.estimateContextTokens() / max;
         String footer = StatusBar.infoLine(conversation.model(), ctxFraction, projectRoot.toString(), width);
-        renderContext.liveRenderer().renderWaitingFrame(renderContext.screenWriter(),
-                modeHint, divider, divider, footer);
+        renderContext.updateStatusLines(List.of(StatusBar.divider(width), footer));
     }
 
     /** 弹选择菜单（/resume、/memory 共用）：沿用既有 SelectionMenu overlay 渲染与终端按键源 */
@@ -442,9 +463,10 @@ public class ConversationController {
                 .select(live, writer, new TerminalMenuKeySource(tui.terminal().reader()));
     }
 
-    /** /clear 三步语义：清空对话历史（联动清除钩子）→ 整屏清空 → 输出区重置；「（已清空）」文案由命令输出 */
+    /** /clear 三步语义：清空对话历史（联动清除钩子）→ 收起页脚 → 整屏清空 → 输出区重置 */
     private void clearScreenAndNewSession() {
         conversation.clear();
+        renderContext.hideStatusLines();
         liveRenderer().clearScreen(screenWriter());
         output.clear();
     }

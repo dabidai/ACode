@@ -15,14 +15,14 @@ import java.util.Objects;
 public class CommandProcessor {
 
     /**
-     * 输入框边框：等待输入时提示符上方是模式行与分隔线、下方是页脚两行。由装配方注入；
-     * 未注入（测试路径）时主循环不做任何帧操作。
+     * 输入框边框：等待输入时提示符**上方**一行模式行 + 一行分隔线，**下方**是底部常驻状态区
+     * （分隔线 + 页脚）。由装配方注入；未注入（测试路径）时主循环不做任何帧操作。
      */
     public interface InputFrame {
-        /** 画等待帧；返回时光标落在提示符行，等待 JLine 在其上绘制提示符。 */
+        /** 画等待帧：模式行（仅内容变化时追加）+ 底部状态区。 */
         void draw();
 
-        /** 擦掉提示符下方的页脚，把那块地盘交还给即将写入的输出。 */
+        /** 收起底部状态区，把底部行交还给即将写入的输出。 */
         void erase();
     }
 
@@ -57,7 +57,8 @@ public class CommandProcessor {
 
     /**
      * 主循环：帧的擦与画都由 {@link #step} 统一负责，而不是让交换/命令各自处理——擦（\033[J）
-     * 与画（\033[3A 回到提示符行）是一对必须配对的光标操作，分散到多处方容易漏。
+     * 与画（接着光标写帧）是一对必须配对的光标操作，分散到多处方容易漏。Ctrl+C / Ctrl+D 不经
+     * step，主循环自己收尾（帧在提示符上方，只需擦掉 JLine 的地盘，不会留下孤儿行）。
      */
     public void mainLoop() {
         InputPane input = new InputPane(tui.terminal(), ">*", registry);
@@ -67,6 +68,9 @@ public class CommandProcessor {
             try {
                 line = input.readLine();
             } catch (UserInterruptException | EndOfFileException e) {
+                if (inputFrame != null) {
+                    inputFrame.erase();
+                }
                 sessionManager.closeSession();
                 return;
             }
@@ -78,9 +82,9 @@ public class CommandProcessor {
     }
 
     /**
-     * 单行输入的完整处理：回车后先擦页脚 → 派发（输出从此在干净区域追加）→ 回来重画帧。
-     * <p>空行不产出一字：JLine 只擦了提示符行、页脚完好，原地等下一次输入即可；若照常擦画，
-     * 反而会在上方再叠一组模式行与分隔线。退出路径也不再重画（随后就离开终端）。
+     * 单行输入的完整处理：回车后先擦输入区残迹 → 派发（输出从此在干净区域追加）→ 回来重画帧。
+     * <p>空行不产出一字：调度器对它直接返回 CONTINUE，擦画纯属白费（且每次空回车都会往回滚里
+     * 多堆一组帧行）。退出路径也不再重画（随后就离开终端）。
      */
     CommandResult step(String line) {
         boolean framed = inputFrame != null && !line.isBlank();

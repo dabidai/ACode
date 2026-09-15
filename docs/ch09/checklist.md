@@ -376,21 +376,44 @@ Token：45,230 / 200,000（23%）
 
 **色板对齐**
 
-- [ ] `src/main/java/com/acode/ui/AnsiPalette.java` 存在，且五个常量与 PR `ui/StatusBar.java` 逐字一致（`DIM=\033[90m`、`MODE=\033[1;33m`、`MODEL=\033[1;36m`、`BAR=\033[36m`、`RESET=\033[0m`）
-- [ ] `grep -c "AnsiPalette" src/main/java/com/acode/ui/ToolCallDisplay.java src/main/java/com/acode/ui/MarkdownRenderer.java` 各 ≥1（工具名/耗时脚注、行内代码/复位已改为引用色板，不再各写各的字面量）
-- [ ] 上色**不改变可见文本**：`/help` 与 `/status` 各取一次输出，去掉 ANSI 序列后与本轮改动前的输出逐字相同（`/help` 的名称列对齐、`/status` 的六项与分隔线长度 13 均不变）
+- [x] `src/main/java/com/acode/ui/AnsiPalette.java` 存在，且五个常量与 PR `ui/StatusBar.java` 逐字一致（`DIM=\033[90m`、`MODE=\033[1;33m`、`MODEL=\033[1;36m`、`BAR=\033[36m`、`RESET=\033[0m`）
+- [x] `grep -c "AnsiPalette" src/main/java/com/acode/ui/ToolCallDisplay.java src/main/java/com/acode/ui/MarkdownRenderer.java` 各 ≥1（工具名/耗时脚注、行内代码/复位已改为引用色板，不再各写各的字面量）
+- [x] 上色**不改变可见文本**：`/help` 与 `/status` 各取一次输出，去掉 ANSI 序列后与本轮改动前的输出逐字相同（`/help` 的名称列对齐、`/status` 的六项与分隔线长度 13 均不变）→ 由 `HelpStatusCommandTest` 的「去色后逐字比对」+「上色到位」双向断言覆盖
 
 **输入框边框**
 
-- [ ] 真机启动后：提示符上方是「模式行 + 分隔线」、下方是「分隔线 + 页脚（模型 · ctx 进度条 · 百分比 · 工作目录）」，提示符为 `>*`
-- [ ] 页脚进度条永远 10 格；占用非零但不足半格时至少亮 1 格；占比 ≥10% 取整、低于 10% 保留一位小数
-- [ ] 模式行随切档刷新：`/permission acceptEdits` 之后下一次等输入时，模式行显示 `[acceptEdits]`
-- [ ] 宽度收窄到放不下时，模式行/页脚**截断而不折行**（CJK 目录名按 2 列计宽；折行会破坏帧的行数数学）
-- [ ] ⚑ 多行/长输入（Shift+Enter 两行、或长到自动折行）提交后，屏上**不留**被提示符压掉一半的页脚残行，下一轮帧位置仍正确（页脚在提示符下方、JLine 提示符向下占行，两者可能重叠——这是该帧设计的已知风险，须真机判定）
+- [x] `CommandProcessor` 提示符由 `"> "` 改为 `">*"`；未注入 `InputFrame` 时 `step` 不抛异常、不写任何帧序列（`CommandProcessorTest`）
+- [x] 页脚改由 JLine 原生状态区承载：`LiveRegionRenderer.statusOf` / `updateStatus` 拿到 null 状态区时静默降级、不抛异常（`LiveRegionRendererTest`）
+- [x] 页脚进度条永远 10 格；占用非零但不足半格时至少亮 1 格；占比 ≥10% 取整、低于 10% 保留一位小数（`StatusBarTest`）
+- [x] 带 SGR 的页脚串算列宽不含转义序列：同一串 `charLen=79` / `columnLength=54`（跑真实 `AttributedString.fromAnsi` 验证），状态区排版不会误判宽度
+- [ ] ⚑ 真机启动后：提示符 `>*` **上方**一行模式行 + 一行分隔线，**下方**一行分隔线 + 一行页脚（模型 · ctx 进度条 · 百分比 · 工作目录）
+- [x] 页脚能真的建出状态区：`statusOf` 传 `create=true`——JLine 全库取 `Status` 一律传 `create=false`（只读不建），建的责任在应用层，误传 `false` 会让页脚被静默吞掉
+- [x] Windows 上注入去掉 `am` 的自定义 terminfo：`withoutAutoRightMargin` 只删内容恰为 `am` 的条目、其余逐字节保留且幂等；`sam` / `msgr` / `amx=` 不被误伤（`TerminalCapsTest`）
+- [x] `isWindows` 对 `"Windows 11"` 为真，对 `"Linux"` 与 `null` 为假（`TerminalCapsTest`）
+- [x] 自定义类型名可注册进 JLine 能力表（`setDefaultInfoCmp` 写入后 `getLoadedInfoCmp` 读回同一串），而**预注册的内置名**（`ansi`）不可被覆盖（`TerminalCapsTest`）
+- [ ] ⚑ **页脚两行且分开（v5 主要判据）**：提示符下方先是整行分隔线、再是整行页脚；模型名**首字母完整**；分隔线**不贴屏幕最底边**
+- [ ] ⚑ **非注入路径无回归**：显式设 `TERM`（或 `-Dorg.jline.terminal.type`）启动 → 不注入自定义 terminfo，行为与改动前一致
+- [ ] ⚑ 模式行随切档刷新：`/permission acceptEdits` 之后下一次等输入时，模式行显示 `[acceptEdits]`
+- [ ] ⚑ 模式行**不重复堆叠**：连做几轮问答，不应每轮都多出一份「模式行 + 分隔线」（模式行按内容去重）
+- [ ] ⚑ 宽度收窄到放不下时，模式行/页脚**截断而不折行**（CJK 目录名按 2 列计宽）
 
 **残留缺陷修复 ⚑**
 
-- [ ] ⚑ 真机对话一轮（产生 `usage:` 脚注）后敲 `/help`：`/help` 输出**不与上一轮内容糊在一起**，上一轮的页脚两行已被擦除、屏上无孤儿行
-- [ ] ⚑ 真机在六种情形下各走一遍——**改过窗口尺寸 / 输出超过一屏 / `/clear` / `/resume` / 空行回车 / 流式中 Ctrl+C**：提示符位置正确、帧不错位、无残影；空行回车后模式行与分隔线**不重复堆叠**
-- [ ] 无终端路径不受影响：未注入 `InputFrame` 时 `CommandProcessor.step` 不抛异常、不写任何帧序列
-- [ ] ⚑ 重跑 `JAVA_HOME="D:\java\jdk21" mvn test` 全绿（记录总用例数，与 T13 的记录对比）
+> **形态改到 v5 定稿**：v1 照 PR 手工用 `\033[3A`/`\033[J` 维护提示符下方那几行，真机暴露
+> Ctrl+C 残留与 Shift+Enter 半截行；v2 把帧整体上移修好了缺陷但丢了观感（每轮把帧留在回滚里）
+> 且被用户否掉；v3 改用 **JLine 原生 `org.jline.utils.Status`**，但真机上页脚一个都没出现；
+> v4 的「注入 csl」方案**作废**——那是搜错键名得出的误诊，`change_scroll_region` 的短名是
+> `csr`，它一直都在。**v5 修两处**：① `statusOf` 误传 `create=false`，Status 恒 null；
+> ② `Status` 把每行补齐到终端全宽后，JLine 用「空格 + 退格」跨右边界、在 Windows 上失效
+> （退格取消了 pending-wrap）——去掉 terminfo 的 `am` 让它改走 CR + 显式下移。
+> 见 `ui-align-plan.md` 文末「两次误诊 + v5 定稿」。
+>
+> **布局语义（验收基准）**：输入框「上方紧贴对话内容、下方紧贴屏幕底部」。内容量少时
+> 两者之间的空档是**预期现象**，不是缺陷。
+
+- [x] `mainLoop` 的 Ctrl+C / Ctrl+D 退出路径收起状态区（`inputFrame.erase()`）；`ConversationController` 的 `/clear` 与 `finally` 各补一次
+- [ ] ⚑ **原缺陷一（页脚糊进下一轮输出）**：真机对话一轮（产生 `usage:` 脚注）后敲 `/help`，输出不再糊在一起，屏上无孤儿行
+- [ ] ⚑ **原缺陷二（Ctrl+C 后页脚残留）**：等输入时 Ctrl+C 退出 → shell 提示符下方不残留帧行、提示符能正常回车
+- [ ] ⚑ **原缺陷三（Shift+Enter 多行输入糊屏）**：两行输入提交后不留半截页脚行、不出现带 `> ` 前缀的残行；输入占满半屏时页脚仍钉在底部
+- [ ] ⚑ 真机在六种情形下各走一遍——**改过窗口尺寸 / 输出超过一屏 / `/clear` / `/resume` / 空行回车 / 流式中 Ctrl+C**：提示符位置正确、帧不错位、无残影；空行回车后模式行与分隔线**不重复堆叠**（空行不擦不画，由 `CommandProcessorTest` 钉住）
+- [ ] ⚑ 重跑 `JAVA_HOME="D:\java\jdk21" mvn test` 全绿（记录总用例数，与 T13 的记录对比）。→ **1055 用例，0 失败 / 0 错误 / 1 跳过**（2026-09-14，v3 帧；v2 为 1057、v1 为 1056）

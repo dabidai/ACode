@@ -5,6 +5,8 @@ import org.jline.terminal.TerminalBuilder;
 import org.jline.utils.InfoCmp;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 
 /**
  * 终端生命周期壳：打开/关闭/尺寸/写入，只做主屏输出，不做整屏绘制。
@@ -28,11 +30,15 @@ public class AcodeTerminal implements AutoCloseable {
     public static AcodeTerminal open() {
         Terminal terminal;
         try {
-            terminal = TerminalBuilder.builder()
+            TerminalBuilder builder = TerminalBuilder.builder()
                     .system(true)
                     .dumb(false)
-                    .encoding("UTF-8")
-                    .build();
+                    .encoding("UTF-8");
+            String type = statusBarSafeType();
+            if (type != null) {
+                builder.type(type);
+            }
+            terminal = builder.build();
         } catch (IOException | IllegalStateException e) {
             throw new IllegalStateException("无法初始化终端（需在真实终端中运行）：" + e.getMessage(), e);
         }
@@ -51,6 +57,39 @@ public class AcodeTerminal implements AutoCloseable {
             terminal.close();
         } catch (IOException ignored) {
             // 尽力关闭
+        }
+    }
+
+    /**
+     * Windows 上改用去掉了 {@code am} 的自定义 terminfo，返回该类型名；其余情形返回 null（用默认类型）。
+     * <p>
+     * 只在 Windows 且用户未显式指定终端类型（{@code TERM} 与 {@code org.jline.terminal.type} 皆空，
+     * 与 {@code TerminalBuilder.computeType()} 的优先级一致）时注入。Linux 有系统 terminfo、
+     * 终端本来就正常，不冒这个险；用户显式配了类型也说明他要自己掌控，不覆盖。
+     * <p>
+     * 能力表从 JLine 自带的 {@code windows-vtp.caps} 读入后只删 {@code am}，读不到就放弃注入、
+     * 退回默认路径（页脚观感有缺陷但功能不受影响）。详见 {@link TerminalCaps}。
+     */
+    private static String statusBarSafeType() {
+        if (!TerminalCaps.isWindows(System.getProperty("os.name"))
+                || System.getenv("TERM") != null
+                || System.getProperty("org.jline.terminal.type") != null) {
+            return null;
+        }
+        String base = loadWindowsVtpCaps();
+        if (base == null) {
+            return null;
+        }
+        InfoCmp.setDefaultInfoCmp(TerminalCaps.customType(), TerminalCaps.withoutAutoRightMargin(base));
+        return TerminalCaps.customType();
+    }
+
+    /** 读 JLine 自带的 windows-vtp 能力表原文；资源缺失时返回 null 由调用方降级。 */
+    private static String loadWindowsVtpCaps() {
+        try (InputStream in = AcodeTerminal.class.getResourceAsStream("/org/jline/utils/windows-vtp.caps")) {
+            return in == null ? null : new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return null;
         }
     }
 

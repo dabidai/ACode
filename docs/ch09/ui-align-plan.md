@@ -126,7 +126,7 @@ PR 的等待帧比初稿写的更简单——提示符上方只有「模式行 +
 
 | 文件 | 改动 |
 |---|---|
-| `ui/LiveRegionRenderer.java` | 新增 `renderWaitingFrame(out, modeHint, divider, footerDivider, footerModel)`：`appendCommitted` 写模式行 + 分隔线 → `\r\n` 预留提示符行 → 页脚两条 → `\033[3A` 回到提示符行。新增 `clearBelowCursor(out)`（写 `\033[J`，不移动光标，`rowsWritten = 0`） |
+| `ui/LiveRegionRenderer.java` | 新增 `renderWaitingFrame(out, footer, divider, modeHint)`（**v2，见文末「真机复现后的设计修正」**）：四行全部 `appendCommitted`，光标停在提示符行由 JLine 接着画。新增 `clearBelowCursor(out)`（写 `\033[J`，不移动光标，`rowsWritten = 0`） |
 | `ui/RenderContext.java` | 新增 `terminalWidth()`（无终端按 80 估，测试路径安全） |
 | `ConversationController.java` | 新增 `renderInputFrame()`：组装 `StatusBar.modeLine` / `divider` / `infoLine`；注入 `CommandProcessor.InputFrame` 匿名实现（`draw` → `renderInputFrame`，`erase` → `clearBelowCursor`） |
 | `CommandProcessor.java` | 提示符 `"> "` → `">*"`；新增嵌套接口 `InputFrame` + `setInputFrame`；新增包内可见 `step(line)` 承载「擦 → 派发 → 画」；`mainLoop` 变薄 |
@@ -148,10 +148,9 @@ PR 的等待帧比初稿写的更简单——提示符上方只有「模式行 +
 - `Conversation` 有 `model()` `:176`、`estimateContextTokens()` `:207`、`maxContextTokens()` `:181`
   → 上下文占比 = `estimateContextTokens() / maxContextTokens()`（在 `renderInputFrame` 里算）
 
-**主要风险**：`\033[3A` 这套行数数学在真实终端上一旦算错就是错位；且帧是**唯一**在两次
-`readLine` 之间做光标**上移**的代码（既有代码只追加、只下移），JLine `Display` 是否因此失步
-必须真机验证。块 C 之后要在**改过窗口尺寸 / 超过一屏 / `/clear` / `/resume` / 空行回车 / Ctrl+C**
-六种情形下各看一眼。
+**块 C 初稿的「主要风险」——已在真机上兑现，见文末「设计修正」**：`\033[3A` 那套行数数学
+在真机上确实算错了，而且错法比预想的多一种（多行输入）。原判断「JLine `Display` 是否因此
+失步必须真机验证」是对的，验证结果：**是**，失步不可避免。
 
 ### 块 D：`/status` 与 `/help` 配色 — 实现已落地，测试待独立 Agent 修
 
@@ -204,11 +203,11 @@ PR 的等待帧比初稿写的更简单——提示符上方只有「模式行 +
   若终端把模糊宽度渲染成双宽（部分 CJK 字体/终端设置会），页脚会实际占 20 列、超出按 wcwidth
   算出的宽度，进而折行、破坏帧的行数数学。单测防不了（wcwidth 没有终端上下文）。真机验收（CMD8）
   里「宽度收窄时截断而不折行」那条就是为了在真实终端上暴露它。
-- **残留风险二（提示符向下占用行）**：页脚画在提示符**下方**，而 JLine 画提示符时会向下占行——
-  所以**多行输入（Shift+Enter）或长输入折行时会盖住页脚**。这是 PR 那套帧设计本身的性质，不是
-  本次引入的新想法；要根治得挂 JLine 的行改写钩子（PR 的 `RowRewriter`，已明确不采纳）。
-  CMD8 里专门有一条让真机判：提交后不留被压掉一半的页脚残行即算通过，否则要回头改设计。
-  **若真机确认重叠，兜底方案（备查）**：把页脚两行也挪到提示符**上方**（模式行 / 页脚 / 分隔线
+- **残留风险二（提示符向下占用行）—— 真机已复现，已按兜底方案改掉，见文末「设计修正」**：
+  页脚画在提示符**下方**，而 JLine 画提示符时会向下占行——所以**多行输入（Shift+Enter）或长输入
+  折行时会盖住页脚**。这是 PR 那套帧设计本身的性质，不是本次引入的新想法；要根治得挂 JLine 的
+  行改写钩子（PR 的 `RowRewriter`，已明确不采纳）。
+  当时的兜底方案（备查、现已采用）：把页脚两行也挪到提示符**上方**（模式行 / 页脚 / 分隔线
   都在提示符之上，提示符下方什么都不画）。这样帧全部是 `appendCommitted` 的已提交内容，
   `\033[3A` 与 `\033[J` 都不再需要，多行输入不可能压到任何东西，JLine 失步的风险也一并消失。
   代价是失去「提示符下方常驻状态条」的观感（PR 的卖点），退回成「每轮一组的轮次标题」。
@@ -219,3 +218,165 @@ PR 的等待帧比初稿写的更简单——提示符上方只有「模式行 +
   所以帧渲染的收尾要按块 C 描述的方式重新设计
 - `docs/ch09/spec.md:94`、`docs/ch09/tasks.md`（T1 之前那段「与 PR #2 的关系」）是这次对齐的出处
 - 相关记忆：`project_pr2_not_merged.md`
+
+---
+
+## 真机复现后的设计修正（v2，2026-09-14）
+
+真机跑块 C 的产物，**两条缺陷同时现形**（用户复现，非推测）：
+
+1. **Ctrl+C 后页脚残留**：等输入时按 Ctrl+C，屏上留下
+   `[default] · /permission <模式>` + 分隔线（还带 `PS D:\code\claude\ACode>` 夹在中间），
+   再下面才是另一条分隔线与页脚——shell 提示符被顶到帧中间。
+2. **Shift+Enter 多行输入糊屏**：出现 `> ────────`、`> epseek-v4-flash · ctx …` 这类
+   **被吃掉首字符、且带续行提示符 `> ` 前缀**的残行。
+
+**根因（一条，不是两条）**：提示符行**及其下方**是 JLine `Display` 的地盘，它按自己记录的行数
+擦除/重绘。帧往那片区域写字，JLine 并不知道。
+- Ctrl+C 时 `readLine()` 抛异常直接 return，`step()`（唯一负责擦帧的地方）没被调用；
+  JLine 只擦提示符行，下方页脚两行原样留在屏上。
+- 多行输入时 JLine 在提示符行下面续画，正好压进预留的页脚行；回车时它按自己记的行数擦，
+  跨度对不上，于是留下带 `> ` 前缀的半截行。
+
+**改法：采用「残留风险二」早先记下的兜底方案——帧整体移到提示符上方。**
+
+- `renderWaitingFrame` 新签名为 `(out, footer, divider, modeHint)`，方法体只剩四次
+  `appendCommitted`，**没有 `\r\n` 预留行、没有 `\033[3A`**。输出顺序即参数顺序：
+  页脚 → 分隔线 → 模式行 → 分隔线，光标停在下一行行首，JLine 在那里画 `>*`。
+- `clearBelowCursor` **保留**（此前以为可以一并删掉，实际不行）：`erase()` 仍需要它擦掉
+  JLine 在多行输入后留在提示符行以下的残迹。语义从「擦页脚」变成「擦 JLine 的地盘」。
+- `mainLoop` 的 Ctrl+C / Ctrl+D 分支**补上 `inputFrame.erase()`**——原先这条路径直接
+  `closeSession()` 返回，一帧都不擦，是真机残留的直接原因。
+- 帧每轮照旧重画（模式与 ctx 进度是变化的），代价是每轮往回滚里多留 4 行，接受。
+
+**收益**：多行输入不可能压到任何东西；JLine 失步风险消除；Ctrl+C/退出路径不再有孤儿行。
+**代价**：页脚从「提示符下方常驻状态条」变成「每轮一组的轮次标题」——PR 的观感卖点没了，
+这是明确放弃，不是遗漏。
+
+**测试同步**：`LiveRegionRendererTest` 的 `renderWaitingFrameWritesExactByteSequence` 改为断言
+新的四行字节序列并**断言不含任何光标上移序列**；另加 `renderWaitingFrameLeavesNoPromptRowInsideTheFrame`
+钉死「帧内不得有空行占位」。`CommandProcessorTest` 的 `step` 次序用例（擦→派发→画）语义未变，未改。
+
+---
+
+## v2 被否 + v3 定稿：改用 JLine 原生 `Status`（2026-09-14 当日第二次真机反馈）
+
+**v2 被用户否掉的原因不是崩，是观感**：帧整体上移后，每轮的 4 行都留在回滚里。用户实际看到的是——
+
+```
+● 你是什么模型？
+<回答>
+usage: in 4641 · ...
+deepseek-v4-flash · ctx ▓░░░░░░░░░ 1.0% · D:\code\claude\ACode   ← 本轮的页脚
+──────────────
+[default] · /permission <模式>                                    ← 本轮的轮次标题
+──────────────
+>*
+```
+
+于是「当前输入框」被埋在一堆历史帧下面，而且**上一轮的模式行/分隔线还悬在用户消息上方**，
+看起来就是「同样的东西出现了两次」。用户的要求很明确：**保持原来的观感**（模式行+分隔线在上、
+页脚在下），**但把多行输入压掉下划线的问题真正解决**。
+
+**v1/v2 错在哪（结论）**：都在用 `\033[3A` / `\033[J` 手工维护提示符下方那几行，而 JLine 的
+`Display` 并不知道那片区域被占了。手工算行数必然与 JLine 自己记的行数对不上，多行输入和
+Ctrl+C 各暴露一种错法。**这不是行数算得准不准的问题，是那片区域的归属问题。**
+
+**v3：把提示符下方交给 JLine 自己的 `Status`。** JLine 3.27.1 的
+`org.jline.utils.Status` 就是干这个的（`org/jline/utils/Status.java`）：
+- 靠终端滚动区（`change_scroll_region`）把屏幕底部若干行划走，`Display` 管自己的行数；
+- `LineReaderImpl.displayRows()` 会**减掉 `status.size()`**（`:4720`），所以提示符可用行数天然
+  不含状态区，多行输入只会在状态区之上滚动（`Display` 溢出时只滚出可见部分，不会推进状态区）；
+- resize 时 LineReader 调 `status.reset()`（`:1207`），每次 redisplay 后调 `status.redraw()`
+  （`:3882`），都是 JLine 自己维护的，我们不用管；
+- 不支持的终端上 `Status.getStatus(t, false)` 返回 `null`，天然降级。
+
+落地：
+
+| 文件 | 改动 |
+|---|---|
+| `ui/LiveRegionRenderer.java` | 删 `renderWaitingFrame` 与 `clearBelowCursor`（手工光标那套全部作废）；新增静态 `statusOf(AcodeTerminal)` 与 `updateStatus(Status, List<String>)` |
+| `ui/RenderContext.java` | 新增 `status()`（惰性建立、换终端失效）、`updateStatusLines` / `hideStatusLines` / `closeStatus` |
+| `ConversationController.java` | `InputFrame.draw` = 模式行去重追加（变了才画，画在提示符上方）+ `renderFooter()`（`Status` 画分隔线 + 页脚）；`erase` = `hideStatusLines()`；`/clear` 与 `finally` 各补一次状态区收起 |
+| `CommandProcessor.java` | `mainLoop` 的 Ctrl+C / Ctrl+D 分支保留 `inputFrame.erase()`（收起状态区） |
+
+**模式行去重是必需的**：页脚归 `Status` 后每轮原地重绘、不堆历史；模式行仍走回滚，不比对就会
+每轮多留一份「模式行 + 分隔线」——v1 真机上正是这个把界面糊得看不出层次。
+
+**验证过的事实**（跑真实 JLine 类得到的，非推断）：`AttributedString.fromAnsi()` 对带 SGR 的页脚
+串算列宽正确——同一串 `charLen=79`、`columnLength=54`，即 `\033[1;36m` 这类序列不进宽度，
+`Status` 的「补空格/超宽加省略号」排版不会误判。
+
+**真机待验（CMD8 已按此重写）**：`Status` 依赖 `change_scroll_region` + `save/restore_cursor` +
+`cursor_address` 四个能力。**结果见下一节——当时「Windows Terminal 理论上齐备」这个事实判断对了，
+但据此推出的结论错了，根因根本不在能力上。**
+
+---
+
+## 两次误诊 + v5 定稿：去掉 terminfo 的 `am`（2026-09-15）
+
+v3 上真机后页脚**一个都没出现**。这里记一笔两次误诊，它们有个共同毛病：**搜错关键词就下结论**。
+
+**误诊一（能力缺失）**：判定「JLine 自带的 15 个 caps 文件没有一个含 `csl=`，所以
+`change_scroll_region` 恒缺、`Status` 恒 null」。**错在搜的键名。** `change_scroll_region` 在
+terminfo 里的短名是 **`csr`**（`capabilities.txt:88` 登记了 `csr`/`cs` 两个别名）；`csl` 是另一个
+能力（`change_scroll_region_left`，左边距滚动区），跟本问题无关。拿一个不存在的键名去 grep，
+搜不到是必然的。基于此误诊写出的「注入 csl」方案（v4）整个作废。
+
+**误诊二（真因是接线）**：写了个探针在你的真实终端里跑（`TerminalBuilder` 开系统终端，
+打印 type / 四个能力 / `Status.getStatus(t, true)`），输出是——
+
+```
+type = windows-vtp
+change_scroll_region = \E[%i%p1%d;%p2%dr   ← 在
+save_cursor / restore_cursor = \E7 / \E8     ← 在
+cursor_address = \E[%i%p1%d;%p2%dH           ← 在
+status(create=true) = created
+```
+
+能力齐备、`Status` 建得出来。于是查 JLine 源码：`LineReaderImpl` 里五处取 `Status` 的地方
+**全部传 `create=false`**（只读不建），建的责任在应用层——而 `LiveRegionRenderer.statusOf`
+也传了 `false`，全仓库没有一处建过它。**页脚消失的真因是这一个布尔值**，与 terminfo 无关。
+
+改 `create=true` 后页脚出来了，但真机暴露新缺陷，v5 修的就是它。
+
+**新缺陷的表现**：分隔线贴屏幕底边、页脚模型名缺首字母（`eepseek-v4-flash`）、两行糊成一行。
+
+**根因（字节级实证）**：`Status.update` 把每一行**补齐到终端全宽**，于是分隔线正好写满最后一列。
+JLine `Display` 从右边界移到下一行用的是一个技巧——在最后一列写个空格触发终端自动折行，再退格
+回列 0（`Display.java` 的 `rawPrint(' ')` + `key_backspace` 分支）。用探针（`ExternalTerminal`
+承载输出、type 设 `windows-vtp`、尺寸 128×30）抓到的真实字节流是：
+
+```
+ESC 7  ESC[29;1H  ESC(0  ─×128  ESC(B  ' '  \b  d e e p s e e k …
+                                     └──────┘
+                              就是这两步在 Windows 上失效
+```
+
+Windows Terminal 的 pending-wrap 会被退格**取消**而不是折行，于是页脚首字母落回分隔线行末、
+两行糊在一起，分隔线也因此顶到屏幕最底行。
+
+**v5：去掉 `am`。** 那个技巧的开关是 `Display.wrapAtEol`，取自 terminfo 布尔能力
+`auto_right_margin`（`am`）（`Display.java:51`，构造时读一次）。去掉它之后走另一个分支：
+行尾发 `CR`（取消 pending-wrap）+ 显式下移——**这正是本项目的 `appendCommitted`（行尾 `\r\n`）
+已在真机验证可靠的写法**（提示符上方那条满宽的模式行分隔线一直渲染正常，用的就是它）。
+全 JLine 只有两处消费该能力（`Display` 与 `LineReaderImpl.freshLine`），都有显式分支，无暗依赖。
+
+落地：新增 `ui/TerminalCaps.java`（纯函数：去 `am`、判 Windows、自定义类型名），
+`AcodeTerminal.open()` 在「Windows 且用户未显式指定 `TERM` / `org.jline.terminal.type`」时
+把 JLine 自带的 `windows-vtp.caps` 读进来去掉 `am`、以自定义名 `acode-vtp` 注册并
+`.type("acode-vtp")`。**不能覆盖内置名**——`InfoCmp` 静态块已把 `windows-vtp` 等 15 个名字
+`putIfAbsent` 预注册，`setDefaultInfoCmp` 对已存在的键不生效。Linux 路径一行不改。
+
+**这是对 JLine 谎报终端能力**：JLine 会认为该终端不自动折行，全部行尾转移改走 CR + 显式下移。
+该路径与 ACode 已验证的模式一致，但主输入区（LineReader 的 Display）同样受影响——真机若发现
+输入区行转移偏移，回退方案是页脚改**单行**（分隔线与页脚合并成一行，无行间转移，视觉略变）。
+
+### 布局语义（与用户确认，验收基准）
+
+输入框的整体语义是「**上方紧贴对话内容、下方紧贴屏幕底部**」：
+
+- **提示符上方**：模式行 + 分隔线，追加在上一轮输出之后（进回滚、随输出滚动，不钉底）。
+- **提示符下方**：分隔线 + 页脚，钉在屏幕底部（`Status` 滚动区，常驻、不随输出滚动）。
+- 内容量少时（如刚启动）提示符停在上方、页脚钉在底部，**中间的空档是预期现象，不是缺陷**。
+

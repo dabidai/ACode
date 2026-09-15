@@ -1,5 +1,6 @@
 package com.acode.ui;
 
+import org.jline.utils.AttributedString;
 import org.jline.utils.WCWidth;
 
 import java.io.IOException;
@@ -152,30 +153,47 @@ public class LiveRegionRenderer {
     }
 
     /**
-     * 擦掉光标以下的所有残留并重锚定状态。等待帧把页脚画在提示符行**下方**，而 JLine 的
-     * ERASE_LINE_ON_FINISH 只擦提示符行本身，于是回车后页脚那两行仍留在屏上；appendCommitted
-     * 写「行\r\n」时不先清行，短文本盖不住长页脚的尾巴，就会糊进下一条输出里。交换/命令输出
-     * 开始前必须先擦干净。\033[J 不移动光标，光标停在原处，后续追加正好从提示符行接着写。
+     * 底部常驻状态区（JLine {@link org.jline.utils.Status}）：终端滚动区在屏幕底部留出若干行，
+     * 由 JLine 的 Display 管理与提示符的让位。等待帧的页脚就画在这里——**放在提示符下方但不归我们
+     * 自己管**，这一条是关键区别。
+     * <p>早先的失败做法是拿 {@code \033[3A} / {@code \033[J} 手工维护提示符下方那几行：JLine 并不知道
+     * 那片区域被占了，多行输入会在上面续画，回车时按自己记的行数擦除，于是留下残行；Ctrl+C 绕过
+     * 主循环的擦除路径，残留更明显。交给 {@code Status} 之后这些都不需要了——它的 Display 记着自己的
+     * 行数，滚动区内不会把提示符推过来（`Display` 只滚出可见部分），resize 由 LineReader 调
+     * {@code status.reset()}，重绘由 {@code status.redraw()} 跟着走。真机缺陷正是这么消掉的。
+     *
+     * <p><b>创建责任在本方法</b>：JLine 的 {@code LineReaderImpl} 取状态区时一律传 {@code create=false}
+     * （只读不建），全库没有一处替我们建；这里必须传 {@code true}，否则拿到的一直是 null，
+     * 页脚被静默吞掉（v3 真机复现的正是这个）。滚动区能力在 {@code windows-vtp} 上本就齐备，
+     * 不需要往 terminfo 里注入任何东西。
+     *
+     * @return 状态区实例；终端不支持（非 AbstractTerminal / 缺滚动区能力 / 测试路径）时返回 null，
+     *         调用方按「无状态区」降级——只是少一条页脚，功能不受影响
      */
-    public void clearBelowCursor(Writer out) {
-        writeRaw(out, "\033[J");
-        rowsWritten = 0;
+    public static org.jline.utils.Status statusOf(AcodeTerminal tui) {
+        if (tui == null) {
+            return null;
+        }
+        return org.jline.utils.Status.getStatus(tui.terminal(), true);
     }
 
     /**
-     * 渲染等待输入帧：模式提示行 + 分隔线（提示符**上方**）→ 预留提示符空行 →
-     * 页脚分隔线 + 模型信息行（提示符**下方**）→ 光标上移 3 行回到预留的提示符行，
-     * 随后由 JLine 在此绘制 {@code >*} 提示符。光标最终落在帧内第 3 行。
-     * 相对上移对「页脚落在屏幕末行、写入触发滚动」是安全的：内容与光标同步位移，偏移恒为 3。
+     * 建立/更新底部状态区。传入 null 或空列表则隐藏状态区，把底部行还给输出。
+     * 行数与上次相同即原地重绘（{@code Status} 只在行数变化时动滚动区），所以每轮调用不会抖。
      */
-    public void renderWaitingFrame(Writer out, String modeHint, String divider,
-                                   String footerDivider, String footerModel) {
-        appendCommitted(out, modeHint);
-        appendCommitted(out, divider);
-        writeRaw(out, "\r\n");            // 预留提示符行（稍后由 JLine 的提示符覆盖）
-        appendCommitted(out, footerDivider);
-        appendCommitted(out, footerModel);
-        writeRaw(out, "\033[3A");         // 回到预留的提示符行
+    public static void updateStatus(org.jline.utils.Status status, List<String> lines) {
+        if (status == null) {
+            return;
+        }
+        if (lines == null || lines.isEmpty()) {
+            status.hide();
+            return;
+        }
+        List<AttributedString> rendered = new ArrayList<>();
+        for (String line : lines) {
+            rendered.add(AttributedString.fromAnsi(line));
+        }
+        status.update(rendered);
     }
 
     /**

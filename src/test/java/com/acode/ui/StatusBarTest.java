@@ -193,8 +193,73 @@ class StatusBarTest {
     @Test
     void modeLineTooNarrowFallsBackToPlainTextWithinWidth() {
         String line = StatusBar.modeLine("default", 5);
-        assertEquals("[defa", line, "放不下时应丢色截断成纯文本");
+        assertEquals("[def…", line, "放不下时应丢色截断并补省略号 …：4 列前缀 + 1 列省略号");
         assertTrue(line.indexOf('\033') < 0, "降级输出不得残留 ANSI 转义，实际：" + line);
+    }
+
+    @Test
+    void modeLineTruncationBoundaryAtExactFitWidth() {
+        // 「[default] · /permission <模式>」的明文总列数即截断分界：差 1 列截断补 …，恰放得下则原样上色
+        String plain = "[default] · /permission <模式>";
+        int fitWidth = StatusBar.displayWidth(plain);
+
+        String narrow = StatusBar.modeLine("default", fitWidth - 1);
+        assertTrue(narrow.endsWith("…"), "差 1 列放不下时应截断并补省略号，实际：" + narrow);
+        int narrowWidth = shownWidth(narrow);
+        assertTrue(narrowWidth <= fitWidth - 1 && narrowWidth >= fitWidth - 2,
+                "截断宽度应落在 width-1 或 width-2（顶在宽字符上宁可少占 1 列也不切断），实际：" + narrow);
+
+        String exact = StatusBar.modeLine("default", fitWidth);
+        assertEquals(plain, stripAnsi(exact), "恰放得下时应完整渲染原文，不截断");
+        assertFalse(stripAnsi(exact).contains("…"), "恰放得下时不应出现省略号");
+        assertTrue(exact.contains(AnsiPalette.MODE + "[default]"), "恰放得下时应保留 MODE 上色");
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2, 3, 4, 5, 9, 14, 20, 24, 26, 28})
+    void modeLineTruncatedFillsWidthExactlyWithEllipsis(int width) {
+        // 截断点落在 ASCII 前缀内时：(width-1) 列前缀 + 1 列省略号，宽度恰为 width
+        String line = StatusBar.modeLine("default", width);
+
+        assertEquals(width, shownWidth(line), "截断后总显示宽度应恰为 width，实际：" + line);
+        assertTrue(line.endsWith("…"), "截断输出应以省略号收尾，实际：" + line);
+        assertTrue(line.indexOf('\033') < 0, "截断降级不得残留 ANSI 转义，实际：" + line);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {25, 27, 29})
+    void modeLineTruncationAtWideCharLosesAtMostOneColumn(int width) {
+        // 截断点恰落在 2 列宽字符（<模式>）上：宁可少占 1 列也不切断，宽度落在 [width-1, width]
+        String line = StatusBar.modeLine("default", width);
+
+        int w = shownWidth(line);
+        assertTrue(w <= width && w >= width - 1,
+                "顶在宽字符上截断时应少占至多 1 列，实际宽度 " + w + "，width=" + width + "：" + line);
+        assertTrue(line.endsWith("…"), "截断输出应以省略号收尾，实际：" + line);
+    }
+
+    @Test
+    void modeLineTinyWidthsReturnExactContentWithoutException() {
+        assertEquals("…", StatusBar.modeLine("default", 1), "宽度 1：只有省略号本身");
+        assertEquals("[…", StatusBar.modeLine("default", 2), "宽度 2：1 列前缀 + 省略号");
+        assertEquals("", StatusBar.modeLine("default", 0), "宽度 0 返回空串，不抛异常");
+        assertEquals("", StatusBar.modeLine("default", -3), "宽度为负同样返回空串");
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25})
+    void modeLineWithCjkModeNeverSplitsWideCharNorExceedsOddWidth(int width) {
+        // CJK 模式名：截断点落在 2 列宽字符上时宁可少占 1 列也不切断，奇数宽度最容易踩中
+        String plain = "[默认] · /permission <模式>";
+        String line = StatusBar.modeLine("默认", width);
+
+        assertTrue(shownWidth(line) <= width,
+                "奇数宽度下显示宽度仍不得超宽，实际 " + shownWidth(line) + " > " + width + "：" + line);
+        if (line.endsWith("…")) {
+            String prefix = line.substring(0, line.length() - 1);
+            assertTrue(plain.startsWith(prefix),
+                    "截断必须停在码点边界（不得切进宽字符中间），前缀应为原文前缀：" + prefix);
+        }
     }
 
     // ---------- 路径左截断 ----------

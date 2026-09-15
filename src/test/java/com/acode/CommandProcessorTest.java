@@ -6,6 +6,7 @@ import com.acode.command.CommandDispatcher;
 import com.acode.command.CommandRegistry;
 import com.acode.command.CommandResult;
 import com.acode.command.CommandType;
+import com.acode.ui.InputPane;
 import com.acode.ui.MenuEntry;
 import com.acode.ui.UIController;
 import org.junit.jupiter.api.Test;
@@ -235,5 +236,66 @@ class CommandProcessorTest {
         assertEquals(CommandResult.CONTINUE, processor.step("/status"));
         assertEquals(CommandResult.EXIT, processor.step("/quit"));
         assertEquals(CommandResult.CONTINUE, processor.step("hello"));
+    }
+
+    // ---- 新增：多行提示符（prompt）与默认提示符 ----
+
+    /** 返回固定 header 的输入框替身：覆盖默认空串 promptHeader */
+    private static final class HeaderFrame implements CommandProcessor.InputFrame {
+        private final String header;
+
+        HeaderFrame(String header) {
+            this.header = header;
+        }
+
+        @Override
+        public String promptHeader() {
+            return header;
+        }
+
+        @Override
+        public void draw() {
+        }
+
+        @Override
+        public void erase() {
+        }
+    }
+
+    @Test
+    void promptWithoutFrameReturnsDefaultPrompt() {
+        CommandProcessor processor = new CommandProcessor(null, null, new CommandRegistry());
+
+        assertEquals(InputPane.DEFAULT_PROMPT, processor.prompt(), "无帧时提示符就是裸默认提示符");
+    }
+
+    @Test
+    void promptWithEmptyHeaderReturnsDefaultPromptWithoutLeadingNewline() {
+        CommandProcessor processor = new CommandProcessor(null, null, new CommandRegistry());
+        processor.setInputFrame(new RecordingFrame(new ArrayList<>())); // 默认 promptHeader() 返回空串
+
+        assertEquals(InputPane.DEFAULT_PROMPT, processor.prompt(), "空 header 应退回默认提示符，不得带前导换行");
+    }
+
+    @Test
+    void promptWithNullHeaderReturnsDefaultPrompt() {
+        CommandProcessor processor = new CommandProcessor(null, null, new CommandRegistry());
+        processor.setInputFrame(new HeaderFrame(null));
+
+        assertEquals(InputPane.DEFAULT_PROMPT, processor.prompt(), "header 为 null 时同样退回默认提示符");
+    }
+
+    @Test
+    void promptWithNonEmptyHeaderPrefixesDefaultPrompt() {
+        CommandProcessor processor = new CommandProcessor(null, null, new CommandRegistry());
+        processor.setInputFrame(new HeaderFrame("模式行"));
+
+        assertEquals("模式行\n" + InputPane.DEFAULT_PROMPT, processor.prompt(),
+                "有 header 时 header 在前、默认提示符在后，中间一个换行");
+    }
+
+    @Test
+    void defaultPromptIsGreaterSignAndSpace() {
+        assertEquals("> ", InputPane.DEFAULT_PROMPT, "默认提示符应为 > 加一个空格（去掉 * 是本次需求验收点）");
     }
 }

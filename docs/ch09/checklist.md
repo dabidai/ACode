@@ -383,10 +383,12 @@ Token：45,230 / 200,000（23%）
 **输入框边框**
 
 - [x] `CommandProcessor` 提示符由 `"> "` 改为 `">*"`；未注入 `InputFrame` 时 `step` 不抛异常、不写任何帧序列（`CommandProcessorTest`）
+  > **已被 T15 推翻**：提示符回到 `"> "`（去 `*`）。本行保留为当时的决策记录，当前口径以 T15 为准。
 - [x] 页脚改由 JLine 原生状态区承载：`LiveRegionRenderer.statusOf` / `updateStatus` 拿到 null 状态区时静默降级、不抛异常（`LiveRegionRendererTest`）
 - [x] 页脚进度条永远 10 格；占用非零但不足半格时至少亮 1 格；占比 ≥10% 取整、低于 10% 保留一位小数（`StatusBarTest`）
 - [x] 带 SGR 的页脚串算列宽不含转义序列：同一串 `charLen=79` / `columnLength=54`（跑真实 `AttributedString.fromAnsi` 验证），状态区排版不会误判宽度
 - [ ] ⚑ 真机启动后：提示符 `>*` **上方**一行模式行 + 一行分隔线，**下方**一行分隔线 + 一行页脚（模型 · ctx 进度条 · 百分比 · 工作目录）
+  > **提示符字形已被 T15 推翻**（回到 `> `）；布局本身不变，改为由多行提示符承载。以 T15 为准。
 - [x] 页脚能真的建出状态区：`statusOf` 传 `create=true`——JLine 全库取 `Status` 一律传 `create=false`（只读不建），建的责任在应用层，误传 `false` 会让页脚被静默吞掉
 - [x] Windows 上注入去掉 `am` 的自定义 terminfo：`withoutAutoRightMargin` 只删内容恰为 `am` 的条目、其余逐字节保留且幂等；`sam` / `msgr` / `amx=` 不被误伤（`TerminalCapsTest`）
 - [x] `isWindows` 对 `"Windows 11"` 为真，对 `"Linux"` 与 `null` 为假（`TerminalCapsTest`）
@@ -394,7 +396,8 @@ Token：45,230 / 200,000（23%）
 - [ ] ⚑ **页脚两行且分开（v5 主要判据）**：提示符下方先是整行分隔线、再是整行页脚；模型名**首字母完整**；分隔线**不贴屏幕最底边**
 - [ ] ⚑ **非注入路径无回归**：显式设 `TERM`（或 `-Dorg.jline.terminal.type`）启动 → 不注入自定义 terminfo，行为与改动前一致
 - [ ] ⚑ 模式行随切档刷新：`/permission acceptEdits` 之后下一次等输入时，模式行显示 `[acceptEdits]`
-- [ ] ⚑ 模式行**不重复堆叠**：连做几轮问答，不应每轮都多出一份「模式行 + 分隔线」（模式行按内容去重）
+- [ ] ⚑ 模式行**不重复堆叠**：连做几轮问答，不应每轮都多出一份「模式行 + 分隔线」
+  （T14 的机制是「模式行按内容去重」+ 只追加一次；T15 改为多行提示符后机制消失，该约束由载体天然保证）
 - [ ] ⚑ 宽度收窄到放不下时，模式行/页脚**截断而不折行**（CJK 目录名按 2 列计宽）
 
 **残留缺陷修复 ⚑**
@@ -418,3 +421,72 @@ Token：45,230 / 200,000（23%）
 - [ ] ⚑ 真机在六种情形下各走一遍——**改过窗口尺寸 / 输出超过一屏 / `/clear` / `/resume` / 空行回车 / 流式中 Ctrl+C**：提示符位置正确、帧不错位、无残影；空行回车后模式行与分隔线**不重复堆叠**（空行不擦不画，由 `CommandProcessorTest` 钉住）
 - [ ] ⚑ 重跑 `JAVA_HOME="D:\java\jdk21" mvn test` 全绿（记录总用例数，与 T13 的记录对比）。→ **1061 用例，0 失败 / 0 错误 / 1 跳过**（2026-09-15，v5；v3 为 1055、v2 为 1057、v1 为 1056）
   > 注：`mvn test` 跑完偶发报 `BUILD FAILURE`（`std/in stream corrupted`），那是 surefire fork 关机超时 30s 被杀的既有问题，用例本身全绿；`target/surefire-reports/*-jvmRun1.dump` 里能看到转储，2026-09-14 起就有，与本节改动无关。
+
+## T15 照桌面 UI.txt 补缺口（v6）
+
+> 出处：用户桌面的 `UI.txt`——一份「Java 终端输入界面模仿 Claude Code」的需求稿，逐条对照后确认
+> 就是本章 UI 对齐工作的原始需求文本。决策与边界见 `docs/ch09/ui-align-plan.md` 的 **v6** 小节。
+> 六项差距的定夺：① `/` 实时切模式**作废**（用户判定该需求有误）；② 状态行固定**改**；
+> ③ 目录中间省略**保持现状**；④ 截断省略号**改**；⑤ resize **改（有限范围）**；⑥ 提示符 `>*` → `> ` **改**。
+
+**截断省略号**
+
+- [x] `StatusBar.modeLine("default", 5)` 返回 `"[def…"`（截到 width-1 列 + 一个 `…`），不再是硬切的 `"[defa"`
+- [x] 截断后**显示宽度恰等于 width**（`…` 按 1 列计；CJK 按 2 列计）——ASCII 前缀内的 11 个宽度逐个断言
+- [x] `width = 0` 返回空串；`width = 1` 返回 `"…"`；负宽度同样返回空串；三者都不超宽、不抛异常
+- [x] 放得下时**不加**省略号（恰放得下时与原文逐字相同，且保留 MODE 上色）
+- [x] `modeLine` 宽度不变量在 `{0,1,2,5,10,20,40,80,120}` 上全部成立（原参数化用例仍通过）
+- [x] 截断点顶在 2 列宽字符上时**至多少占 1 列**、且停在码点边界（ASCII 与 CJK 模式名各一组）
+- [ ] `infoLine` 的极窄兜底截断**未受影响**（实现未改动，无显式断言）
+
+**状态行固定（多行提示符）**
+
+- [x] `InputPane.DEFAULT_PROMPT` 等于 `"> "`（去掉 `*`）
+- [x] `grep -n '">\*"' src/main/java` 返回 0 条（旧提示符已清）
+- [x] 无输入帧时 `CommandProcessor.prompt()` 返回裸提示符 `"> "`（无前导换行）
+- [x] 帧的 `promptHeader()` 返回空串（接口默认实现）时，`prompt()` 同样返回裸提示符
+- [x] header 为 `null` 时也退回裸提示符（不抛 NPE、不产生 `"null\n"`）
+- [x] 帧返回非空 header 时，`prompt()` 等于 `header + "\n" + "> "`
+- [x] 装配后的 `prompt()` 含模式行、含 `/permission <模式>`、末行是 `"> "`、第二行是 80 列全宽分隔线
+- [x] `grep -n "renderModeLineIfChanged\|lastModeLine" src/main/java` 返回 0 条（旧的按内容去重已随进回滚方案一并删除）
+- [x] 模式行**不再写进终端回滚**（`ConversationController` 里已无以模式行/`divider` 为实参的 `appendCommitted` 调用）
+- [ ] ⚑ **多行提示符在回车时被整块擦净**：提交后屏上不留模式行/分隔线的孤儿行
+  （`ERASE_LINE_ON_FINISH` 对多行提示符是否除净——本次风险最高的点）
+- [ ] ⚑ `/permission acceptEdits` 回车后，**下一次**等输入时模式行显示 `[acceptEdits]`
+      （提示符文本在 readLine 期间无法改写，切档延迟到下一轮是预期行为）
+- [ ] ⚑ 连做几轮问答，模式行**不重复堆叠**（多行提示符天然如此，此条守回归）
+- [ ] ⚑ 宽度收窄后模式行显示 `…` 结尾而非折行
+
+**resize 刷新（有限范围）**
+
+- [x] `installResizeRefresh()` 在 `tui == null`（测试路径）时不抛异常、不注册
+      （装配后的 `prompt()` 用例会走到该方法，tui 为 null 时提前返回）
+- [ ] `RenderContext` 三处写入确实共用同一把锁（读代码可见；无单测，锁的行为无法在无终端路径断言）
+- [ ] 信号处理器只读 volatile 缓存值排版，**不调用** `conversation` 的任何方法
+      （`grep` 处理器体内无 `conversation.`）
+- [ ] `footerVisible` 为 false 时 resize 不把已收起的页脚又显示出来
+- [ ] ⚑ 真机：拖拽窗口宽度 → 页脚按新宽度即时重排（进度条与目录截断跟着变）
+- [ ] ⚑ 真机：resize 过程**无闪烁、无残影**；若出现闪烁或错位，删掉 `installResizeRefresh()` 的注册
+      退回「每轮刷新」路径（一行回退），并在本节记录结论
+- [ ] ⚑ 真机：确认 Windows 上 SIGWINCH 处理器**是否真的被触发**，把结论记在本节下方
+- [ ] ⚑ **已知限制（非缺陷）**：resize 时若正处于等输入/打字状态，提示符块（模式行 + 上边框）
+      保持旧宽度，**下一轮提交后**自动修正；页脚则即时正确
+
+**端到端**
+
+- [ ] ⚑ 真机等输入状态下界面自上而下为：`[default] · /permission <模式>` → 全宽分隔线 → `> ` →
+      全宽分隔线 → `模型 · ctx ▓░░░ N% · 工作目录`（即 UI.txt 的布局图）
+- [ ] ⚑ 对话区与底部固定区互不干扰：流式输出滚动时固定区不错位
+- [x] 全程 `JAVA_HOME="D:\java\jdk21" mvn test` 全绿。→ **1096 用例，0 失败 / 0 错误 / 1 跳过**（2026-09-15，v6；126 个测试类）
+  > **与 T14 记录的 1061 不可直接比较**：清空 `target/surefire-reports/` 后重跑发现，T14 那次
+  > 的计数里混进了 **24 个过期报告**——`CommandRouterTest`（22）与 `ManualCompactCommandTest`（2）
+  > 这两个类在 T10 已被删除，但 surefire 的旧 XML 一直留在报告目录里被重复统计。T14 的有效值
+  > 约 1037，本节 +59（12 个新增测试方法，参数化展开后为 59 次调用）。
+  > 以后记录用例数前先 `rm -rf target/surefire-reports`。
+- [ ] ⚑ 重新打包 `target/acode.jar` 后再做上述真机验收（防过期 jar 导致行为与 HEAD 不符）
+
+**真机结论记录**
+
+- [ ] SIGWINCH 是否触发：<待填>
+- [ ] 多行提示符回车是否留残行：<待填>
+

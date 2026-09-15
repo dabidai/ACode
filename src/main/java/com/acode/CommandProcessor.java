@@ -15,12 +15,21 @@ import java.util.Objects;
 public class CommandProcessor {
 
     /**
-     * 输入框边框：等待输入时提示符**上方**一行模式行 + 一行分隔线，**下方**是底部常驻状态区
-     * （分隔线 + 页脚）。由装配方注入；未注入（测试路径）时主循环不做任何帧操作。
+     * 输入框装饰：输入行**上方**的两行（模式行 + 上边框）作为多行提示符的一部分，
+     * **下方**是底部常驻状态区（分隔线 + 页脚）。由装配方注入；未注入（测试路径）时主循环
+     * 只画裸输入行、不做任何帧操作。
      */
     public interface InputFrame {
-        /** 画等待帧：模式行（仅内容变化时追加）+ 底部状态区。 */
+        /** 画等待帧：底部状态区（页脚）。 */
         void draw();
+
+        /**
+         * 输入行上方的固定装饰（模式行 + 上边框），可多行、可含 ANSI，每轮读取输入时重建。
+         * 默认空串——测试路径的假实现不必关心装饰。
+         */
+        default String promptHeader() {
+            return "";
+        }
 
         /** 收起底部状态区，把底部行交还给即将写入的输出。 */
         void erase();
@@ -58,15 +67,15 @@ public class CommandProcessor {
     /**
      * 主循环：帧的擦与画都由 {@link #step} 统一负责，而不是让交换/命令各自处理——擦（\033[J）
      * 与画（接着光标写帧）是一对必须配对的光标操作，分散到多处方容易漏。Ctrl+C / Ctrl+D 不经
-     * step，主循环自己收尾（帧在提示符上方，只需擦掉 JLine 的地盘，不会留下孤儿行）。
+     * step，主循环自己收尾（输入行上方的装饰是提示符的一部分，随 JLine 一起消失，不留孤儿行）。
      */
     public void mainLoop() {
-        InputPane input = new InputPane(tui.terminal(), ">*", registry);
+        InputPane input = new InputPane(tui.terminal(), InputPane.DEFAULT_PROMPT, registry);
         drawFrame();
         while (true) {
             String line;
             try {
-                line = input.readLine();
+                line = input.readLine(prompt());
             } catch (UserInterruptException | EndOfFileException e) {
                 if (inputFrame != null) {
                     inputFrame.erase();
@@ -79,6 +88,17 @@ public class CommandProcessor {
                 return;
             }
         }
+    }
+
+    /**
+     * 本轮输入提示符：有帧时把帧装饰（模式行 + 上边框）接在输入行提示符前面，凑成多行提示符——
+     * 它随提示符常驻输入行上方、不走进回滚。无帧（测试路径）时就是裸提示符。
+     */
+    String prompt() {
+        String header = inputFrame != null ? inputFrame.promptHeader() : "";
+        return header == null || header.isEmpty()
+                ? InputPane.DEFAULT_PROMPT
+                : header + "\n" + InputPane.DEFAULT_PROMPT;
     }
 
     /**

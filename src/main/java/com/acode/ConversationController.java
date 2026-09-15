@@ -74,6 +74,7 @@ import com.acode.ui.ToolCallDisplay;
 import com.acode.ui.UIController;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.UserInterruptException;
+import org.jline.terminal.Terminal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -152,6 +153,17 @@ public class ConversationController {
 
     private ExchangeRunner exchangeRunner;
     private CommandProcessor commandProcessor;
+
+    /**
+     * 页脚的排版输入（模型名 / 上下文占比 / 工作目录），主线程每轮 {@code renderFooter} 时刷新。
+     * resize 信号处理器在信号线程上只读这几个不可变值重排版，不去碰 conversation——
+     * 跨线程读会话历史会与主线程的追加竞争。
+     */
+    private volatile String footerModel = "";
+    private volatile double footerCtxFraction;
+    private volatile String footerProjectPath = "";
+    /** 页脚当前是否在屏上；resize 重排版不得把已收起的页脚又显示出来。 */
+    private volatile boolean footerVisible;
 
     /** 上下文管理门面（每会话一次装配；懒构造，捕获当时 projectRoot） */
     private ContextManager contextManager;
@@ -399,36 +411,31 @@ public class ConversationController {
             CommandProcessor processor = new CommandProcessor(tui, sessions, commandRegistry);
             processor.setCommandDispatcher(dispatcher);
             processor.setInputFrame(new CommandProcessor.InputFrame() {
-                /** 已画到屏上的模式行原文；相同则不重复追加（见 draw 注释）。 */
-                private String lastModeLine;
-
                 @Override
                 public void draw() {
-                    renderModeLineIfChanged();
                     renderFooter();
                 }
 
                 /**
-                 * 模式行画在提示符**上方**、走进回滚。它与页脚不同：页脚要跟着提示符常驻底部，
-                 * 模式行只在切档时变。不比对就会每轮往屏上多留一份「模式行 + 分隔线」——
-                 * 真机上正是这个把界面糊得看不出层次。
+                 * 输入行上方的两行固定装饰：模式行 + 上边框。走 JLine **多行提示符**——随提示符常驻
+                 * 在输入行上方，不再提交进回滚；模式行因此天然不会每轮重复堆叠，也不必再按内容去重。
+                 * <p>提示符文本在 {@code readLine} 进行期间无法改写，所以切档要等这一轮提交、
+                 * 下一轮重建提示符时才反映到屏上。
                  */
-                private void renderModeLineIfChanged() {
-                    String modeLine = StatusBar.modeLine(
-                            permissionChecker().mode().configValue(), renderContext.terminalWidth());
-                    if (modeLine.equals(lastModeLine)) {
-                        return;
-                    }
-                    lastModeLine = modeLine;
-                    liveRenderer().appendCommitted(screenWriter(), modeLine);
-                    liveRenderer().appendCommitted(screenWriter(), StatusBar.divider(renderContext.terminalWidth()));
+                @Override
+                public String promptHeader() {
+                    int width = renderContext.terminalWidth();
+                    return StatusBar.modeLine(permissionChecker().mode().configValue(), width)
+                            + "\n" + StatusBar.divider(width);
                 }
 
                 @Override
                 public void erase() {
+                    footerVisible = false;
                     renderContext.hideStatusLines();
                 }
             });
+            installResizeRefresh();
             commandProcessor = processor;
         }
         return commandProcessor;
@@ -437,18 +444,49 @@ public class ConversationController {
     /**
      * 页脚：分隔线 + 一行状态（模型 · 上下文进度 · 工作目录），画在**提示符下方**的底部常驻
      * 状态区里（JLine {@link org.jline.utils.Status}，见 {@link LiveRegionRenderer#statusOf}）。
-     * 提示符上方另有模式行与分隔线，由 {@code InputFrame.draw} 单独负责。
+     * 提示符上方另有模式行与分隔线，由 {@code InputFrame.promptHeader} 作为多行提示符的一部分负责。
      * <p>交给 {@code Status} 而不是自己维护光标，是因为那片区域必须让 JLine 一起记账：它算提示符
      * 可用行数时会扣掉状态区的行数，多行输入只会在状态区之上滚动，不会压上来。
      * <p>页脚只进终端、不进 {@link OutputPane}：它是界面装饰而非输出内容，混进去会污染输出日志与
      * 依赖 OutputPane 的断言。
      */
     private void renderFooter() {
-        int width = renderContext.terminalWidth();
         int max = conversation.maxContextTokens();
-        double ctxFraction = max <= 0 ? 0 : (double) conversation.estimateContextTokens() / max;
-        String footer = StatusBar.infoLine(conversation.model(), ctxFraction, projectRoot.toString(), width);
+        footerCtxFraction = max <= 0 ? 0 : (double) conversation.estimateContextTokens() / max;
+        footerModel = conversation.model();
+        footerProjectPath = projectRoot.toString();
+        footerVisible = true;
+        drawFooter();
+    }
+
+    /** 按缓存的排版输入重排页脚并推到状态区；主线程每轮与 resize 信号处理器共用。 */
+    private void drawFooter() {
+        int width = renderContext.terminalWidth();
+        String footer = StatusBar.infoLine(footerModel, footerCtxFraction, footerProjectPath, width);
         renderContext.updateStatusLines(List.of(StatusBar.divider(width), footer));
+    }
+
+    /**
+     * 终端尺寸变化时重建页脚。JLine 自己收得到 SIGWINCH，也会让 {@code Status} 重绘，但那用的是
+     * **旧宽度**算出的那行文本——收窄后会被折行或截错，所以要按新宽度重排一遍。
+     * <p>处理器只读上面几个缓存值，**不碰 conversation**：信号线程去读会话历史会与主线程的追加竞争。
+     * <p>提示符块（模式行 + 上边框 + 输入行）不在此列——提示符文本在 {@code readLine} 期间无法改写，
+     * 它保持旧宽度，等这一轮提交后重建提示符时自动修正。
+     * <p>终端不支持信号（测试路径、dumb 终端）时跳过即可，只是退回「下一轮刷新」这条更慢的路径。
+     */
+    private void installResizeRefresh() {
+        if (tui == null) {
+            return;
+        }
+        try {
+            tui.terminal().handle(Terminal.Signal.WINCH, signal -> {
+                if (footerVisible) {
+                    drawFooter();
+                }
+            });
+        } catch (RuntimeException e) {
+            log.debug("注册 SIGWINCH 处理器失败，页脚退回每轮刷新", e);
+        }
     }
 
     /** 弹选择菜单（/resume、/memory 共用）：沿用既有 SelectionMenu overlay 渲染与终端按键源 */
@@ -466,6 +504,7 @@ public class ConversationController {
     /** /clear 三步语义：清空对话历史（联动清除钩子）→ 收起页脚 → 整屏清空 → 输出区重置 */
     private void clearScreenAndNewSession() {
         conversation.clear();
+        footerVisible = false;
         renderContext.hideStatusLines();
         liveRenderer().clearScreen(screenWriter());
         output.clear();

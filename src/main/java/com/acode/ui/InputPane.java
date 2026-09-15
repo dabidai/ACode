@@ -16,6 +16,9 @@ import org.jline.terminal.Terminal;
  */
 public class InputPane {
 
+    /** 输入行提示符。单行、以 {@code >} 开头，后接一空格。 */
+    public static final String DEFAULT_PROMPT = "> ";
+
     /** 自定义 widget：向 buffer 插入换行，实现「Shift+Enter 不提交只换行」。 */
     private static final String NEWLINE_WIDGET = "acode-newline";
 
@@ -52,7 +55,7 @@ public class InputPane {
         return reader.readLine(prompt);
     }
 
-    /** 阻塞读取一行，使用自定义提示符（工具确认提示等需区分场景时用）。 */
+    /** 阻塞读取一行，使用自定义提示符；提示符可多行、可含 ANSI（JLine 内部按 {@code fromAnsi} 解析）。 */
     public String readLine(String prompt) {
         return reader.readLine(prompt);
     }

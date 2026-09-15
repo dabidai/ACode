@@ -12,6 +12,8 @@ import java.util.Locale;
 public final class StatusBar {
 
     private static final String SEP = " · ";
+    /** 截断省略号；单列宽（wcwidth=1），截断后总宽度才等于目标 width。 */
+    private static final String ELLIPSIS = "…";
     /** ctx 进度条格数。 */
     public static final int BAR_CELLS = 10;
     /**
@@ -28,7 +30,7 @@ public final class StatusBar {
     public static String modeLine(String mode, int width) {
         String plain = "[" + mode + "]" + MODE_HINT;
         if (displayWidth(plain) > width) {
-            return truncate(plain, width);
+            return ellipsize(plain, width);
         }
         return AnsiPalette.MODE + "[" + mode + "]" + AnsiPalette.RESET
                 + AnsiPalette.DIM + MODE_HINT + AnsiPalette.RESET;
@@ -109,6 +111,17 @@ public final class StatusBar {
     /** 丢色截断：只保留能放进 width 列的前缀（全宽字符一字放不下时返回空串，也不折行）。 */
     private static String truncate(String plain, int width) {
         return plain.substring(0, fit(plain, Math.max(0, width)));
+    }
+
+    /**
+     * 丢色截断并补省略号：保留能放进 {@code width-1} 列的前缀 + 一个 {@code …}（占 1 列），
+     * 总显示宽度恰为 width。宽度放不下省略号时退化为纯截断——宁可少一个省略号，也不能折行。
+     */
+    private static String ellipsize(String plain, int width) {
+        if (width <= 0) {
+            return "";
+        }
+        return truncate(plain, width - 1) + ELLIPSIS;
     }
 
     /** 从右往左取能放进 width 列的尾部（路径放不下时保留最深的目录名）。 */

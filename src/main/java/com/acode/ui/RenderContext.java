@@ -21,6 +21,11 @@ public final class RenderContext {
     private AcodeTerminal tui;
     /** 底部常驻状态区（页脚）；真实终端路径下惰性建立后复用，测试路径恒为 null。 */
     private Status status;
+    /**
+     * 状态区更新的互斥锁：resize 信号处理器（信号线程）与主线程每轮的帧刷新都会写同一片状态区，
+     * JLine 不替调用方保证线程安全，交叉重绘会把光标位置算错。
+     */
+    private final Object statusLock = new Object();
 
     public RenderContext(AppConfig config) {
         this.config = config;
@@ -86,19 +91,25 @@ public final class RenderContext {
 
     /** 更新底部状态区（页脚）。终端不支持状态区时静默降级——少一条页脚，功能不受影响。 */
     public void updateStatusLines(List<String> lines) {
-        LiveRegionRenderer.updateStatus(status(), lines);
+        synchronized (statusLock) {
+            LiveRegionRenderer.updateStatus(status(), lines);
+        }
     }
 
     /** 收起底部状态区，把底部行还给输出（输出前调用，避免新内容画进状态区）。 */
     public void hideStatusLines() {
-        LiveRegionRenderer.updateStatus(status(), List.of());
+        synchronized (statusLock) {
+            LiveRegionRenderer.updateStatus(status(), List.of());
+        }
     }
 
     /** 退出前收起状态区：恢复滚动区，免得 shell 提示符被压在滚动区里。幂等。 */
     public void closeStatus() {
-        if (status != null) {
-            status.close();
-            status = null;
+        synchronized (statusLock) {
+            if (status != null) {
+                status.close();
+                status = null;
+            }
         }
     }
 

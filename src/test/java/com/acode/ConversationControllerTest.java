@@ -16,6 +16,7 @@ import com.acode.provider.ToolUseBlock;
 import com.acode.provider.Usage;
 import com.acode.testutil.AnsiTestSupport;
 import com.acode.ui.HistoryRenderer;
+import com.acode.ui.InputPane;
 import com.acode.ui.LiveRegionRenderer;
 import com.acode.ui.OutputPane;
 import com.acode.ui.ToolCallDisplay;
@@ -904,5 +905,27 @@ class ConversationControllerTest {
         controller.conversation().clear(); // /clear 走清除钩子
 
         assertNull(controller.lastDeliveredPlanPath(), "清空应复位最近计划落盘位置");
+    }
+
+    /** 装配后的多行提示符：模式行 + 分隔线在前两行，输入行默认提示符兜底在末行 */
+    @Test
+    void promptHeaderPrefixesDefaultPromptWithModeLineAndDivider() {
+        ConversationController controller = new ConversationController(
+                FakeProvider.scripted(List.of()), config(), false);
+        controller.setProjectRoot(tempDir);
+        controller.initSessionState();
+        controller.setOutput(new OutputPane());
+
+        String prompt = controller.commandProcessor().prompt();
+
+        String plain = AnsiTestSupport.stripAnsi(prompt);
+        assertTrue(plain.contains("[default]"), "提示符头应含当前权限模式 default：" + plain);
+        assertTrue(plain.contains("/permission <模式>"), "模式行应含切档命令提示：" + plain);
+        assertTrue(prompt.endsWith("\n" + InputPane.DEFAULT_PROMPT),
+                "输入行默认提示符应兜底在末行，实际：" + prompt);
+        String[] lines = plain.split("\n", -1);
+        assertEquals(3, lines.length, "提示符应为 header 两行 + 输入行提示符，实际行数：" + lines.length);
+        assertEquals(80, lines[1].length(), "无真实终端时宽度按 80 估算，分隔线应为 80 列");
+        assertTrue(lines[1].matches("─+"), "第二行应是全宽分隔线，实际：" + lines[1]);
     }
 }

@@ -600,4 +600,5 @@
   确认不会发生；若确实发生，记下终端与字体名，改配色字符比改行数数学划算
 - [ ] ⚑ `/status` 与 `/help` 的配色：标签/描述暗灰、模式值亮黄、命令名亮青；与改动前相比
   **去掉 ANSI 后的文本逐字相同**（`/status` 占比仍取整、Token 行格式不变，分隔线仍是 13 个 `─`）
-- [ ] ⚑ 重跑 `JAVA_HOME=D:\java\jdk21 mvn test` 全绿（记录总用例数，与 CMD7 的 1008 对比）。→ **1055 用例，0 失败 / 0 错误 / 1 跳过**（2026-09-14，v3 帧）
+- [ ] ⚑ 重跑 `JAVA_HOME=D:\java\jdk21 mvn test` 全绿（记录总用例数，与 CMD7 的 1008 对比）。→ **1061 用例，0 失败 / 0 错误 / 1 跳过**（2026-09-15，v5）
+  > 注：`mvn test` 跑完偶发报 `BUILD FAILURE`（`std/in stream corrupted`）——那是 surefire fork 关机超时 30s 被杀的既有问题（`target/surefire-reports/*-jvmRun1.dump` 有转储，2026-09-14 起就有），用例本身全绿，不影响本节任何一条判据。

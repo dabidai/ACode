@@ -71,16 +71,17 @@ public class AcodeTerminal implements AutoCloseable {
      * 退回默认路径（页脚观感有缺陷但功能不受影响）。详见 {@link TerminalCaps}。
      */
     private static String statusBarSafeType() {
-        if (!TerminalCaps.isWindows(System.getProperty("os.name"))
-                || System.getenv("TERM") != null
-                || System.getProperty("org.jline.terminal.type") != null) {
+        if (!TerminalCaps.shouldUseWindowsType(System.getProperty("os.name"),
+                System.getenv("TERM"), System.getProperty("org.jline.terminal.type"))) {
             return null;
         }
         String base = loadWindowsVtpCaps();
         if (base == null) {
             return null;
         }
-        InfoCmp.setDefaultInfoCmp(TerminalCaps.customType(), TerminalCaps.withoutAutoRightMargin(base));
+        // JLine 3.30 keeps defaults separate from loaded caps. Register the
+        // generated type as loaded so Windows never probes a missing infocmp.
+        InfoCmp.setLoadedInfoCmp(TerminalCaps.customType(), TerminalCaps.withoutAutoRightMargin(base));
         return TerminalCaps.customType();
     }
 

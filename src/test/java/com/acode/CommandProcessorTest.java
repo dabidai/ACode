@@ -240,17 +240,17 @@ class CommandProcessorTest {
 
     // ---- 新增：多行提示符（prompt）与默认提示符 ----
 
-    /** 返回固定 header 的输入框替身：覆盖默认空串 promptHeader */
-    private static final class HeaderFrame implements CommandProcessor.InputFrame {
-        private final String header;
+    /** 返回固定单行 prompt 的输入框替身。 */
+    private static final class PromptFrame implements CommandProcessor.InputFrame {
+        private final String prompt;
 
-        HeaderFrame(String header) {
-            this.header = header;
+        PromptFrame(String prompt) {
+            this.prompt = prompt;
         }
 
         @Override
-        public String promptHeader() {
-            return header;
+        public String inputPrompt() {
+            return prompt;
         }
 
         @Override
@@ -270,28 +270,28 @@ class CommandProcessorTest {
     }
 
     @Test
-    void promptWithEmptyHeaderReturnsDefaultPromptWithoutLeadingNewline() {
+    void promptWithDefaultFrameReturnsDefaultPrompt() {
         CommandProcessor processor = new CommandProcessor(null, null, new CommandRegistry());
-        processor.setInputFrame(new RecordingFrame(new ArrayList<>())); // 默认 promptHeader() 返回空串
+        processor.setInputFrame(new RecordingFrame(new ArrayList<>()));
 
-        assertEquals(InputPane.DEFAULT_PROMPT, processor.prompt(), "空 header 应退回默认提示符，不得带前导换行");
+        assertEquals(InputPane.DEFAULT_PROMPT, processor.prompt());
     }
 
     @Test
     void promptWithNullHeaderReturnsDefaultPrompt() {
         CommandProcessor processor = new CommandProcessor(null, null, new CommandRegistry());
-        processor.setInputFrame(new HeaderFrame(null));
+        processor.setInputFrame(new PromptFrame(null));
 
         assertEquals(InputPane.DEFAULT_PROMPT, processor.prompt(), "header 为 null 时同样退回默认提示符");
     }
 
     @Test
-    void promptWithNonEmptyHeaderPrefixesDefaultPrompt() {
+    void framedPromptIsUsedVerbatimWithoutMultilineComposition() {
         CommandProcessor processor = new CommandProcessor(null, null, new CommandRegistry());
-        processor.setInputFrame(new HeaderFrame("模式行"));
+        processor.setInputFrame(new PromptFrame("[default] > "));
 
-        assertEquals("模式行\n" + InputPane.DEFAULT_PROMPT, processor.prompt(),
-                "有 header 时 header 在前、默认提示符在后，中间一个换行");
+        assertEquals("[default] > ", processor.prompt());
+        assertTrue(!processor.prompt().contains("\n"), "真实输入提示符不得重新变成多行");
     }
 
     @Test
@@ -320,6 +320,14 @@ class CommandProcessorTest {
     @Test
     void displayRowsOfEmptyPromptIsOne() {
         assertEquals(1, CommandProcessor.displayRows(""), "空串仍占一行，不得算成 0（否则提示符会沉进页脚）");
+    }
+
+    @Test
+    void resizeInvalidatesPinDistance() {
+        assertEquals(0, CommandProcessor.unpinDistance(17, true),
+                "终端回流后不得按旧高度回退光标");
+        assertEquals(17, CommandProcessor.unpinDistance(17, false),
+                "未 resize 时保持原有成对 pin/unpin");
     }
 
     // ---- 新增：帧的默认页脚行数 ----

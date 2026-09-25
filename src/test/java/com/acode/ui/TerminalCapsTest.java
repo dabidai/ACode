@@ -100,13 +100,21 @@ class TerminalCapsTest {
     }
 
     @Test
+    void blankTermStillSelectsBundledWindowsCapabilities() {
+        assertTrue(TerminalCaps.shouldUseWindowsType("Windows 11", " ", null));
+        assertTrue(TerminalCaps.shouldUseWindowsType("Windows 11", "", ""));
+        assertFalse(TerminalCaps.shouldUseWindowsType("Windows 11", "dumb", null));
+        assertFalse(TerminalCaps.shouldUseWindowsType("Linux", "", null));
+    }
+
+    @Test
     void customTypeRegistersIntoJLineInfoCmp() {
         assertEquals("acode-vtp", TerminalCaps.customType(), "customType() 应为 acode-vtp");
 
         String caps = "acode-vtp|acode test terminal,\n"
                 + "\tmc5i, cols#120, lines#40, pairs#64,\n"
                 + "\tbel=^G, bold=\\E[1m,\n";
-        InfoCmp.setDefaultInfoCmp(TerminalCaps.customType(), caps);
+        InfoCmp.setLoadedInfoCmp(TerminalCaps.customType(), caps);
         assertEquals(caps, InfoCmp.getLoadedInfoCmp(TerminalCaps.customType()),
                 "用 customType() 注册的能力表应原样读回");
     }

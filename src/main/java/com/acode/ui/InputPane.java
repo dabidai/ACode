@@ -4,9 +4,11 @@ import com.acode.command.CommandRegistry;
 import org.jline.keymap.KeyMap;
 import org.jline.reader.Binding;
 import org.jline.reader.LineReader;
-import org.jline.reader.LineReaderBuilder;
 import org.jline.reader.Reference;
 import org.jline.terminal.Terminal;
+
+import java.util.function.Supplier;
+import java.util.List;
 
 /**
  * 输入区：Enter 提交、Shift+Enter 换行（多行输入）、上下方向键翻输入历史、光标移动。
@@ -22,17 +24,14 @@ public class InputPane {
     /** 自定义 widget：向 buffer 插入换行，实现「Shift+Enter 不提交只换行」。 */
     private static final String NEWLINE_WIDGET = "acode-newline";
 
-    private final LineReader reader;
+    private final ResizeAwareLineReader reader;
     private final String prompt;
 
     public InputPane(Terminal terminal, String prompt, CommandRegistry registry) {
         this.prompt = prompt;
-        this.reader = LineReaderBuilder.builder()
-                .terminal(terminal)
-                .appName("acode")
-                .option(LineReader.Option.ERASE_LINE_ON_FINISH, true)
-                .completer(new SlashCompleter(registry))
-                .build();
+        this.reader = new ResizeAwareLineReader(terminal, "acode");
+        reader.option(LineReader.Option.ERASE_LINE_ON_FINISH, true);
+        reader.setCompleter(new SlashCompleter(registry));
         bindKeys();
     }
 
@@ -58,5 +57,21 @@ public class InputPane {
     /** 阻塞读取一行，使用自定义提示符；提示符可多行、可含 ANSI（JLine 内部按 {@code fromAnsi} 解析）。 */
     public String readLine(String prompt) {
         return reader.readLine(prompt);
+    }
+
+    /** 活动读取期间按新终端宽度重建提示符，并同步重绘底部状态区。 */
+    public String readLine(Supplier<String> promptSupplier, Runnable footerRedraw) {
+        return reader.readLine(promptSupplier, footerRedraw);
+    }
+
+    /** Read while the whole input frame is owned by JLine's bottom status area. */
+    public String readLineFramed(Supplier<String> mode, Supplier<String> footer,
+                                 Runnable replayHistory, Supplier<List<String>> historyLines) {
+        return reader.readLineFramed(mode, footer, replayHistory, historyLines);
+    }
+
+    /** 最近一次动态读取期间是否收到过 WINCH；主循环据此丢弃旧尺寸计算出的钉底回退量。 */
+    public boolean wasResizedDuringLastRead() {
+        return reader.wasResizedDuringLastRead();
     }
 }

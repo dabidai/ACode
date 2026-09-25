@@ -907,9 +907,9 @@ class ConversationControllerTest {
         assertNull(controller.lastDeliveredPlanPath(), "清空应复位最近计划落盘位置");
     }
 
-    /** 装配后的多行提示符：模式行 + 分隔线在前两行，输入行默认提示符兜底在末行 */
+    /** 实际装配的提示符包含模式行、上边线和输入标记。 */
     @Test
-    void promptHeaderPrefixesDefaultPromptWithModeLineAndDivider() {
+    void assembledPromptContainsModeDividerAndInputMarker() {
         ConversationController controller = new ConversationController(
                 FakeProvider.scripted(List.of()), config(), false);
         controller.setProjectRoot(tempDir);
@@ -920,13 +920,11 @@ class ConversationControllerTest {
 
         String plain = AnsiTestSupport.stripAnsi(prompt);
         assertTrue(plain.contains("[default]"), "提示符头应含当前权限模式 default：" + plain);
-        assertTrue(plain.contains("/permission <模式>"), "模式行应含切档命令提示：" + plain);
-        assertTrue(prompt.endsWith("\n" + InputPane.DEFAULT_PROMPT),
-                "输入行默认提示符应兜底在末行，实际：" + prompt);
         String[] lines = plain.split("\n", -1);
-        assertEquals(3, lines.length, "提示符应为 header 两行 + 输入行提示符，实际行数：" + lines.length);
-        assertEquals(80, lines[1].length(), "无真实终端时宽度按 80 估算，分隔线应为 80 列");
-        assertTrue(lines[1].matches("─+"), "第二行应是全宽分隔线，实际：" + lines[1]);
+        assertEquals(3, lines.length, "提示符应为模式、上边线、输入三行：" + plain);
+        assertEquals("[default]", lines[0]);
+        assertEquals("─".repeat(79), lines[1], "80 列终端的边线应避开最右列");
+        assertEquals(InputPane.DEFAULT_PROMPT, lines[2]);
     }
 
     /** 装配出的帧自报的页脚行数：主循环把它喂给 BottomAnchor 算「提示符首行」 */

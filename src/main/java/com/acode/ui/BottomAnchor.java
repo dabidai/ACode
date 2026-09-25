@@ -59,13 +59,16 @@ public final class BottomAnchor {
      * @return 下移行数，原样交给 {@link #unpin(int)} 回退
      */
     public int pin(int height, int footerRows, int promptRows) {
-        Integer cursorRow = queryCursorRow();
+        Integer cursorRow = WindowsConsoleCursor.viewportRow();
+        if (cursorRow == null) {
+            cursorRow = queryCursorRow(terminal);
+        }
         if (cursorRow == null) {
             return 0;
         }
         int moved = rowsToMove(cursorRow, promptFirstRow(height, footerRows, promptRows));
         if (moved > 0) {
-            moveCursor(moved);
+            moveCursor(terminal, moved);
         }
         return moved;
     }
@@ -76,11 +79,14 @@ public final class BottomAnchor {
      */
     public void unpin(int movedRows) {
         if (movedRows > 0) {
-            moveCursor(-movedRows);
+            moveCursor(terminal, -movedRows);
         }
     }
 
-    private void moveCursor(int delta) {
+    static void moveCursor(Terminal terminal, int delta) {
+        if (delta == 0) {
+            return;
+        }
         try {
             Writer out = terminal.writer();
             out.write("\033[" + Math.abs(delta) + (delta > 0 ? "B" : "A"));
@@ -99,7 +105,7 @@ public final class BottomAnchor {
      *
      * @return 1 基行号；终端不支持、超时、或读到的不是 CPR 响应时返回 null
      */
-    private Integer queryCursorRow() {
+    static Integer queryCursorRow(Terminal terminal) {
         if (terminal.getStringCapability(InfoCmp.Capability.user7) == null
                 || terminal.getStringCapability(InfoCmp.Capability.user6) == null) {
             return null;

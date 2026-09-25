@@ -75,6 +75,7 @@ import com.acode.ui.UIController;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.UserInterruptException;
 import org.jline.terminal.Terminal;
+import org.jline.utils.InfoCmp;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -310,28 +311,32 @@ public class ConversationController {
     private void start() {
         try (AcodeTerminal terminal = AcodeTerminal.open()) {
             this.tui = terminal;
-            this.renderContext.attachTui(terminal);
-            this.output = new OutputPane();
-            LiveRegionRenderer live = liveRenderer();
-            Writer writer = screenWriter();
-            output.append(BANNER);
-            live.appendCommitted(writer, BANNER);
-            output.appendLine("输入 /help 查看命令，/quit 退出");
-            live.appendCommitted(writer, "输入 /help 查看命令，/quit 退出");
-            // MCP 连接放在 banner 之后：先让用户看到界面，再等外部 server 握手
-            connectMcp();
-            // 恢复会话后再构建 system 提示：注入的是恢复后的状态（projectRoot 也已定型）
-            restoreIfResume();
-            initSessionState();
-            commandProcessor().mainLoop();
+            try {
+                this.renderContext.attachTui(terminal);
+                this.output = new OutputPane();
+                LiveRegionRenderer live = liveRenderer();
+                Writer writer = screenWriter();
+                output.append(BANNER);
+                live.appendCommitted(writer, BANNER);
+                output.appendLine("输入 /help 查看命令，/quit 退出");
+                live.appendCommitted(writer, "输入 /help 查看命令，/quit 退出");
+                // MCP 连接放在 banner 之后：先让用户看到界面，再等外部 server 握手
+                connectMcp();
+                // 恢复会话后再构建 system 提示：注入的是恢复后的状态（projectRoot 也已定型）
+                restoreIfResume();
+                initSessionState();
+                commandProcessor().mainLoop();
+            } finally {
+                // Restore the full scrolling region before Terminal.close();
+                // otherwise the shell inherits ACode's shortened region.
+                renderContext.closeStatus();
+            }
         } catch (IllegalStateException e) {
             System.err.println(e.getMessage());
         } finally {
             // /quit 与异常退出都关闭会话句柄并清理 MCP 子进程，避免残留句柄与进程
             closeSession();
             closeMcpManager();
-            // 收起底部状态区（恢复终端滚动区），否则 shell 提示符会被压在滚动区里
-            renderContext.closeStatus();
         }
     }
 
@@ -418,21 +423,46 @@ public class ConversationController {
             processor.setCommandDispatcher(dispatcher);
             processor.setInputFrame(new CommandProcessor.InputFrame() {
                 @Override
+                public boolean statusOwnedInput() {
+                    return true;
+                }
+
+                @Override
+                public String mode() {
+                    return permissionChecker().mode().configValue();
+                }
+
+                @Override
+                public String footer() {
+                    int max = conversation.maxContextTokens();
+                    double fraction = max <= 0 ? 0 : (double) conversation.estimateContextTokens() / max;
+                    return StatusBar.infoLine(conversation.model(), fraction, projectRoot.toString(),
+                            Math.max(1, renderContext.terminalWidth() - 1));
+                }
+
+                @Override
+                public void replayHistory() {
+                    Writer writer = screenWriter();
+                    for (String line : output.lines()) {
+                        liveRenderer().appendCommitted(writer, line);
+                    }
+                }
+
+                @Override
+                public List<String> historyLines() {
+                    return output.lines();
+                }
+
+                @Override
                 public void draw() {
                     renderFooter();
                 }
 
-                /**
-                 * 输入行上方的两行固定装饰：模式行 + 上边框。走 JLine **多行提示符**——随提示符常驻
-                 * 在输入行上方，不再提交进回滚；模式行因此天然不会每轮重复堆叠，也不必再按内容去重。
-                 * <p>提示符文本在 {@code readLine} 进行期间无法改写，所以切档要等这一轮提交、
-                 * 下一轮重建提示符时才反映到屏上。
-                 */
+                /** 模式行、上边线、输入标记属于同一个 JLine 提示符。 */
                 @Override
-                public String promptHeader() {
-                    int width = renderContext.terminalWidth();
-                    return StatusBar.modeLine(permissionChecker().mode().configValue(), width)
-                            + "\n" + StatusBar.divider(width);
+                public String inputPrompt() {
+                    return StatusBar.framedInputPrompt(permissionChecker().mode().configValue(),
+                            renderContext.terminalWidth());
                 }
 
                 /** 见 {@link #FOOTER_ROWS}：主循环据此把整个输入框沉到屏幕底部。 */
@@ -442,9 +472,26 @@ public class ConversationController {
                 }
 
                 @Override
+                public void resize() {
+                    if (footerVisible) {
+                        drawFooter();
+                    }
+                }
+
+                @Override
                 public void erase() {
                     footerVisible = false;
+                    org.jline.utils.Status status = renderContext.status();
+                    if (status != null && status.size() > 0 && tui != null) {
+                        tui.terminal().puts(InfoCmp.Capability.cursor_address,
+                                Math.max(0, tui.height() - status.size() - 1), 0);
+                    }
                     renderContext.hideStatusLines();
+                    if (tui != null) {
+                        tui.terminal().puts(InfoCmp.Capability.cursor_address,
+                                Math.max(0, tui.height() - 1), 0);
+                        tui.flush();
+                    }
                 }
             });
             installResizeRefresh();
@@ -456,7 +503,7 @@ public class ConversationController {
     /**
      * 页脚：分隔线 + 一行状态（模型 · 上下文进度 · 工作目录），画在**提示符下方**的底部常驻
      * 状态区里（JLine {@link org.jline.utils.Status}，见 {@link LiveRegionRenderer#statusOf}）。
-     * 提示符上方另有模式行与分隔线，由 {@code InputFrame.promptHeader} 作为多行提示符的一部分负责。
+     * 模式行与上边线作为 JLine 提示符的前两行绘制。
      * <p>交给 {@code Status} 而不是自己维护光标，是因为那片区域必须让 JLine 一起记账：它算提示符
      * 可用行数时会扣掉状态区的行数，多行输入只会在状态区之上滚动，不会压上来。
      * <p>页脚只进终端、不进 {@link OutputPane}：它是界面装饰而非输出内容，混进去会污染输出日志与
@@ -474,16 +521,19 @@ public class ConversationController {
     /** 按缓存的排版输入重排页脚并推到状态区；主线程每轮与 resize 信号处理器共用。 */
     private void drawFooter() {
         int width = renderContext.terminalWidth();
-        String footer = StatusBar.infoLine(footerModel, footerCtxFraction, footerProjectPath, width);
-        renderContext.updateStatusLines(List.of(StatusBar.divider(width), footer));
+        // Leave the final column unused: writing into the rightmost cell may trigger
+        // an implicit wrap in Windows consoles before JLine positions the next row.
+        int contentWidth = Math.max(0, width - 1);
+        String footer = StatusBar.infoLine(footerModel, footerCtxFraction, footerProjectPath, contentWidth);
+        renderContext.updateStatusLines(List.of(StatusBar.divider(contentWidth), footer));
     }
 
     /**
      * 终端尺寸变化时重建页脚。JLine 自己收得到 SIGWINCH，也会让 {@code Status} 重绘，但那用的是
      * **旧宽度**算出的那行文本——收窄后会被折行或截错，所以要按新宽度重排一遍。
      * <p>处理器只读上面几个缓存值，**不碰 conversation**：信号线程去读会话历史会与主线程的追加竞争。
-     * <p>提示符块（模式行 + 上边框 + 输入行）不在此列——提示符文本在 {@code readLine} 期间无法改写，
-     * 它保持旧宽度，等这一轮提交后重建提示符时自动修正。
+     * <p>活动 {@code readLine} 期间该应用 handler 会被 JLine 临时替换；输入区自己的 WINCH 路径
+     * 会重建提示符，并在 JLine 默认重绘完成后调用输入帧 resize 回调刷新这里的页脚。
      * <p>终端不支持信号（测试路径、dumb 终端）时跳过即可，只是退回「下一轮刷新」这条更慢的路径。
      */
     private void installResizeRefresh() {

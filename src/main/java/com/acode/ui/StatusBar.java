@@ -36,6 +36,21 @@ public final class StatusBar {
                 + AnsiPalette.DIM + MODE_HINT + AnsiPalette.RESET;
     }
 
+    /** 底部输入框的上三行：模式、上边线和输入标记，交给 JLine 作为同一个提示符重绘。 */
+    public static String framedInputPrompt(String mode, int width) {
+        int contentWidth = Math.max(0, width - 1);
+        String header = frameModeLine(mode, contentWidth);
+        return header + "\n" + divider(contentWidth) + "\n> ";
+    }
+
+    /** Mode badge in the first row of the bottom frame. */
+    public static String frameModeLine(String mode, int width) {
+        String badge = "[" + mode + "]";
+        return displayWidth(badge) > width
+                ? ellipsize(badge, width)
+                : AnsiPalette.MODE + badge + AnsiPalette.RESET;
+    }
+
     /**
      * 模型信息行：{@code model · ctx ▓▓▓░░░░░░░ 12% · 项目路径}。
      * ctxFraction 为上下文占用比例 [0,1]；放不下时从**左侧**截断路径（保留最深的目录名，

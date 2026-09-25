@@ -36,6 +36,12 @@ public final class TerminalCaps {
         return osName != null && osName.contains("Windows");
     }
 
+    /** 空白 TERM 不代表用户选择了终端类型；Windows 启动脚本可能传入空值或空格。 */
+    static boolean shouldUseWindowsType(String osName, String term, String explicitType) {
+        return isWindows(osName) && (term == null || term.isBlank())
+                && (explicitType == null || explicitType.isBlank());
+    }
+
     /**
      * 去掉 caps 文本里的 {@code am} 条目，其余逐字节保留；不含 {@code am} 时原样返回（幂等）。
      * <p>

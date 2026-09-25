@@ -153,22 +153,11 @@ public class LiveRegionRenderer {
     }
 
     /**
-     * 底部常驻状态区（JLine {@link org.jline.utils.Status}）：终端滚动区在屏幕底部留出若干行，
-     * 由 JLine 的 Display 管理与提示符的让位。等待帧的页脚就画在这里——**放在提示符下方但不归我们
-     * 自己管**，这一条是关键区别。
-     * <p>早先的失败做法是拿 {@code \033[3A} / {@code \033[J} 手工维护提示符下方那几行：JLine 并不知道
-     * 那片区域被占了，多行输入会在上面续画，回车时按自己记的行数擦除，于是留下残行；Ctrl+C 绕过
-     * 主循环的擦除路径，残留更明显。交给 {@code Status} 之后这些都不需要了——它的 Display 记着自己的
-     * 行数，滚动区内不会把提示符推过来（`Display` 只滚出可见部分），resize 由 LineReader 调
-     * {@code status.reset()}，重绘由 {@code status.redraw()} 跟着走。真机缺陷正是这么消掉的。
+     * 获取并创建 JLine 底部状态区。真实输入期间模式行、边线、输入文本和页脚
+     * 由 {@link ResizeAwareLineReader} 一起放进这个区域。JLine 自身只会取已存在的
+     * 状态区，因此这里必须以 create=true 建立它。
      *
-     * <p><b>创建责任在本方法</b>：JLine 的 {@code LineReaderImpl} 取状态区时一律传 {@code create=false}
-     * （只读不建），全库没有一处替我们建；这里必须传 {@code true}，否则拿到的一直是 null，
-     * 页脚被静默吞掉（v3 真机复现的正是这个）。滚动区能力在 {@code windows-vtp} 上本就齐备，
-     * 不需要往 terminfo 里注入任何东西。
-     *
-     * @return 状态区实例；终端不支持（非 AbstractTerminal / 缺滚动区能力 / 测试路径）时返回 null，
-     *         调用方按「无状态区」降级——只是少一条页脚，功能不受影响
+     * @return 终端支持状态区时返回实例，否则返回 null
      */
     public static org.jline.utils.Status statusOf(AcodeTerminal tui) {
         if (tui == null) {

@@ -11,25 +11,26 @@ import org.jline.reader.EndOfFileException;
 import org.jline.reader.UserInterruptException;
 
 import java.util.Objects;
+import java.util.List;
 
 /** 主循环：读一行 → 交给命令调度器 → 按返回结果决定去留；两种退出路径都关闭会话。 */
 public class CommandProcessor {
 
     /**
-     * 输入框装饰：输入行**上方**的两行（模式行 + 上边框）作为多行提示符的一部分，
-     * **下方**是底部常驻状态区（分隔线 + 页脚）。由装配方注入；未注入（测试路径）时主循环
-     * 只画裸输入行、不做任何帧操作。
+     * 输入框装饰：模式行、上边线与输入标记属于 JLine 提示符；下边线和模型行
+     * 属于底部状态区。较新 JLine 的 WINCH 路径会重建 Display 光标模型。
+     * 未注入（测试路径）时主循环只画裸输入行、不做任何帧操作。
      */
     public interface InputFrame {
         /** 画等待帧：底部状态区（页脚）。 */
         void draw();
 
         /**
-         * 输入行上方的固定装饰（模式行 + 上边框），可多行、可含 ANSI，每轮读取输入时重建。
-         * 默认空串——测试路径的假实现不必关心装饰。
+         * 完整输入提示符，可含 ANSI 与换行，每轮读取及 resize 时重建。
+         * 默认返回裸输入提示符——测试路径的假实现不必关心装饰。
          */
-        default String promptHeader() {
-            return "";
+        default String inputPrompt() {
+            return InputPane.DEFAULT_PROMPT;
         }
 
         /**
@@ -38,6 +39,31 @@ public class CommandProcessor {
          */
         default int footerRows() {
             return 0;
+        }
+
+        /** 活动输入期间终端尺寸变化后，按新宽度重绘底部状态区。 */
+        default void resize() {
+        }
+
+        /** Entire input frame is rendered in the terminal status area. */
+        default boolean statusOwnedInput() {
+            return false;
+        }
+
+        default String mode() {
+            return "default";
+        }
+
+        default String footer() {
+            return "";
+        }
+
+        /** Replays committed conversation lines after a terminal resize. */
+        default void replayHistory() {
+        }
+
+        default List<String> historyLines() {
+            return List.of();
         }
 
         /** 收起底部状态区，把底部行交还给即将写入的输出。 */
@@ -83,22 +109,29 @@ public class CommandProcessor {
     public void mainLoop() {
         InputPane input = new InputPane(tui.terminal(), InputPane.DEFAULT_PROMPT, registry);
         BottomAnchor anchor = new BottomAnchor(tui.terminal());
-        drawFrame();
+        if (!statusOwnedInput()) {
+            drawFrame();
+        }
         while (true) {
             String prompt = prompt();
-            int pinned = pin(anchor, prompt);
+            int pinned = statusOwnedInput() ? 0 : pin(anchor, prompt);
             String line;
             try {
-                line = input.readLine(prompt);
+                line = statusOwnedInput()
+                        ? input.readLineFramed(inputFrame::mode, inputFrame::footer,
+                                inputFrame::replayHistory, inputFrame::historyLines)
+                        : inputFrame == null
+                        ? input.readLine(prompt)
+                        : input.readLine(this::prompt, inputFrame::resize);
             } catch (UserInterruptException | EndOfFileException e) {
-                anchor.unpin(pinned);
+                anchor.unpin(unpinDistance(pinned, input.wasResizedDuringLastRead()));
                 if (inputFrame != null) {
                     inputFrame.erase();
                 }
                 sessionManager.closeSession();
                 return;
             }
-            anchor.unpin(pinned);
+            anchor.unpin(unpinDistance(pinned, input.wasResizedDuringLastRead()));
             if (step(line) == CommandResult.EXIT) {
                 sessionManager.closeSession();
                 return;
@@ -107,14 +140,14 @@ public class CommandProcessor {
     }
 
     /**
-     * 本轮输入提示符：有帧时把帧装饰（模式行 + 上边框）接在输入行提示符前面，凑成多行提示符——
-     * 它随提示符常驻输入行上方、不走进回滚。无帧（测试路径）时就是裸提示符。
+     * 本轮输入提示符：真实终端由输入帧提供模式、上边线和输入标记；无帧（测试路径）时
+     * 使用裸提示符。任何异常的空值都降级为裸提示符。
      */
     String prompt() {
-        String header = inputFrame != null ? inputFrame.promptHeader() : "";
-        return header == null || header.isEmpty()
+        String framedPrompt = inputFrame != null ? inputFrame.inputPrompt() : null;
+        return framedPrompt == null || framedPrompt.isEmpty()
                 ? InputPane.DEFAULT_PROMPT
-                : header + "\n" + InputPane.DEFAULT_PROMPT;
+                : framedPrompt;
     }
 
     /**
@@ -144,6 +177,11 @@ public class CommandProcessor {
         return rows;
     }
 
+    /** resize 后终端已自行回流，旧高度下的回退距离不再有效；继续使用会把后续输出拉到错误行。 */
+    static int unpinDistance(int pinned, boolean resizedDuringRead) {
+        return resizedDuringRead ? 0 : pinned;
+    }
+
     /**
      * 单行输入的完整处理：回车后先擦输入区残迹 → 派发（输出从此在干净区域追加）→ 回来重画帧。
      * <p>空行不产出一字：调度器对它直接返回 CONTINUE，擦画纯属白费（且每次空回车都会往回滚里
@@ -162,9 +200,13 @@ public class CommandProcessor {
     }
 
     private void drawFrame() {
-        if (inputFrame != null) {
+        if (inputFrame != null && !statusOwnedInput()) {
             inputFrame.draw();
         }
+    }
+
+    private boolean statusOwnedInput() {
+        return inputFrame != null && inputFrame.statusOwnedInput();
     }
 
     /** 单行输入：原样交给调度器，返回值即主循环去留 */

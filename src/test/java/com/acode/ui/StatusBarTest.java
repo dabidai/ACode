@@ -139,6 +139,17 @@ class StatusBarTest {
     }
 
     @ParameterizedTest
+    @ValueSource(ints = {5, 10, 20, 40, 80, 120})
+    void framedInputPromptHasThreeRowsWithoutRightEdgeWrap(int width) {
+        String[] rows = stripAnsi(StatusBar.framedInputPrompt("default", width)).split("\n", -1);
+        assertEquals(3, rows.length);
+        assertTrue(rows[0].startsWith("["));
+        assertTrue(StatusBar.displayWidth(rows[0]) < width);
+        assertEquals(width - 1, StatusBar.displayWidth(rows[1]));
+        assertEquals("> ", rows[2]);
+    }
+
+    @ParameterizedTest
     @ValueSource(ints = {0, 1, 2, 5, 10, 20, 40, 80, 120})
     void infoLineNeverExceedsWidth(int width) {
         String line = StatusBar.infoLine("claude-sonnet-4-5-20250929", 0.42, LONG_PATH, width);

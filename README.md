@@ -156,7 +156,7 @@ mcp_servers:
 ## 🧪 测试
 
 ```bash
-mvn test   # 886 个用例（1 个平台受限跳过）；本机内存偏紧时建议 MAVEN_OPTS="-Xmx768m" mvn test -DargLine="-Xmx512m"
+mvn test   # 1134 个用例（1 个平台受限跳过）；本机内存偏紧时建议 MAVEN_OPTS="-Xmx768m" mvn test -DargLine="-Xmx512m"
 ```
 
 ## 📁 项目结构

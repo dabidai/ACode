@@ -81,6 +81,7 @@ public class FakeMcpServer {
                 tools.add(tool("echo", "回显 text 参数", Map.of("text", "string")));
                 tools.add(tool("echo_env", "返回指定环境变量的值", Map.of("name", "string")));
                 tools.add(tool("kill", "先回包再退出进程（模拟子进程死亡）", Map.of()));
+                tools.add(tool("drop", "收到调用后不回包就断开（模拟结果未知）", Map.of()));
                 tools.add(tool("sleep", "睡眠指定毫秒后返回（模拟慢请求）", Map.of("ms", "integer")));
                 return JsonRpcCodec.serializeResponse(request.id(), result);
             }
@@ -103,6 +104,10 @@ public class FakeMcpServer {
                     case "kill" -> {
                         exitAfterReply = true;
                         return JsonRpcCodec.serializeResponse(request.id(), textResult("bye"));
+                    }
+                    case "drop" -> {
+                        System.exit(0);
+                        return null;
                     }
                     case "sleep" -> {
                         long ms = arguments.path("ms").asLong(0);

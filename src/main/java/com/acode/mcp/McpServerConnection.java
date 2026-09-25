@@ -107,15 +107,14 @@ public class McpServerConnection implements AutoCloseable {
         return discoveredTools;
     }
 
-    /** 调远端工具：连接死亡先重连一次；调用中出现连接级失败再重连一次并重试，不无限重试。 */
+    /** 调远端工具：发送前可恢复死连接；发送后断线则结果未知，不能重发有副作用的调用。 */
     public JsonNode callTool(String toolName, JsonNode arguments) {
         McpClient client = clientForCall();
         try {
             return client.callTool(toolName, arguments);
         } catch (McpException e) {
             if (e.kind() == McpException.Kind.CONNECTION) {
-                McpClient fresh = reconnectIfNeeded();
-                return fresh.callTool(toolName, arguments);
+                throw McpException.connectionFailed("MCP 工具调用结果未知，可能已执行；未自动重试：" + toolName);
             }
             throw e;
         }

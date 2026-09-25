@@ -151,6 +151,21 @@ class McpToolWrapperTest {
     }
 
     @Test
+    void disconnectAfterCallDoesNotRetryUnknownOutcome() throws Exception {
+        McpServerConnection connection = connection("srv");
+        connection.connect();
+        try {
+            McpToolWrapper drop = wrapperFor(connection, "drop");
+            ToolResult result = drop.execute(JSON.createObjectNode(), null);
+            assertTrue(result.isError());
+            assertTrue(result.errorMessage().contains("可能已执行"));
+            assertEquals(1, connection.connectCount(), "请求送达后断线，不应重连并重发调用");
+        } finally {
+            connection.close();
+        }
+    }
+
+    @Test
     void reconnectFailureReturnsFailureNotInfiniteRetry() throws Exception {
         AtomicInteger created = new AtomicInteger();
         Function<McpServerConfig, Transport> factory = cfg -> {

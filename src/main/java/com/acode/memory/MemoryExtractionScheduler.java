@@ -22,6 +22,8 @@ public class MemoryExtractionScheduler {
     private static final long AWAIT_IDLE_SLICE_MS = 5;
 
     private final MemoryExtractor extractor;
+    /** 代次检查、写回与 reset 的共同边界：reset 返回后旧任务不会再写入。 */
+    private final Object lifecycleLock = new Object();
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicLong generation = new AtomicLong();
     private final AtomicInteger completed = new AtomicInteger();
@@ -33,27 +35,32 @@ public class MemoryExtractionScheduler {
 
     /** 后台异步跑一轮；已有任务在跑则本轮跳过 */
     public void triggerAsync() {
-        long gen = generation.get();
-        if (!running.compareAndSet(false, true)) {
-            return;
+        long gen;
+        synchronized (lifecycleLock) {
+            if (running.get()) {
+                return;
+            }
+            gen = generation.get();
+            running.set(true);
         }
         VirtualThreads.POOL.submit(() -> {
             try {
                 Optional<MemoryExtractor.Parsed> operations = extractor.extract();
-                if (operations.isEmpty()) {
-                    lastOutcome.set(MemoryExtractor.Outcome.empty());
-                    return;
+                synchronized (lifecycleLock) {
+                    if (generation.get() != gen) {
+                        return; // 代次已失效（clear/加载过）：整轮丢弃，不写任何文件
+                    }
+                    lastOutcome.set(operations.isEmpty()
+                            ? MemoryExtractor.Outcome.empty() : extractor.apply(operations.get()));
                 }
-                if (generation.get() != gen) {
-                    return; // 代次已失效（clear/加载过）：整轮丢弃，不写任何文件
-                }
-                lastOutcome.set(extractor.apply(operations.get()));
             } catch (RuntimeException e) {
                 // 提取失败只记日志：不向用户报错、不影响后续对话、不设熔断
                 log.warn("记忆提取失败：{}", e.getMessage());
             } finally {
-                if (generation.get() == gen) {
-                    running.set(false);
+                synchronized (lifecycleLock) {
+                    if (generation.get() == gen) {
+                        running.set(false);
+                    }
                 }
                 completed.incrementAndGet();
             }
@@ -72,8 +79,10 @@ public class MemoryExtractionScheduler {
 
     /** 作废进行中的结果并清运行态：/clear、加载会话等历史重置点联动 */
     public void reset() {
-        generation.incrementAndGet();
-        running.set(false);
+        synchronized (lifecycleLock) {
+            generation.incrementAndGet();
+            running.set(false);
+        }
     }
 
     public boolean isRunning() {

@@ -10,6 +10,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -126,6 +129,49 @@ class MemoryExtractionSchedulerTest {
         assertEquals(2, awaitCalls(provider, 2), "reset 后应立即能再次触发");
         provider.release.countDown();
         assertTrue(scheduler.awaitIdle(5000));
+    }
+
+    @Test
+    void resetWaitsForStartedApplyAndPreventsLateWrites() throws Exception {
+        CountDownLatch applyEntered = new CountDownLatch(1);
+        CountDownLatch releaseApply = new CountDownLatch(1);
+        CountDownLatch resetStarted = new CountDownLatch(1);
+        AtomicInteger writes = new AtomicInteger();
+        Conversation conversation = new Conversation("m", false, 4096, 200_000);
+        MemoryExtractor extractor = new MemoryExtractor((request, listener) -> { }, store, conversation) {
+            @Override
+            public Optional<Parsed> extract() {
+                return Optional.of(new Parsed(List.of(), 0));
+            }
+
+            @Override
+            public Outcome apply(Parsed parsed) {
+                applyEntered.countDown();
+                try {
+                    releaseApply.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                writes.incrementAndGet();
+                return Outcome.empty();
+            }
+        };
+        MemoryExtractionScheduler scheduler = new MemoryExtractionScheduler(extractor);
+        scheduler.triggerAsync();
+        assertTrue(applyEntered.await(5, TimeUnit.SECONDS));
+
+        CompletableFuture<Void> reset = CompletableFuture.runAsync(() -> {
+            resetStarted.countDown();
+            scheduler.reset();
+        });
+        assertTrue(resetStarted.await(5, TimeUnit.SECONDS));
+        assertFalse(reset.isDone(), "写回进行中时 reset 必须等待，不能在校验后插入");
+        releaseApply.countDown();
+        reset.get(5, TimeUnit.SECONDS);
+        int writesAfterReset = writes.get();
+        assertEquals(1, writesAfterReset);
+        assertTrue(scheduler.awaitIdle(5000));
+        assertEquals(writesAfterReset, writes.get(), "reset 返回后旧任务不得继续写回");
     }
 
     private static int awaitCalls(BlockingProvider provider, int expected) throws InterruptedException {

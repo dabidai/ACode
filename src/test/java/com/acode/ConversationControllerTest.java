@@ -601,21 +601,11 @@ class ConversationControllerTest {
         assertTrue(joined.contains("文件不存在"), "失败正文应显示");
     }
 
-    // ---- P0-1 awaitLoopEnd 超时路径（控制器级） ----
+    // ---- 取消后继续对话（控制器级） ----
 
-    /**
-     * 取舍说明：控制器级无法编排滞留 agent——ToolRegistry 为私有字段无注入点，注册不了
-     * 吞中断的桩工具（AgentTest.UnstoppableTool 那样）；provider 阻塞也不滞留 agent 线程
-     * （stream() 20ms 轮询取消即退）。「旧 agent 残留写入被 epoch 忽略」已由
-     * AgentTest.staleAgentCannotWriteIntoNextAgentTurn 确定性覆盖。
-     * 本测试验证可测部分：awaitLoopEnd 超时预算压到 0 时取消路径仍快速返回（UI 不挂死、
-     * 不等 5 秒），且随后新 exchange 立即可用。
-     */
+    /** 控制器级验证流式请求收到中断后快速收尾，随后新 exchange 可用。 */
     @Test
-    void staleAgentResultIgnoredAfterAwaitLoopEndTimeout() throws Exception {
-        long saved = ExchangeRunner.awaitLoopEndTimeoutMillis;
-        try {
-            ExchangeRunner.awaitLoopEndTimeoutMillis = 0;
+    void cancelledStreamReturnsAndNextExchangeWorks() throws Exception {
             CountDownLatch streamStarted = new CountDownLatch(1);
             AtomicBoolean pressCtrlC = new AtomicBoolean(false);
             FakeProvider provider = FakeProvider.scripted(List.of(
@@ -649,7 +639,7 @@ class ConversationControllerTest {
             canceler.join();
 
             assertTrue(elapsed < 3000,
-                    "awaitLoopEnd 预算为 0 时取消路径应快速返回（UI 不挂死），实际 " + elapsed + " ms");
+                    "已中断的流式请求应快速返回，实际 " + elapsed + " ms");
             assertTrue(String.join("\n", output.lines()).contains("已中断"), "应输出「已中断」");
 
             // 取消后新 exchange 立即可用：走下一 epoch，旧 agent 残留被忽略
@@ -657,9 +647,6 @@ class ConversationControllerTest {
             assertEquals(2, provider.receivedRequests().size(), "取消后应可继续新对话");
             assertTrue(String.join("\n", output.lines()).contains("新回合回答"),
                     "新 exchange 应正常生成");
-        } finally {
-            ExchangeRunner.awaitLoopEndTimeoutMillis = saved;
-        }
     }
 
     // ---- P1-8 会话持久化与 plan 交付渲染 ----

@@ -254,6 +254,45 @@ class StreamingToolExecutorTest {
     }
 
     @Test
+    void interruptedConcurrentReadsWaitForActualWorkerExit() throws Exception {
+        CountDownLatch stubbornEntered = new CountDownLatch(1);
+        CountDownLatch stubbornRelease = new CountDownLatch(1);
+        CountDownLatch stopped = new CountDownLatch(1);
+        Tool stubborn = new RecordingTool("StubbornRead", Permission.READ, new ArrayList<>()) {
+            @Override
+            public ToolResult execute(JsonNode input, ToolContext context) {
+                stubbornEntered.countDown();
+                while (stubbornRelease.getCount() > 0) {
+                    try {
+                        stubbornRelease.await();
+                    } catch (InterruptedException ignored) {
+                        // 模拟不响应中断的读工具。
+                    }
+                }
+                stopped.countDown();
+                return ToolResult.success("done");
+            }
+        };
+        StreamingToolExecutor executor = executor(registry(
+                new RecordingTool("FastRead", Permission.READ, new ArrayList<>()), stubborn));
+        AtomicBoolean cancelled = new AtomicBoolean();
+        Thread caller = Thread.ofVirtual().start(() -> executor.execute(
+                List.of(call("id1", "FastRead"), call("id2", "StubbornRead")), queue(), cancelled));
+        assertTrue(stubbornEntered.await(5, TimeUnit.SECONDS));
+        cancelled.set(true);
+        caller.interrupt();
+        try {
+            Thread.sleep(100);
+            assertTrue(caller.isAlive(), "并发读工作线程未退出时不能返回");
+        } finally {
+            stubbornRelease.countDown();
+        }
+        caller.join(5000);
+        assertFalse(caller.isAlive());
+        assertEquals(0, stopped.getCount());
+    }
+
+    @Test
     void unregisteredToolReturnsFailureWithoutException() {
         BlockingQueue<AgentEvent> events = queue();
         Tool read = new RecordingTool("Read", Permission.READ, new ArrayList<>());

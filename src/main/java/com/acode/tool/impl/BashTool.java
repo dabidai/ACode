@@ -125,14 +125,13 @@ public class BashTool extends BaseTool {
 
         try {
             if (!process.waitFor(timeout, TimeUnit.MILLISECONDS)) {
-                process.destroyForcibly();
-                process.waitFor(2, TimeUnit.SECONDS);
+                terminateProcessTree(process);
                 return ToolResult.failure("命令执行超时（上限 " + timeout + " ms），进程已被终止");
             }
             reader.join(3000);
         } catch (InterruptedException e) {
+            terminateProcessTree(process);
             Thread.currentThread().interrupt();
-            process.destroyForcibly();
             return ToolResult.failure("命令执行被中断");
         }
 
@@ -142,6 +141,24 @@ public class BashTool extends BaseTool {
             return ToolResult.failure("命令退出码 " + exitCode + "：\n" + output);
         }
         return ToolResult.success(output);
+    }
+
+    /** 先终止子进程，再等 shell 进程真实退出，避免取消后下一轮与旧命令重叠。 */
+    private static void terminateProcessTree(Process process) {
+        process.descendants().forEach(ProcessHandle::destroyForcibly);
+        process.destroyForcibly();
+        boolean interrupted = false;
+        while (process.isAlive()) {
+            try {
+                process.waitFor();
+            } catch (InterruptedException e) {
+                interrupted = true;
+                process.destroyForcibly();
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static String truncate(String s) {

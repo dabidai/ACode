@@ -1,14 +1,13 @@
 package com.acode.tool;
 
-import com.acode.util.VirtualThreads;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -16,8 +15,8 @@ import java.util.concurrent.TimeoutException;
  * 工具抽象基类：参数校验（缺失 / 类型错 → 失败结果并带参数名）、
  * 执行超时包装、运行时异常 → 失败结果。
  *
- * <p>执行放入虚拟线程池并受超时上限约束；doExecute 抛出的任何异常
- * 都会被捕获并转为失败结果，不向上抛。具体工具只需声明参数、实现执行逻辑。
+ * <p>执行放入独立虚拟线程并受超时上限约束；超时或取消后等待该线程真正退出，
+ * 防止后续对话与旧工具副作用重叠。doExecute 抛出的异常转为失败结果。
  */
 public abstract class BaseTool implements Tool {
 
@@ -56,21 +55,46 @@ public abstract class BaseTool implements Tool {
             return ToolResult.failure(validationError);
         }
         long timeout = timeoutMillis(input);
-        Future<ToolResult> future = VirtualThreads.POOL.submit(() -> doExecute(input, context));
+        CompletableFuture<ToolResult> future = new CompletableFuture<>();
+        Thread worker = Thread.ofVirtual().name("acode-tool-" + name()).start(() -> {
+            try {
+                future.complete(doExecute(input, context));
+            } catch (Throwable e) {
+                future.completeExceptionally(e);
+            }
+        });
         try {
             return future.get(timeout, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
-            future.cancel(true);
+            worker.interrupt();
+            awaitStopped(worker);
             return ToolResult.failure("执行超时（上限 " + timeout + " ms）：" + name());
         } catch (InterruptedException e) {
+            worker.interrupt();
+            awaitStopped(worker);
             Thread.currentThread().interrupt();
-            future.cancel(true);
             return ToolResult.failure("执行被中断：" + name());
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
             String detail = cause != null && cause.getMessage() != null
                     ? cause.getMessage() : String.valueOf(cause);
             return ToolResult.failure("工具执行异常：" + detail);
+        }
+    }
+
+    /** 中断仅是请求；必须等工作线程实际退出，下一轮才不会与旧工具副作用重叠。 */
+    private static void awaitStopped(Thread worker) {
+        boolean interrupted = false;
+        while (worker.isAlive()) {
+            try {
+                worker.join();
+            } catch (InterruptedException e) {
+                interrupted = true;
+                worker.interrupt();
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 

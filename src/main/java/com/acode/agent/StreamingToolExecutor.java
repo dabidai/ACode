@@ -11,15 +11,14 @@ import com.acode.tool.ToolContext;
 import com.acode.tool.ToolExecutor;
 import com.acode.tool.ToolRegistry;
 import com.acode.tool.ToolResult;
-import com.acode.util.VirtualThreads;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 工具分区执行器：按权限分区——读类并发（虚拟线程）、写类与命令类串行且保持声明顺序，
@@ -107,22 +106,35 @@ public class StreamingToolExecutor {
     private void runConcurrently(List<Integer> indexes, List<ToolUseBlock> calls,
                                  ToolResult[] results, BlockingQueue<AgentEvent> events,
                                  AtomicBoolean cancelled) {
-        List<Future<?>> futures = new ArrayList<>();
+        List<Thread> workers = new ArrayList<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
         for (int index : indexes) {
-            futures.add(VirtualThreads.POOL.submit(() -> runCall(index, calls, results, events, cancelled)));
+            workers.add(Thread.ofVirtual().name("acode-read-tool").start(() -> {
+                try {
+                    runCall(index, calls, results, events, cancelled);
+                } catch (Throwable e) {
+                    failure.compareAndSet(null, e);
+                }
+            }));
         }
-        try {
-            for (Future<?> future : futures) {
-                future.get();
+        boolean interrupted = false;
+        for (Thread worker : workers) {
+            while (worker.isAlive()) {
+                try {
+                    worker.join();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                    for (Thread running : workers) {
+                        running.interrupt();
+                    }
+                }
             }
-        } catch (InterruptedException e) {
+        }
+        if (interrupted) {
             Thread.currentThread().interrupt();
-            for (Future<?> future : futures) {
-                future.cancel(true); // 等价原 try-with-resources close() 的 shutdownNow：取消未完成任务
-            }
-        } catch (java.util.concurrent.ExecutionException e) {
-            // runCall 不抛异常，理论上不可达；防御性捕获避免吞掉虚拟线程异常
-            throw new IllegalStateException("工具执行线程异常", e.getCause());
+        }
+        if (failure.get() != null) {
+            throw new IllegalStateException("工具执行线程异常", failure.get());
         }
     }
 

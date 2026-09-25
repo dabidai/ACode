@@ -54,10 +54,6 @@ public class ExchangeRunner {
 
     private static final Logger log = LoggerFactory.getLogger(ExchangeRunner.class);
 
-    /** 取消后等循环线程收尾的上限（毫秒）；包可见非 final，测试可调小。超时后旧线程的
-     *  残留历史写入由 Conversation 的 epoch 校验忽略，仅记告警，UI 不挂死。 */
-    static long awaitLoopEndTimeoutMillis = 5000;
-
     private final ChatProvider provider;
     private final AppConfig config;
     private final Conversation conversation;
@@ -144,9 +140,11 @@ public class ExchangeRunner {
             if (ctrlC.getAsBoolean()) {
                 agent.cancel();
                 printer.finishTurn(); // 半截 footer 先转正进回滚，中断提示再追加
+                output.appendLine("（已请求中断，等待当前工具结束…）");
+                live.appendCommitted(writer, "（已请求中断，等待当前工具结束…）");
+                awaitLoopEnd(agent);
                 output.appendLine("（已中断）");
                 live.appendCommitted(writer, "（已中断）");
-                awaitLoopEnd(agent); // 取消不吐 LoopComplete：等循环线程收尾（补「已取消」）再返回
                 break;
             }
             AgentEvent event = pollEvent(events);
@@ -230,20 +228,8 @@ public class ExchangeRunner {
         }
     }
 
-    private static void awaitLoopEnd(Agent agent) {
-        long deadline = System.currentTimeMillis() + awaitLoopEndTimeoutMillis;
-        while (agent.isRunning() && System.currentTimeMillis() < deadline) {
-            try {
-                Thread.sleep(20);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-        }
-        if (agent.isRunning()) {
-            log.warn("取消后 agent 线程未在 {}ms 内收尾；其残留历史写入将被 epoch 校验忽略",
-                    awaitLoopEndTimeoutMillis);
-        }
+    static void awaitLoopEnd(Agent agent) {
+        agent.awaitTermination();
     }
 
     /** 循环收尾：按终止原因补提示（MAX_ITERATIONS / PLAN_DELIVERED / CANCELED / ERROR）；

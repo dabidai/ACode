@@ -197,6 +197,26 @@ public class Agent {
         }
     }
 
+    /** 等循环线程真实退出；中断只请求取消，不能把尚在执行的工具当作已结束。 */
+    public void awaitTermination() {
+        Thread thread = loopThread;
+        if (thread == null) {
+            return;
+        }
+        boolean interrupted = false;
+        while (thread.isAlive()) {
+            try {
+                thread.join();
+            } catch (InterruptedException e) {
+                interrupted = true;
+                cancel();
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     /** 循环结束后的终止原因；循环进行中返回初始值 NORMAL */
     public Termination termination() {
         return termination;

@@ -119,8 +119,14 @@ class McpEndToEndTest {
         assertNotNull(kill, "kill 工具应可发现");
         ToolResult killed = kill.execute(JSON.createObjectNode(), null);
         assertTrue(killed.isSuccess(), "kill 应先回包：" + killed.errorMessage());
-        // 子进程已死 → 再次调用自动重连成功
+        // kill 已回包，但进程退出与下一次调用存在竞态：若请求已送达后才断线，
+        // 客户端按结果未知返回失败，调用方明确重试这次无副作用的 echo。
         ToolResult again = echo.execute(JSON.createObjectNode().put("text", "reconnected"), null);
+        if (again.isError()) {
+            assertTrue(again.errorMessage().contains("可能已执行"),
+                    "只有结果未知的断线才允许由调用方显式重试：" + again.errorMessage());
+            again = echo.execute(JSON.createObjectNode().put("text", "reconnected"), null);
+        }
         assertTrue(again.isSuccess(), "杀进程后懒重连应成功：" + again.errorMessage());
         assertEquals("reconnected", again.output());
         manager.closeAll();

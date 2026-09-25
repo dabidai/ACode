@@ -104,10 +104,22 @@ class DangerousCommandDetectorTest {
         assertFalse(detector.isSafeCommand("echo $(rm -rf /)"));
         assertFalse(detector.isSafeCommand(""));
         assertFalse(detector.isSafeCommand("lsof"));
+        assertFalse(detector.isSafeCommand("ls -la\nrm -rf ./src"));
+        assertFalse(detector.isSafeCommand("ls -la\r\ndel /q src"));
+        assertFalse(detector.isSafeCommand("dir & del /q src"));
+        assertFalse(detector.isSafeCommand("echo < secret.txt"));
+        assertFalse(detector.isSafeCommand("echo %COMSPEC%"));
+        assertFalse(detector.isSafeCommand("echo (New-Item x)"));
+        assertFalse(detector.isSafeCommand("cat file.txt\u0000"));
     }
 
     @Test
     void safeCommandRejectsSideEffectsRemovedFromWhitelist() {
+        assertFalse(detector.isSafeCommand("date -s tomorrow"));
+        assertFalse(detector.isSafeCommand("env sh -c 'touch x'"));
+        assertFalse(detector.isSafeCommand("sort -o changed.txt input.txt"));
+        assertFalse(detector.isSafeCommand("git diff --output=changed.txt"));
+        assertFalse(detector.isSafeCommand("go env -w GOPROXY=example.com"));
         assertFalse(detector.isSafeCommand("find . -name '*.java'"));
         assertFalse(detector.isSafeCommand("sed -i 's/a/b/' file"));
         assertFalse(detector.isSafeCommand("awk '{print $1}' file"));

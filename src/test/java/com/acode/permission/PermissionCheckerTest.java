@@ -192,6 +192,13 @@ class PermissionCheckerTest {
     }
 
     @Test
+    void compoundCommandFallsThroughToConfirmation() {
+        CheckResult r = checker(PermissionMode.DEFAULT).check(tool("Bash", Permission.EXEC),
+                args("command", "ls -la\nrm -rf ./src"));
+        assertEquals(Decision.ASK, r.decision());
+    }
+
+    @Test
     void sandboxDeniesOutsidePath() {
         String outside = Path.of(System.getProperty("user.home")).resolve("secret.txt").toString();
         CheckResult r = checker(PermissionMode.DEFAULT).check(tool("ReadFile", Permission.READ), args("file_path", outside));

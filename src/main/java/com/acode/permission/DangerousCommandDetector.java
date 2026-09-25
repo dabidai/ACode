@@ -24,15 +24,15 @@ public class DangerousCommandDetector {
             // 纯只读命令
             "ls", "dir", "pwd", "echo", "cat", "head", "tail", "wc",
             "which", "whereis", "whoami", "hostname", "uname",
-            "date", "cal", "uptime", "df", "du", "free", "env", "printenv",
+            "cal", "uptime", "df", "du", "free", "printenv",
             "file", "stat", "readlink", "realpath", "basename", "dirname",
-            "sort", "uniq", "tr", "cut", "grep", "egrep", "fgrep",
+            "uniq", "tr", "cut", "grep", "egrep", "fgrep",
             "diff", "comm", "true", "false", "test",
             // git 只读子命令（改状态/联网的 branch/tag/remote 已裁剪）
-            "git status", "git log", "git diff", "git show",
+            "git status",
             "git rev-parse", "git ls-files", "git blame", "git stash list",
             // 解释器/构建工具的版本查询形式（非裸命令名）
-            "go version", "go env",
+            "go version",
             "node -v", "npm -v",
             "python --version", "pip list",
             "cargo --version", "rustc --version",
@@ -80,18 +80,19 @@ public class DangerousCommandDetector {
     }
 
     /**
-     * 只读安全命令放行：trim 后排除含 | ; && > $( 反引号任一字符的命令，
+     * 只读安全命令放行：先排除控制字符和各 shell 的命令组合、重定向、展开语法，
      * 再对白名单做「完全相等或 safe + " " 前缀」匹配（带子命令条目按完整子命令匹配）。
      */
     public boolean isSafeCommand(String command) {
         if (command == null) {
             return false;
         }
-        String trimmed = command.trim();
-        if (trimmed.isEmpty()) {
+        // 检查原文，避免 trim 抹掉末尾换行或 NUL 后误判为单条命令。
+        if (containsShellMetachar(command)) {
             return false;
         }
-        if (containsShellMetachar(trimmed)) {
+        String trimmed = command.trim();
+        if (trimmed.isEmpty()) {
             return false;
         }
         if (SAFE_COMMANDS.contains(trimmed)) {
@@ -106,11 +107,12 @@ public class DangerousCommandDetector {
     }
 
     private static boolean containsShellMetachar(String command) {
-        return command.contains("|")
-                || command.contains(";")
-                || command.contains("&&")
-                || command.contains(">")
-                || command.contains("$(")
-                || command.contains("`");
+        for (int i = 0; i < command.length(); i++) {
+            char c = command.charAt(i);
+            if (Character.isISOControl(c) || "&|;><$`%^!(){}".indexOf(c) >= 0) {
+                return true;
+            }
+        }
+        return false;
     }
 }

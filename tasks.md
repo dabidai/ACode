@@ -1,71 +1,64 @@
-# 终端缩放与固定输入框任务
+# ACode 执行边界与异步生命周期修复任务
 
-## T1 复现真实终端故障
+## T1 确认现状与策略
 
-- 影响文件：`docs/ui-resize-diagnosis/HANDOFF.md`、`findings.md`
+- 影响文件：`spec.md`、`tasks.md`、`checklist.md`
 - 依赖任务：无
-- 参考资料：交接文档中的 CMD 复现步骤与用户提供的窗口内容
-- 工作：记录连续缩放留下模式行、横线和横向错位，但 `abcdef` 仍只提交一次。
+- 参考资料：`DangerousCommandDetector.isSafeCommand`、`McpServerConnection.callTool`、`MemoryExtractionScheduler.triggerAsync`、`ExchangeRunner.awaitLoopEnd`
+- 工作：固定四项风险的触发场景、策略和验收口径。
 
-## T2 固化界面验收范围
+## T2 修复安全命令判定
 
-- 影响文件：`spec.md`、`checklist.md`、`docs/manual-test.md`
+- 影响文件：`src/main/java/com/acode/permission/DangerousCommandDetector.java`、对应测试
 - 依赖任务：T1
-- 参考资料：用户确认的五层输入框、长输入向上增高、CMD/PowerShell/Windows Terminal 三种环境
-- 工作：写明输入框贴底、滚轮回看、鼠标复制和真实终端验收标准。
+- 参考资料：`DangerousCommandDetector.containsShellMetachar`、`PermissionChecker.check`
+- 工作：只允许单条、无命令分隔或重定向的已知只读命令走自动放行。
 
-## T3 修复 Windows 终端初始化
+## T3 验证并提交权限修复
 
-- 影响文件：`pom.xml`、`src/main/java/com/acode/ui/AcodeTerminal.java`、`src/main/java/com/acode/ui/TerminalCaps.java`
+- 影响文件：T2 文件、`checklist.md`
+- 依赖任务：T2
+- 参考资料：`DangerousCommandDetectorTest`、`PermissionCheckerTest`
+- 工作：运行针对性测试，只暂存本项文件，提交并推送。
+
+## T4 修复 MCP 断线语义
+
+- 影响文件：`src/main/java/com/acode/mcp/McpServerConnection.java`、对应测试
 - 依赖任务：T1
-- 参考资料：`AcodeTerminal.statusBarSafeType`、`TerminalCaps.shouldUseWindowsType`、`infocmp` 启动堆栈
-- 工作：升级 JLine；空白 TERM 使用内置 Windows 能力表，启动时不调用缺失的 `infocmp`。
+- 参考资料：`McpServerConnection.callTool`、`McpClient.sendRequest`
+- 工作：连接前恢复可自动进行；写请求发出后连接失败按结果未知处理，避免盲目重发。
 
-## T4 统一底部输入框绘制
+## T5 验证并提交 MCP 修复
 
-- 影响文件：`src/main/java/com/acode/ui/ResizeAwareLineReader.java`、`src/main/java/com/acode/ui/InputPane.java`、`src/main/java/com/acode/ui/StatusBar.java`
-- 依赖任务：T2、T3
-- 参考资料：`ResizeAwareLineReader.redisplay`、`StatusBar.frameModeLine`、JLine `Status.update`
-- 工作：让模式行、两条边线、编辑内容和模型页脚共用一个绘制区域。
-
-## T5 缩放后重建对话视图
-
-- 影响文件：`src/main/java/com/acode/ui/ResizeAwareLineReader.java`、`src/main/java/com/acode/ui/OutputPane.java`
+- 影响文件：T4 文件、`checklist.md`
 - 依赖任务：T4
-- 参考资料：`ResizeAwareLineReader.handleSignal`、`OutputPane.lines`、Windows VT 清屏行为
-- 工作：清除终端回流留下的旧帧，重放 ACode 已提交内容，再绘制单份当前输入框。
+- 参考资料：`McpToolWrapperTest`、`McpEndToEndTest`
+- 工作：验证断线边界，只暂存本项文件，提交并推送。
 
-## T6 支持多行向上增高
+## T6 修复记忆写回竞态
 
-- 影响文件：`src/main/java/com/acode/ui/ResizeAwareLineReader.java`、`src/test/java/com/acode/ui/ResizeAwareLineReaderTest.java`
-- 依赖任务：T4
-- 参考资料：`ResizeAwareLineReader.inputRows`、`ResizeAwareLineReader.redisplay`、JLine `Status.update`
-- 工作：预留稳定高度，长行和 Shift+Enter 消耗上方空白行，不反复改变终端滚动区域。
+- 影响文件：`src/main/java/com/acode/memory/MemoryExtractionScheduler.java`、对应测试
+- 依赖任务：T1
+- 参考资料：`MemoryExtractionScheduler.triggerAsync/reset`、`MemoryExtractor.apply`
+- 工作：同步代次校验、写回与重置，并保留异步提取能力；验证后独立提交推送。
 
-## T7 确定滚轮和复制交互
+## T7 修复取消生命周期
 
-- 影响文件：`src/main/java/com/acode/ui/ResizeAwareLineReader.java`、`spec.md`、`checklist.md`
-- 依赖任务：T4、T5
-- 参考资料：`ResizeAwareLineReader.mouse`、`paintHistory`、Windows CMD QuickEdit 行为
-- 工作：按用户选择明确原生 CMD 鼠标复制与固定滚轮回看的优先顺序，并在三种终端保持一致的可理解行为。
+- 影响文件：`src/main/java/com/acode/ExchangeRunner.java`、`src/main/java/com/acode/agent/Agent.java`、`src/main/java/com/acode/agent/StreamingToolExecutor.java`、对应测试
+- 依赖任务：T1
+- 参考资料：`ExchangeRunner.run/awaitLoopEnd`、`Agent.cancel/executeTools`、`StreamingToolExecutor.runConcurrently`
+- 工作：确保旧工具执行结束后再启动下一轮；验证后独立提交推送。
 
-## T8 完成自动化与说明
+## T8 接入主流程
 
-- 影响文件：`src/test/java/com/acode/ui/ResizeAwareLineReaderTest.java`、`README.md`、`docs/manual-test.md`、`checklist.md`
-- 依赖任务：T3 至 T7
-- 参考资料：现有输入缓冲、事件风暴、状态区及主循环测试
-- 工作：覆盖输入完整性、固定高度、滚轮路径和缩放重建；记录自动化无法模拟 Windows 真实回流。
+- 影响文件：`src/main/java/com/acode/ConversationController.java`、`src/main/java/com/acode/ExchangeRunner.java`、`checklist.md`
+- 依赖任务：T3、T5、T6、T7
+- 参考资料：`ConversationController.handleExchange`、`ExchangeRunner.run`
+- 工作：确认四项行为从真实会话入口生效，必要改动并入对应风险提交。
 
-## T9 接入主流程
+## T9 端到端验证
 
-- 影响文件：`src/main/java/com/acode/CommandProcessor.java`、`src/main/java/com/acode/ConversationController.java`、`src/main/java/com/acode/ui/InputPane.java`
-- 依赖任务：T3 至 T8
-- 参考资料：`CommandProcessor.mainLoop`、`ConversationController.commandProcessor`、`RenderContext.closeStatus`
-- 工作：把统一绘制、缩放重建、滚轮行为及退出清理连接到实际对话流程。
-
-## T10 端到端验证
-
-- 影响文件：`target/acode.jar`、`checklist.md`、`docs/ui-resize-diagnosis/progress.md`
-- 依赖任务：T9
-- 参考资料：`docs/manual-test.md` 的启动、缩放、多行、滚轮、提交和退出场景
-- 工作：全量测试和打包，在 CMD、PowerShell、Windows Terminal 分别验收无残影、输入框贴底、鼠标复制、长输入、多行、单次提交及退出后历史。
+- 影响文件：`checklist.md`、本任务执行记录
+- 依赖任务：T8
+- 参考资料：`AgentIntegrationTest`、`McpEndToEndTest`、`MemorySystemEndToEndTest`
+- 工作：跑定向与全量回归，核对四次提交和远端分支状态。

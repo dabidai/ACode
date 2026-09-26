@@ -161,7 +161,8 @@ public class Conversation {
     }
 
     /** 清空全部消息历史（/clear 用）。system prompt 与环境快照留在会话状态，下一轮仍注入。 */
-    public void clear() {
+    public synchronized void clear() {
+        epoch++;
         messages.clear();
         for (Runnable hook : clearHooks) {
             hook.run();
@@ -227,6 +228,10 @@ public class Conversation {
      * 超窗由上下文管理守卫处理（残余单条超窗走可见错误）。工具列表独立传递，不随历史裁剪。
      */
     public ChatRequest buildRequest(List<Tool> requestTools, ChatMessage turnReminder) {
+        return buildRequest(requestTools, turnReminder, null);
+    }
+
+    public ChatRequest buildRequest(List<Tool> requestTools, ChatMessage turnReminder, String modelOverride) {
         List<ChatMessage> requestMessages = new ArrayList<>();
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             requestMessages.add(ChatMessage.of(ChatMessage.Role.SYSTEM, systemPrompt));
@@ -239,7 +244,7 @@ public class Conversation {
             requestMessages.add(turnReminder);
         }
         return ChatRequest.builder()
-                .model(model)
+                .model(modelOverride == null ? model : modelOverride)
                 .thinking(thinking)
                 .maxTokens(maxTokens)
                 .tools(requestTools)

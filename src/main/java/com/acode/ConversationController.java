@@ -180,6 +180,19 @@ public class ConversationController {
 
     /** 权限沙箱根：生产为当前工作目录；测试可注入 @TempDir 避免文件路径被沙箱拦截。 */
     private Path projectRoot = Path.of(System.getProperty("user.dir"));
+    private com.acode.skill.SkillRepository skillRepository;
+    private com.acode.skill.SkillRuntime skillRuntime;
+    private com.acode.skill.SkillManager skillManager;
+
+    void initSkills() {
+        if (skillManager != null) return;
+        skillRepository = new com.acode.skill.SkillRepository(projectRoot, userHome(), ignored -> {});
+        skillRuntime = new com.acode.skill.SkillRuntime(skillRepository, toolRegistry, conversation);
+        toolRegistry.register(new com.acode.skill.LoadSkillTool(skillRuntime));
+        skillManager = new com.acode.skill.SkillManager(skillRepository, skillRuntime, commandRegistry,
+                this::initSessionState, this::emitLine);
+        skillManager.reload();
+    }
 
     /** MCP 生命周期管理：UI 就位后由 {@link #connectMcp()} 连接并注册工具、退出清理 stdio 子进程。 */
     private McpManager mcpManager;
@@ -257,7 +270,7 @@ public class ConversationController {
         startupWarnings = new ArrayList<>(instructions.warnings());
         startupWarnings.addAll(memoryManager.drainWarnings());
         conversation.setSystemPrompt(PromptBuilder.buildSystemPrompt(
-                instructions.text(), memoryManager.indexText()));
+                instructions.text(), memoryManager.indexText(), skillRepository == null ? "" : skillRepository.indexText()));
         conversation.setEnvironment(SystemReminder.environment(EnvironmentDetector.detect(config.getModel())));
         emitStartupWarnings();
     }
@@ -324,6 +337,7 @@ public class ConversationController {
                 live.appendCommitted(writer, "输入 /help 查看命令，/quit 退出");
                 // MCP 连接放在 banner 之后：先让用户看到界面，再等外部 server 握手
                 connectMcp();
+                initSkills();
                 // 恢复会话后再构建 system 提示：注入的是恢复后的状态（projectRoot 也已定型）
                 restoreIfResume();
                 initSessionState();
@@ -407,7 +421,7 @@ public class ConversationController {
      */
     CommandProcessor commandProcessor() {
         if (commandProcessor == null) {
-            UIController ui = new TerminalUIController(output, renderContext,
+            TerminalUIController ui = new TerminalUIController(output, renderContext,
                     this::handleChat,
                     planMode -> this.planMode = planMode,
                     () -> new UIController.ContextUsage(
@@ -416,6 +430,7 @@ public class ConversationController {
                     this::clearScreenAndNewSession,
                     this::lastDeliveredPlanPath,
                     () -> this.deliveredPlanPath = null);
+            ui.setPreparedInputSubmitter(input -> handlePreparedExchange(input, this::ctrlCPressed, () -> {}));
             // 上下文工厂：只有 args 每次不同，其余依赖装配时固定打包
             PermissionChecker checker = permissionChecker();
             ContextManager contexts = contextManager();
@@ -649,13 +664,17 @@ public class ConversationController {
      * 便于用 FakeProvider 单测编排。repaint 为保留参数（渲染已全部经活跃区完成）。
      */
     void handleExchange(String input, BooleanSupplier ctrlC, Runnable repaint) {
+        handlePreparedExchange(() -> input, ctrlC, repaint);
+    }
+
+    private void handlePreparedExchange(java.util.function.Supplier<String> input, BooleanSupplier ctrlC, Runnable repaint) {
         ExchangeRunner runner = exchangeRunner();
         // 恢复会话后首轮的轮次提醒：只进请求、不进历史，用掉即清（第二轮不再出现）
         if (pendingTurnReminder != null) {
             runner.setPendingReminder(SystemReminder.wrap(pendingTurnReminder));
             pendingTurnReminder = null;
         }
-        Path deliveredPlan = runner.run(input, ctrlC, repaint, planMode);
+        Path deliveredPlan = runner.runPrepared(input, ctrlC, repaint, planMode);
         if (deliveredPlan != null) {
             this.deliveredPlanPath = deliveredPlan;
         }
@@ -673,6 +692,7 @@ public class ConversationController {
                     output, renderContext, confirmAnswerer, choiceAnswerer, projectRoot, this::permissionChecker);
             exchangeRunner.setContextManager(contextManager());
             exchangeRunner.setMemoryManager(memoryManager);
+            exchangeRunner.setSkillRuntime(skillRuntime);
         }
         return exchangeRunner;
     }

@@ -47,6 +47,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 流错误。run() 在虚拟线程跑循环并返回事件队列，UI 订阅事件渲染。
  */
 public class Agent {
+    private com.acode.skill.SkillRuntime skillRuntime;
+    private java.util.Set<String> requestToolNames;
+    private long skillGeneration;
+    public void setSkillRuntime(com.acode.skill.SkillRuntime runtime) { this.skillRuntime = runtime; }
 
     private static final Logger log = LoggerFactory.getLogger(Agent.class);
 
@@ -190,7 +194,10 @@ public class Agent {
 
     /** 用户取消：置位取消标志并中断循环线程 */
     public void cancel() {
-        cancelled.set(true);
+        // Linearize cancellation against the batch's history + Skill commit.
+        synchronized (conversation) {
+            cancelled.set(true);
+        }
         Thread thread = loopThread;
         if (thread != null) {
             thread.interrupt();
@@ -354,7 +361,7 @@ public class Agent {
             }
 
             // plan 模式交付：本轮调用 ExitPlanMode → 执行 + 落盘计划 → 结束循环（PLAN_DELIVERED）
-            if (planMode && hasExitPlanMode(collector.toolUses())) {
+            if (planMode && hasExitPlanMode(collector.toolUses()) && requestToolNames.contains(EXIT_PLAN_MODE)) {
                 addAssistantMessage(collector.text(), collector.toolUses());
                 executeTools(collector.toolUses());
                 if (cancelled.get()) {
@@ -472,7 +479,18 @@ public class Agent {
         }
         StreamingToolExecutor executor =
                 new StreamingToolExecutor(registry, planMode ? planContext : context, permissionChecker, confirmationGate);
+        if (requestToolNames != null) executor.setAllowedNames(requestToolNames);
+        var candidates = new java.util.concurrent.ConcurrentHashMap<String, com.acode.skill.SkillActivation>();
+        executor.setStagedExecution((call, tool) -> {
+            if (skillRuntime != null && tool instanceof com.acode.skill.LoadSkillTool load) {
+                var candidate = load.prepare(call.input());
+                candidates.put(call.id(), candidate);
+                return candidate.result();
+            }
+            return null;
+        });
         List<ToolResult> results = executor.execute(toolUses, events, cancelled);
+        if (skillRuntime != null) skillRuntime.drainWarnings().forEach(warning -> emit(new Notice(warning)));
         List<ToolResultBlock> blocks;
         if (contextManager != null) {
             // ch07 Layer-1：超长结果落盘 + 定长预览，同批聚合限流（信息不丢，模型可按路径读回）
@@ -490,7 +508,17 @@ public class Agent {
                 blocks.add(new ToolResultBlock(toolUses.get(i).id(), result.content(), result.isError()));
             }
         }
-        conversation.addToolResults(epoch, blocks);
+        synchronized (conversation) {
+            conversation.addToolResults(epoch, blocks);
+            if (skillRuntime != null && !cancelled.get() && epoch == conversation.currentEpoch()
+                    && skillGeneration == skillRuntime.generation()) {
+                for (int i = 0; i < toolUses.size(); i++) {
+                    var candidate = candidates.get(toolUses.get(i).id());
+                    if (candidate != null && results.get(i).isSuccess())
+                        skillRuntime.commitToHistory(candidate, conversation, epoch);
+                }
+            }
+        }
     }
 
     /** 取消时未执行的调用补「已取消」结果入历史（R5） */
@@ -504,12 +532,23 @@ public class Agent {
 
     /** 按 plan 模式组装请求：工具列表动态过滤 + 轮次级 system-reminder 提醒（尾插，仅进请求不进历史） */
     private ChatRequest buildPlanAwareRequest(int turn) {
-        if (planMode) {
-            return conversation.buildRequest(planTools(),
-                    SystemReminder.wrap(PlanModePrompt.buildReminder(turn)));
+        List<Tool> tools = planMode ? planTools() : normalTools();
+        String model = null;
+        if (skillRuntime != null) {
+            skillGeneration = skillRuntime.generation();
+            String invalidated = skillRuntime.drainReminder();
+            if (invalidated != null) {
+                emit(new Notice(invalidated));
+                conversation.addMessage(epoch, ChatMessage.of(ChatMessage.Role.USER, invalidated));
+            }
+            var snapshot = skillRuntime.snapshot();
+            tools = snapshot.filter(tools);
+            model = snapshot.model();
         }
-        // 恢复会话后的一次性提醒只挂首轮（同轮重试仍在首轮内，提醒不丢）
-        return conversation.buildRequest(normalTools(), turn == 1 ? oneShotReminder : null);
+        requestToolNames = tools.stream().map(Tool::name).collect(java.util.stream.Collectors.toUnmodifiableSet());
+        return conversation.buildRequest(tools, planMode
+                ? SystemReminder.wrap(PlanModePrompt.buildReminder(turn))
+                : turn == 1 ? oneShotReminder : null, model);
     }
 
     /** plan 模式工具列表：读类工具 + ExitPlanMode，各恰好一次 */

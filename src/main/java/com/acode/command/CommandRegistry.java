@@ -101,4 +101,19 @@ public class CommandRegistry {
     private static String lower(String s) {
         return s.toLowerCase(Locale.ROOT);
     }
+
+    /** Replace only commands owned by the caller, under one publication lock. */
+    public void replaceOwned(List<Command> owned, List<Command> replacements, Runnable publish,
+                             java.util.function.Consumer<String> warning) {
+        lock.writeLock().lock();
+        try {
+            byName.values().removeIf(c -> owned.stream().anyMatch(old -> old == c));
+            byAlias.values().removeIf(c -> owned.stream().anyMatch(old -> old == c));
+            for (Command command : replacements) {
+                try { register(command); }
+                catch (IllegalArgumentException e) { warning.accept(e.getMessage()); }
+            }
+            publish.run();
+        } finally { lock.writeLock().unlock(); }
+    }
 }

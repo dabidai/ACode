@@ -603,3 +603,17 @@
   **去掉 ANSI 后的文本逐字相同**（`/status` 占比仍取整、Token 行格式不变，分隔线仍是 13 个 `─`）
 - [ ] ⚑ 重跑 `JAVA_HOME=D:\java\jdk21 mvn test` 全绿（记录总用例数，与 CMD7 的 1008 对比）。→ **1061 用例，0 失败 / 0 错误 / 1 跳过**（2026-09-15，v5）
   > 注：`mvn test` 跑完偶发报 `BUILD FAILURE`（`std/in stream corrupted`）——那是 surefire fork 关机超时 30s 被杀的既有问题（`target/surefire-reports/*-jvmRun1.dump` 有转储，2026-09-14 起就有），用例本身全绿，不影响本节任何一条判据。
+
+## 阶段十：Skill 系统（真实终端 / provider 待执行）
+
+以下使用临时项目；提交测试使用临时 Git 仓库，不能在 ACode 源码仓库执行示例提交。
+
+- [ ] 启动最新 jar，`/skill` 显示 commit/test 及 classpath 来源；`/help` 和 Tab 显示 `[skill]` 命令。
+- [ ] 按 `docs/ch10/implementation.md` 添加 explain 定义，`/skill reload` 后调用 `/explain 请求构建`；核对模型能读取正文及参数。
+- [ ] 自然语言提出匹配任务，观察 `LoadSkill` 结果后模型按指引执行；修改正文再次调用，观察新内容生效。
+- [ ] 项目定义覆盖同名内置 Skill，info/列表/命令行为来源一致；删除并 reload 后恢复内置。
+- [ ] Plan 模式加载允许 Bash 的 Skill，核对仍不能运行 Bash；退出 Plan 后既有权限确认仍生效。
+- [ ] `/clear` 后重新调用可加载；压缩成功后出现一次列出名称的失效提醒；恢复历史后可以重新加载。
+- [ ] 临时 Git 仓库含已暂存、未暂存及敏感文件，调用 `/commit`：核对仅指定文件进入提交、英文 conventional 标题不超过 72 字符、权限确认记录正确。
+- [ ] `/test` 分别处理测试全绿、代码错误和断言错误；无报告时覆盖率显示“未测量”，有报告时只报告实际数值。
+- [ ] 创建 `mode: fork` 定义，命令和模型加载都显示未实现提示，随后正常对话仍可进行。

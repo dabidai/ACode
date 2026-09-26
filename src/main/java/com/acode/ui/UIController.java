@@ -20,6 +20,12 @@ public interface UIController {
     /** 把文本当作用户输入发给 Agent（走既有对话入口） */
     void submitUserInput(String text);
 
+    /** Prepare input at the history append boundary; null means no new exchange. */
+    default void submitPreparedInput(java.util.function.Supplier<String> input) {
+        String text = input.get();
+        if (text != null) submitUserInput(text);
+    }
+
     /** 切换规划模式开关 */
     void setPlanMode(boolean enabled);
 

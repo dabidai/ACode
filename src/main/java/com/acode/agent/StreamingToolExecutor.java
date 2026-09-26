@@ -36,6 +36,13 @@ public class StreamingToolExecutor {
     private final ToolExecutor executor;
     private final ConfirmationGate confirmationGate;
     private final PermissionChecker permissionChecker;
+    private java.util.Set<String> allowedNames;
+    private java.util.function.BiFunction<ToolUseBlock, Tool, ToolResult> stagedExecution;
+
+    public void setAllowedNames(java.util.Set<String> names) { this.allowedNames = java.util.Set.copyOf(names); }
+    public void setStagedExecution(java.util.function.BiFunction<ToolUseBlock, Tool, ToolResult> execution) {
+        this.stagedExecution = execution;
+    }
 
     /** @deprecated 仅保留给存量测试（无权限检查）；生产装配路径请用带 checker 的构造器。 */
     @Deprecated
@@ -144,6 +151,10 @@ public class StreamingToolExecutor {
             return;
         }
         ToolUseBlock call = calls.get(index);
+        if (allowedNames != null && !allowedNames.contains(call.name())) {
+            failAndEmit(call, results, index, events, "工具范围拒绝：" + call.name());
+            return;
+        }
         Tool tool = registry.available(call.name());
         if (tool != null && permissionChecker != null) {
             CheckResult decision = permissionChecker.check(tool, call.input());
@@ -182,7 +193,8 @@ public class StreamingToolExecutor {
             return;
         }
         long start = System.nanoTime();
-        ToolResult result = executor.execute(call.name(), call.input());
+        ToolResult result = stagedExecution == null ? null : stagedExecution.apply(call, tool);
+        if (result == null) result = executor.execute(call.name(), call.input());
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
         if (cancelled.get()) {
             return;

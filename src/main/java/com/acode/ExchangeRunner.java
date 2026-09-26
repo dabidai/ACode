@@ -51,6 +51,8 @@ import java.util.function.Supplier;
 
 /** 单轮 exchange 的执行：追加用户消息 → 建 Agent → 事件轮询分发 → 收尾。 */
 public class ExchangeRunner {
+    private com.acode.skill.SkillRuntime skillRuntime;
+    void setSkillRuntime(com.acode.skill.SkillRuntime runtime) { this.skillRuntime = runtime; }
 
     private static final Logger log = LoggerFactory.getLogger(ExchangeRunner.class);
 
@@ -113,8 +115,17 @@ public class ExchangeRunner {
      * 返回本次 exchange 计划交付的落盘路径（非计划交付返回 null），供上层记为会话内状态。
      */
     Path run(String input, BooleanSupplier ctrlC, Runnable repaint, boolean planMode) {
-        conversation.nextEpoch(); // 先失效上一轮残留的 agent 线程写入，再开始本轮
-        conversation.addMessage(ChatMessage.of(ChatMessage.Role.USER, input));
+        return runPrepared(() -> input, ctrlC, repaint, planMode);
+    }
+
+    Path runPrepared(Supplier<String> prepareInput, BooleanSupplier ctrlC, Runnable repaint, boolean planMode) {
+        String input;
+        synchronized (conversation) {
+            input = prepareInput.get();
+            if (input == null) return null;
+            conversation.nextEpoch();
+            conversation.addMessage(ChatMessage.of(ChatMessage.Role.USER, input));
+        }
         output.append("● " + input + "\n");
         LiveRegionRenderer live = renderContext.liveRenderer();
         Writer writer = renderContext.screenWriter();
@@ -124,6 +135,7 @@ public class ExchangeRunner {
         Agent agent = new Agent(provider, conversation, toolRegistry,
                 new ToolContext(projectRoot), maxIterations(), contextManager);
         agent.setPlanMode(planMode);
+        agent.setSkillRuntime(skillRuntime);
         agent.setConfirmationGate(new EventConfirmationGate());
         agent.setPermissionChecker(permissionCheckerSupplier.get());
         agent.setOneShotReminder(pendingReminder);

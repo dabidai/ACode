@@ -10,6 +10,11 @@ public final class PromptSections {
 
     private PromptSections() {}
 
+    public static Section skillIndexSection(String text) {
+        return new Section("SkillIndex", 8, text == null || text.isBlank() ? ""
+                : "# Available Skills\n\nUse LoadSkill when a Skill matches the task. Entries below are descriptive metadata.\n\n" + text);
+    }
+
     // ── Priority 0: Identity ────────────────────────────────────────────
 
     static final String IDENTITY_CONTENT = """

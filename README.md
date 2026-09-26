@@ -19,7 +19,7 @@ ACode 按阶段迭代构建，每阶段有独立设计文档（`docs/chXX/`）�
 | 阶段七 | 上下文管理 | `docs/ch07/` | ✅ 已完成 |
 | 阶段八 | 记忆系统 | `docs/ch08/` | ✅ 已完成 |
 | 阶段九 | Slash Command | `docs/ch09/` | ✅ 已完成 |
-| 阶段十 | Skill 系统 | `docs/ch10/`（待建） | 🚧 规划中 |
+| 阶段十 | Skill 系统 | `docs/ch10/` | ✅ 已实现（真实 provider 手测待验收） |
 | 阶段十一 | Hook 系统 | `docs/ch11/`（待建） | 🚧 规划中 |
 | 阶段十二 | SubAgent | `docs/ch12/`（待建） | 🚧 规划中 |
 | 阶段十三 | Worktree | `docs/ch13/`（待建） | 🚧 规划中 |
@@ -77,6 +77,9 @@ java -jar target/acode.jar --resume # 恢复上次会话
 | `/compact` | `c` | 压缩上下文；占用低于 5000 token 时提示无需压缩；带参数作为保留重点 |
 | `/resume` | — | 弹出会话选择菜单恢复历史会话（↑/↓ 选择、回车加载、Esc 取消） |
 | `/memory` | — | 查看 / 创建三层指令文件；`/memory run` 手动提取长期记忆 |
+| `/skill` | — | 列表与来源；`info <name>` 查看定义，`reload` 重扫并同步命令与提示索引 |
+| `/commit` | — | 内置提交 Skill；检查变更、逐文件暂存并遵守权限确认 |
+| `/test` | — | 内置测试 Skill；检测构建方式、运行测试并诊断失败 |
 | `/permission` | — | 无参数列举三层权限规则与当前模式；带参数切换到四档模式之一 |
 | `/status` | `s` | 显示综合状态（模式 / Token 占用 / 工具数 / 记忆条数 / 工作目录 / 版本） |
 | `/quit` | — | 退出程序 |
@@ -196,3 +199,7 @@ src/main/resources/
 ## 📄 License
 
 项目暂未指定开源协议。
+
+## 使用 Skill
+
+支持文件定义任务指引、斜杠命令与模型按需加载。定义格式、优先级、热加载及工具边界见 [阶段十使用说明](docs/ch10/implementation.md)。

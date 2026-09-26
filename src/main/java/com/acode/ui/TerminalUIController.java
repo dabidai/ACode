@@ -17,6 +17,17 @@ public class TerminalUIController implements UIController {
     private final OutputPane output;
     private final RenderContext renderContext;
     private final Consumer<String> submitUserInput;
+    private Consumer<Supplier<String>> preparedInputSubmitter;
+
+    public void setPreparedInputSubmitter(Consumer<Supplier<String>> submitter) {
+        this.preparedInputSubmitter = submitter;
+    }
+
+    @Override
+    public void submitPreparedInput(Supplier<String> input) {
+        if (preparedInputSubmitter != null) preparedInputSubmitter.accept(input);
+        else UIController.super.submitPreparedInput(input);
+    }
     private final Consumer<Boolean> planModeSetter;
     private final Supplier<ContextUsage> contextUsage;
     private final BiFunction<List<MenuEntry>, String, Integer> menu;

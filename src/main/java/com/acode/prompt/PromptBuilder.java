@@ -43,10 +43,15 @@ public class PromptBuilder {
      * overload stays byte-identical to the assembly before these sections existed.
      */
     public static String buildSystemPrompt(String projectInstructions, String memoryIndex) {
+        return buildSystemPrompt(projectInstructions, memoryIndex, "");
+    }
+
+    public static String buildSystemPrompt(String projectInstructions, String memoryIndex, String skillIndex) {
         return new PromptBuilder()
                 .add(PromptSections.identitySection())
                 .add(PromptSections.projectInstructionsSection(projectInstructions))
                 .add(PromptSections.memoryIndexSection(memoryIndex))
+                .add(PromptSections.skillIndexSection(skillIndex))
                 .add(PromptSections.behaviorSection())
                 .add(PromptSections.toolUsageSection())
                 .add(PromptSections.codeQualitySection())

@@ -462,3 +462,65 @@ Windows Terminal 的 pending-wrap 会被退格**取消**而不是折行，于是
 `resize() + reset()`：**几何跟得上尺寸**（`滚动区底行` 45↔28 正确切换），但 resize 后
 CPR 报第 1 行、内容被从头覆盖，**未解决**。作为独立待修项记在 T16，探针留作复现工具。
 
+## v8：活动输入期间 resize 修复
+
+**触发**：`docs/ui-resize-diagnosis/` 与 `probe/ResizeProbe.java fix` 已把问题收敛到两层：活动
+`readLine()` 会临时接管 WINCH，应用层 handler 无法重建 prompt；终端 reflow 后，JLine Display
+仍持有旧光标模型，单纯 `resize()+reset()` 不能把底部输入块重新锚定。
+
+**第一版失败结论**：探针的 ANSI CPR 会与活动 `readLine()` 竞争同一个 terminal reader。真机日志连续
+出现 `现场 CPR=失败`，CPR 响应被当作用户输入显示成 `;;3R` / `R[...]`，并伴随重复框线。虚拟终端
+没有 CPR capability，原自动化只走了降级分支，未暴露该问题。活动读取期间发送 CPR 的方案已废弃。
+
+**第二版实现（真机失败）**：`ResizeAwareLineReader` 以 120ms 间隔观察尺寸变化，但活动读取期间绝不访问
+terminal reader。Windows 使用已有 JNA 依赖调用 `GetConsoleScreenBufferInfo`，从输出控制台原生读取
+光标与 viewport 坐标。尺寸变化时：
+
+1. 用 Windows 原生坐标找到当前输入行，从多行 prompt 顶部清到屏尾；
+2. 按新高度重新定位到 `height - footerRows - promptRows + 1`；
+3. 通过 `LineReaderImpl` 的 protected/public 扩展点重置 Display、替换新宽度 prompt 并 redisplay；
+4. 调用输入帧的 resize 回调，按新宽度刷新 Status 页脚。
+
+生产实现不反射 JLine 私有字段，也不发送 ANSI CPR，但真机证明 watcher 与 JLine 自身 WINCH 会形成
+两条重绘链：放大时输入区异常变高，缩小时页眉与分隔线重复堆叠，因此第二版废弃。
+
+**第三版实现**：删除 watcher，覆写 `LineReaderImpl.handleSignal(WINCH)`。在同一个 synchronized 信号路径中：
+
+1. 调用 `super.handleSignal` 前重算动态 prompt，并在 Windows 原生坐标可用时清理、重锚定旧输入块；
+2. 由 JLine 默认实现完成唯一一次 Display/Status resize、reset 与 redisplay；
+3. 默认重绘完成后调用输入帧回调，按新宽度刷新 footer。
+
+原生坐标不可用时不做外部清屏，只更新 prompt 并保留 JLine 默认重绘。自动化用虚拟终端保持
+`readLine` 阻塞，把尺寸从 80x24 改为 60x20 后显式触发一次 WINCH，断言回调恰好一次、动态
+prompt/footer 刷新、`hello` 输入原样返回且输出不含 `ESC[6n`。真实终端拖拽仍按 checklist/manual-test 验收。
+
+**第三版真机失败**：虽然只有一个 handler，但它在 JLine 默认重绘前先移动了真实光标。JLine 内部
+`Display.cursorPos` 没有同步这次移动，连续 WINCH 便按错误原点重复输出页眉；缩窄时旧分隔线发生的
+物理折行又让按换行数推导的清屏起点偏低，最终形成逐行左移的阶梯状页眉。
+
+**第四版实现（稳定优先）**：活动输入的 WINCH 路径不再查询或移动真实光标，也不执行应用层清屏；
+它只替换按新宽度生成的 prompt，然后让 JLine 默认 handler 独占 Display 重绘。读取前按旧高度得到的
+pin 距离若遇到 resize 就作废，避免提交/退出时把光标拉回错误行；下一轮以新尺寸重新 pin。
+自动化新增 20 次交替尺寸事件风暴、编辑中缩放和下一轮标记复位，第四版全量回归为
+1123 tests、0 failures、0 errors、1 skipped。实时缩放时允许本轮暂时失去严格钉底，以不重复、不覆盖、
+不丢输入为更高优先级；最终视觉效果仍需真实 Windows 终端验收。
+
+## 最终方案与收尾（2026-09-26）
+
+第四版及其后的多行 JLine prompt 在真实 CMD 缩放时仍留下重复模式行。最终实现让 JLine 继续处理按键编辑，`ResizeAwareLineReader` 将模式行、分隔线、输入内容和页脚统一绘制到固定高度的 `Status` 区域。输入多行时消耗预留空白行，避免在编辑过程中反复改变滚动区域。缩放发生时清除 Windows 回流残影，再从 `OutputPane` 重放已提交的 ACode 对话。
+
+真实 CMD、PowerShell 和 Windows Terminal 已验证缩放及多行输入；CMD 保留原生鼠标拖选复制，原生滚轮回看时输入框跟随视口移动。`/quit` 的关闭顺序已调整为先关闭 `Status` 再关闭终端，CMD 真机退出正常。2026-09-26 的全量测试为 1138 tests、0 failures、0 errors、1 skipped。最终 Ctrl+C、Ctrl+D 以及最新 jar 的真机复核记录以 `checklist.md` 文末为准。
+
+11:04 的 CMD 复核又发现两个视觉问题：初次建状态区时预留半屏会将 banner 挤出当前画面；缩放重放对话后，`Status` 可能保存位于新滚动区之外的光标，使 banner 与输入框分隔线交错。已将正常尺寸下的固定预留区缩为约三分之一屏，并在每次 `Status.update` 前按**即将使用的**状态区高度把光标放回对话区。退出时 `Status.close` 之后仅清除当前可见屏幕，保留终端回滚。11:12:12 打包的 jar 已通过 1138 个全量测试，三项视觉效果仍须真机复验。
+
+11:12 版真机显示退出已正常，但启动 banner 仍被挤出画面，缩小窗口仍在 banner 上方留下输入框残影。11:22 版在首次画出状态区后主动从 `OutputPane` 重画当前对话区；WINCH 时先让 JLine 完成内部重绘，再清除终端回流，重放已提交对话并重画当前输入框，避免清屏之后又被 JLine 的旧帧覆盖。39 个定向测试通过；最终全量和 CMD 视觉结果待补。
+
+11:22 版真机仍产生多份 banner 和大段空白：在重放对话后再次调用 `Status.update`，会把刚重放的内容向上滚动；首次画框后重画对话也会留下原 banner。11:29 版在打印 banner 前先建立固定高度的状态区；缩放时等 JLine 定好新尺寸，清屏重放后直接按绝对行绘制当前帧，并恢复同一滚动区域，不再触发第二次 `Status.update`。当前只完成 77 个终端布局定向测试，CMD 视觉与最终全量回归待验。
+
+11:29 版 `UI.txt` 仍记录到重复 banner 和旧输入框。代码复核发现缩放路径把 `OutputPane` 历史再次追加到终端，随后又按坐标绘制相同历史，前一步会制造多余回滚和空白。11:35 版取消追加，缩放时仅清当前屏幕，直接由 `OutputPane` 画可见历史和最新输入帧；1139 个全量测试通过，但 CMD 缩小窗口仍在回滚缓冲中留下旧框。后续版在缩放时用 ED3 清除 Windows 回流产生的旧缓冲，再直接绘制当前历史和帧；退出仍只用 ED2 清当前屏幕。最终 CMD 视觉待验。
+
+11:46 版仅加 ED3 后，用户反馈缩小、放大都仍异常。JLine 3.30 的 `LineReaderImpl.handleSignal(WINCH)` 会先调用 `Status.resize()`，该方法按旧状态区行数搬动并清理终端行，然后才重画输入。11:50 版在调用父类处理 WINCH 前先隐藏旧 `Status`，让它以空行集完成尺寸更新；父类生成新帧后再清屏并直接绘制 `OutputPane` 可见历史和新帧。77 个界面定向测试通过，CMD 视觉待验。
+
+11:50 版 `UI.txt` 仍显示旧帧、大段空白和新帧串接。CMD 对 ANSI ED3 的行为不足以清理回流到缓冲区的旧内容。11:57 版在原生 Windows 控制台的 WINCH 路径直接调用 `FillConsoleOutputCharacterW` 与 `FillConsoleOutputAttribute` 清空旧缓冲，再按 `OutputPane` 重画视口；调用不可用时退回 ANSI 路径。79 个相关测试通过，真机待验。
+
+**本轮最终决定（2026-09-26）**：用户复验 11:57 版后确认 CMD 缩小和放大窗口仍异常，并要求先停止处理，在文档中记录。ED3、缩放前隐藏 `Status`、原生控制台清缓冲这几种未通过真机验收的尝试均已撤回，最终代码保留 11:35 版的启动同屏修复、无重复追加的视口重绘、以及退出只清当前屏幕的行为。CMD 缩放时仍可能出现旧输入框、重复 banner 和大段空白；这是**未解决的已知问题**，不计入阶段九已通过验收。后续若重启该工作，应以 `C:\Users\liuch\Desktop\UI.txt` 中最新的 CMD 可见画面为复现基准，同时核对 JLine `Status.resize()`、Windows 控制台缓冲区和实际视口坐标的关系。优先建立能断言缩放后物理屏幕内容的测试，再修改终端控制序列。

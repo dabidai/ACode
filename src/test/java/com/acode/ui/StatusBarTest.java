@@ -29,6 +29,13 @@ class StatusBarTest {
 
     private static final Pattern PATTERN = Pattern.compile("\033\\[[0-9;]*m");
 
+    @Test
+    void reservedInputRowsLeaveRoomForTheStartupBanner() {
+        assertEquals(8, StatusBar.frameReservedRows(24));
+        assertEquals(6, StatusBar.frameReservedRows(20));
+        assertEquals(0, StatusBar.frameReservedRows(5));
+    }
+
     private static int shownWidth(String s) {
         return StatusBar.displayWidth(stripAnsi(s));
     }

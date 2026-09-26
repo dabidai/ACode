@@ -35,7 +35,7 @@ class ResizeAwareLineReaderTest {
             CompletableFuture<String> result = new CompletableFuture<>();
             Thread.ofVirtual().start(() -> {
                 try {
-                    result.complete(pane.readLineFramed(() -> "default", () -> "footer", () -> {}, java.util.List::of));
+                    result.complete(pane.readLineFramed(() -> "default", () -> "footer", java.util.List::of));
                 } catch (Throwable t) {
                     result.completeExceptionally(t);
                 }
@@ -54,7 +54,7 @@ class ResizeAwareLineReaderTest {
             keys.write('\r');
             keys.flush();
             assertEquals(expected.toString(), result.get(3, TimeUnit.SECONDS));
-            assertTrue(output.toString(StandardCharsets.UTF_8).contains("\033[3J"));
+            assertTrue(output.toString(StandardCharsets.UTF_8).contains("\033[2J"));
         }
     }
 
@@ -75,7 +75,7 @@ class ResizeAwareLineReaderTest {
             CompletableFuture<String> result = new CompletableFuture<>();
             Thread.ofVirtual().start(() -> {
                 try {
-                    result.complete(pane.readLineFramed(() -> "default", () -> "footer", () -> {}, () -> history));
+                    result.complete(pane.readLineFramed(() -> "default", () -> "footer", () -> history));
                 } catch (Throwable t) {
                     result.completeExceptionally(t);
                 }
@@ -100,34 +100,35 @@ class ResizeAwareLineReaderTest {
                      .size(new Size(80, 24))
                      .build()) {
             InputPane pane = new InputPane(terminal, InputPane.DEFAULT_PROMPT, new CommandRegistry());
-            AtomicInteger replays = new AtomicInteger();
             CompletableFuture<String> result = new CompletableFuture<>();
             Thread.ofVirtual().start(() -> {
                 try {
                     result.complete(pane.readLineFramed(() -> "default", () -> "model · ctx 1% · project",
-                            replays::incrementAndGet, () -> java.util.List.of("older", "newer")));
+                            () -> java.util.List.of("older", "newer")));
                 } catch (Throwable t) {
                     result.completeExceptionally(t);
                 }
             });
             Thread.sleep(200);
+            assertTrue(output.toString(StandardCharsets.UTF_8).contains("older"),
+                    "首次建立固定输入框后应立即把启动对话画回当前屏幕");
             keys.write("abc\033[13;2u".getBytes(StandardCharsets.UTF_8));
             keys.flush();
             for (int i = 0; i < 30 && !output.toString(StandardCharsets.UTF_8).contains("abc"); i++) {
                 Thread.sleep(20);
             }
-            assertEquals(12, org.jline.utils.Status.getStatus(terminal, false).size(),
+            assertEquals(8, org.jline.utils.Status.getStatus(terminal, false).size(),
                     "输入换行时状态区高度应保持不变，编辑行从上方预留空间展开");
             terminal.setSize(new Size(55, 20));
             terminal.raise(Terminal.Signal.WINCH);
             keys.write("def\r".getBytes(StandardCharsets.UTF_8));
             keys.flush();
             assertEquals("abc\ndef", result.get(3, TimeUnit.SECONDS));
-            assertEquals(1, replays.get());
             String rendered = output.toString(StandardCharsets.UTF_8);
             assertTrue(rendered.contains("[default]"));
             assertTrue(rendered.contains("project"));
-            assertTrue(rendered.contains("\033[3J"));
+            assertTrue(rendered.contains("\033[2J"));
+            assertTrue(!rendered.contains("\033[3J"), "缩放时不清除终端历史回滚");
         }
     }
 

@@ -316,6 +316,8 @@ public class ConversationController {
                 this.output = new OutputPane();
                 LiveRegionRenderer live = liveRenderer();
                 Writer writer = screenWriter();
+                renderContext.updateStatusLines(java.util.Collections.nCopies(
+                        StatusBar.frameReservedRows(terminal.height()), ""));
                 output.append(BANNER);
                 live.appendCommitted(writer, BANNER);
                 output.appendLine("输入 /help 查看命令，/quit 退出");
@@ -330,6 +332,9 @@ public class ConversationController {
                 // Restore the full scrolling region before Terminal.close();
                 // otherwise the shell inherits ACode's shortened region.
                 renderContext.closeStatus();
+                // Leave the shell on a clean visible screen while preserving
+                // the terminal's scrollback for the user's own history.
+                liveRenderer().clearScreen(screenWriter());
             }
         } catch (IllegalStateException e) {
             System.err.println(e.getMessage());
@@ -438,14 +443,6 @@ public class ConversationController {
                     double fraction = max <= 0 ? 0 : (double) conversation.estimateContextTokens() / max;
                     return StatusBar.infoLine(conversation.model(), fraction, projectRoot.toString(),
                             Math.max(1, renderContext.terminalWidth() - 1));
-                }
-
-                @Override
-                public void replayHistory() {
-                    Writer writer = screenWriter();
-                    for (String line : output.lines()) {
-                        liveRenderer().appendCommitted(writer, line);
-                    }
                 }
 
                 @Override

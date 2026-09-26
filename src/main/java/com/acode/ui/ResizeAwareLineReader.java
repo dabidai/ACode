@@ -21,8 +21,9 @@ final class ResizeAwareLineReader extends LineReaderImpl {
     private volatile boolean resizedDuringLastRead;
     private volatile Supplier<String> frameMode;
     private volatile Supplier<String> frameFooter;
-    private volatile Runnable frameHistoryReplay;
     private volatile Supplier<List<String>> frameHistoryLines;
+    private boolean frameNeedsHistoryPaint;
+    private List<AttributedString> frameLines = List.of();
     private int historyOffset;
     private int frameCursorRow;
     private int frameCursorColumn;
@@ -49,7 +50,7 @@ final class ResizeAwareLineReader extends LineReaderImpl {
     }
 
     String readLineFramed(Supplier<String> mode, Supplier<String> footer,
-                          Runnable replayHistory, Supplier<List<String>> historyLines) {
+                          Supplier<List<String>> historyLines) {
         Status status = Status.getStatus(terminal, true);
         if (status == null) {
             return readLine(() -> StatusBar.framedInputPrompt(mode.get(), terminal.getWidth()), () -> {});
@@ -57,8 +58,8 @@ final class ResizeAwareLineReader extends LineReaderImpl {
         resizedDuringLastRead = false;
         frameMode = mode;
         frameFooter = footer;
-        frameHistoryReplay = replayHistory;
         frameHistoryLines = historyLines;
+        frameNeedsHistoryPaint = status.size() != StatusBar.frameReservedRows(terminal.getHeight());
         historyOffset = 0;
         boolean mouseWasEnabled = isSet(Option.MOUSE);
         // Native Windows mouse capture disables direct console selection.
@@ -75,8 +76,9 @@ final class ResizeAwareLineReader extends LineReaderImpl {
             }
             frameMode = null;
             frameFooter = null;
-            frameHistoryReplay = null;
             frameHistoryLines = null;
+            frameNeedsHistoryPaint = false;
+            frameLines = List.of();
             option(Option.MOUSE, mouseWasEnabled);
         }
     }
@@ -132,7 +134,9 @@ final class ResizeAwareLineReader extends LineReaderImpl {
     }
 
     @Override
-    protected void redisplay(boolean flush) {
+    // WINCH can arrive on a terminal signal thread while readLine is painting.
+    // Share the monitor with handleSignal so JLine's Display cache is not mutated concurrently.
+    protected synchronized void redisplay(boolean flush) {
         if (frameMode == null) {
             super.redisplay(flush);
             return;
@@ -153,9 +157,9 @@ final class ResizeAwareLineReader extends LineReaderImpl {
         setPrompt("");
         // Keep Status at a constant height while the user edits. Windows CMD
         // corrupts the physical screen when Status changes its scroll region
-        // for every newly inserted input line. Blank rows above the frame are
-        // consumed as the input grows upward.
-        int reservedRows = Math.min(height - 1, Math.max(5, height / 2));
+        // for every newly inserted input line. Reserve at most one third of
+        // the screen so the startup banner remains visible above the frame.
+        int reservedRows = StatusBar.frameReservedRows(height);
         int inputCapacity = Math.max(1, reservedRows - 4);
         List<String> input = inputRows(buf.toString(), width);
         List<String> beforeCursor = inputRows(buf.upToCursor(), width);
@@ -178,13 +182,12 @@ final class ResizeAwareLineReader extends LineReaderImpl {
         }
         lines.add(AttributedString.fromAnsi(StatusBar.divider(width)));
         lines.add(AttributedString.fromAnsi(frameFooter.get()));
-        // Status assumes the saved cursor is in the scrolling content area.
-        // The visible editing cursor lives inside Status, so move it out before
-        // Status changes its height (multiline input), then place it back below.
-        if (status.size() > 0) {
-            terminal.puts(InfoCmp.Capability.cursor_address,
-                    Math.max(0, terminal.getHeight() - status.size() - 1), 0);
-        }
+        frameLines = List.copyOf(lines);
+        // Status saves the current cursor while changing its scroll region.
+        // A resize can leave that cursor below the new region, so use the
+        // upcoming frame height rather than the old size.
+        terminal.puts(InfoCmp.Capability.cursor_address,
+                Math.max(0, height - lines.size() - 1), 0);
         status.update(lines, flush);
         int row = height - lines.size() + blankRows + 2 + cursorInputRow - first;
         frameCursorRow = Math.max(0, row);
@@ -192,6 +195,11 @@ final class ResizeAwareLineReader extends LineReaderImpl {
         terminal.puts(InfoCmp.Capability.cursor_address, frameCursorRow, frameCursorColumn);
         if (flush) {
             terminal.flush();
+        }
+        if (frameNeedsHistoryPaint) {
+            frameNeedsHistoryPaint = false;
+            terminal.writer().write("\033[2J\033[H");
+            paintFrameAndHistory();
         }
     }
 
@@ -225,26 +233,11 @@ final class ResizeAwareLineReader extends LineReaderImpl {
     @Override
     protected synchronized void handleSignal(Terminal.Signal signal) {
         Runnable footerRedraw = activeFooterRedraw;
+        boolean rebuildFrame = false;
         if (signal == Terminal.Signal.WINCH && frameMode != null) {
             resizedDuringLastRead = true;
             org.jline.terminal.Size next = terminal.getBufferSize();
-            if (next.getColumns() != size.getColumns() || next.getRows() != size.getRows()) {
-                historyOffset = 0;
-                Status status = Status.getStatus(terminal, false);
-                if (status != null) {
-                    status.hide();
-                }
-                // The Windows console reflows the old status rows into ordinary
-                // scrollback before WINCH is delivered. Rebuild the committed
-                // transcript after clearing that reflow, then let JLine resize
-                // the status region and paint one current frame.
-                terminal.writer().write("\033[r\033[3J\033[2J\033[H");
-                terminal.flush();
-                Runnable replay = frameHistoryReplay;
-                if (replay != null) {
-                    replay.run();
-                }
-            }
+            rebuildFrame = next.getColumns() != size.getColumns() || next.getRows() != size.getRows();
         }
         if (signal == Terminal.Signal.WINCH && activePromptSupplier != null) {
             resizedDuringLastRead = true;
@@ -257,6 +250,14 @@ final class ResizeAwareLineReader extends LineReaderImpl {
             }
         }
         super.handleSignal(signal);
+        if (rebuildFrame) {
+            historyOffset = 0;
+            // JLine has now established the new Status geometry. Repaint the
+            // current viewport from OutputPane without appending duplicate
+            // conversation lines to the terminal buffer.
+            terminal.writer().write("\033[2J\033[H");
+            paintFrameAndHistory();
+        }
         if (signal == Terminal.Signal.WINCH && footerRedraw != null) {
             try {
                 footerRedraw.run();
@@ -264,5 +265,18 @@ final class ResizeAwareLineReader extends LineReaderImpl {
                 // The prompt is already usable; the footer will refresh next round.
             }
         }
+    }
+
+    private void paintFrameAndHistory() {
+        List<AttributedString> lines = frameLines;
+        int height = terminal.getHeight();
+        int firstRow = Math.max(0, height - lines.size());
+        terminal.puts(InfoCmp.Capability.change_scroll_region, 0, Math.max(0, firstRow - 1));
+        for (int i = 0; i < lines.size(); i++) {
+            terminal.puts(InfoCmp.Capability.cursor_address, firstRow + i, 0);
+            terminal.puts(InfoCmp.Capability.clr_eol);
+            terminal.writer().write(lines.get(i).toAnsi(terminal));
+        }
+        paintHistory(0);
     }
 }

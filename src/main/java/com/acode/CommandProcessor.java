@@ -58,10 +58,6 @@ public class CommandProcessor {
             return "";
         }
 
-        /** Replays committed conversation lines after a terminal resize. */
-        default void replayHistory() {
-        }
-
         default List<String> historyLines() {
             return List.of();
         }
@@ -119,7 +115,7 @@ public class CommandProcessor {
             try {
                 line = statusOwnedInput()
                         ? input.readLineFramed(inputFrame::mode, inputFrame::footer,
-                                inputFrame::replayHistory, inputFrame::historyLines)
+                                inputFrame::historyLines)
                         : inputFrame == null
                         ? input.readLine(prompt)
                         : input.readLine(this::prompt, inputFrame::resize);

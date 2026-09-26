@@ -66,8 +66,8 @@ public class InputPane {
 
     /** Read while the whole input frame is owned by JLine's bottom status area. */
     public String readLineFramed(Supplier<String> mode, Supplier<String> footer,
-                                 Runnable replayHistory, Supplier<List<String>> historyLines) {
-        return reader.readLineFramed(mode, footer, replayHistory, historyLines);
+                                 Supplier<List<String>> historyLines) {
+        return reader.readLineFramed(mode, footer, historyLines);
     }
 
     /** 最近一次动态读取期间是否收到过 WINCH；主循环据此丢弃旧尺寸计算出的钉底回退量。 */

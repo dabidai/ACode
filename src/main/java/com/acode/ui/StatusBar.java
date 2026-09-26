@@ -26,6 +26,11 @@ public final class StatusBar {
     private StatusBar() {
     }
 
+    /** 固定输入区预留行数；在输出 banner 前建立，避免首次画框把历史顶出屏幕。 */
+    public static int frameReservedRows(int height) {
+        return height < 6 ? 0 : Math.min(height - 1, Math.max(5, height / 3));
+    }
+
     /** 权限模式行：{@code [default] · /permission <模式>}（模式名亮黄、提示暗灰）。 */
     public static String modeLine(String mode, int width) {
         String plain = "[" + mode + "]" + MODE_HINT;

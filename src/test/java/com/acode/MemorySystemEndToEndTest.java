@@ -10,6 +10,7 @@ import com.acode.session.SessionCodec;
 import com.acode.ui.OutputPane;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -50,6 +51,11 @@ class MemorySystemEndToEndTest {
     private String originalHome;
     private Path fakeHome;
     private Path projectRoot;
+
+    @BeforeAll
+    static void initializeLoggingBeforeTemporaryHome() {
+        org.slf4j.LoggerFactory.getLogger(MemorySystemEndToEndTest.class);
+    }
 
     @BeforeEach
     void setUp() throws IOException {
@@ -267,6 +273,7 @@ class MemorySystemEndToEndTest {
         assertTrue(output.lines().stream().anyMatch(line -> line.contains("超出项目范围")),
                 "越界引用应输出一行告警：" + output.lines());
         controller.handleExchange("你好", () -> false, () -> { });
+        awaitExtraction(controller);
         assertTrue(provider.receivedRequests().stream().anyMatch(r -> !r.tools().isEmpty()),
                 "启动告警不得阻断对话");
     }

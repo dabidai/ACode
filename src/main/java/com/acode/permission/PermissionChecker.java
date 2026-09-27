@@ -50,6 +50,7 @@ public class PermissionChecker {
     private final RuleEngine ruleEngine;
     private final Set<String> allowAlwaysRules = ConcurrentHashMap.newKeySet();
     private volatile PermissionMode mode;
+    private final List<Path> extraSandboxRoots;
 
     public PermissionChecker(PermissionMode mode, Path projectRoot, RuleEngine ruleEngine) {
         this(mode, projectRoot, ruleEngine, List.of());
@@ -63,6 +64,29 @@ public class PermissionChecker {
         this.sandbox = new PathSandbox(projectRoot, extraSandboxRoots);
         this.detector = new DangerousCommandDetector();
         this.ruleEngine = ruleEngine;
+        this.extraSandboxRoots = List.copyOf(extraSandboxRoots);
+    }
+
+    /** Same rules and sandbox, but no inherited session approvals; decisions are intersected. */
+    public PermissionChecker child(PermissionMode requested) {
+        PermissionMode ceiling = mode;
+        var parentBoundary = new PermissionChecker(ceiling, projectRoot, ruleEngine, extraSandboxRoots);
+        return new PermissionChecker(stricter(ceiling, requested), projectRoot, ruleEngine, extraSandboxRoots) {
+            @Override public CheckResult check(Tool tool, JsonNode args) {
+                CheckResult parent = parentBoundary.check(tool, args);
+                CheckResult child = super.check(tool, args);
+                if (parent.decision() == Decision.DENY) return parent;
+                if (child.decision() == Decision.DENY) return child;
+                if (parent.decision() == Decision.ASK || child.decision() == Decision.ASK) return CheckResult.ask();
+                return CheckResult.allow();
+            }
+        };
+    }
+    private static PermissionMode stricter(PermissionMode a, PermissionMode b) {
+        if (a == PermissionMode.PLAN || b == PermissionMode.PLAN) return PermissionMode.PLAN;
+        if (a == PermissionMode.DEFAULT || b == PermissionMode.DEFAULT) return PermissionMode.DEFAULT;
+        if (a == PermissionMode.ACCEPT_EDITS || b == PermissionMode.ACCEPT_EDITS) return PermissionMode.ACCEPT_EDITS;
+        return PermissionMode.BYPASS;
     }
 
     public void setMode(PermissionMode mode) {

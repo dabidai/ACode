@@ -12,6 +12,26 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ConfigLoaderTest {
+    @Test void verificationSwitchIsStrictAndDefaultsOff() throws IOException {
+        assertTrue(!ConfigLoader.load(globalFile(), projectDir()).isVerificationAgentEnabled());
+        validGlobal();
+        for (String value : java.util.List.of("true", "false")) {
+            write(projectConfig(), "verification_agent: " + value);
+            assertEquals(Boolean.parseBoolean(value), ConfigLoader.load(globalFile(), projectDir()).isVerificationAgentEnabled());
+        }
+        for (String value : java.util.List.of("yes", "no", "on", "1", "null", "'true'", "[]")) {
+            write(projectConfig(), "verification_agent: " + value);
+            assertThrows(ConfigException.class, () -> ConfigLoader.load(globalFile(), projectDir()));
+        }
+    }
+    @Test void projectVerificationFalseOverridesGlobalTrueAndOmissionInherits() throws IOException {
+        validGlobal();
+        Files.writeString(globalFile(), "\nverification_agent: true\n", java.nio.file.StandardOpenOption.APPEND);
+        write(projectConfig(), "memory_auto: false\n");
+        assertTrue(ConfigLoader.load(globalFile(), projectDir()).isVerificationAgentEnabled());
+        write(projectConfig(), "verification_agent: false\n");
+        assertEquals(false, ConfigLoader.load(globalFile(), projectDir()).isVerificationAgentEnabled());
+    }
 
     @TempDir
     Path tempDir;

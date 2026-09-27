@@ -160,7 +160,8 @@ public class ConversationController {
         if (hookEngine == null) {
             var loaded = com.acode.hook.HookLoader.load(projectRoot, userHome());
             loaded.errors().forEach(System.err::println);
-            hookEngine = new com.acode.hook.HookEngine(loaded.hooks(), new com.acode.hook.HookActions(projectRoot),
+            hookEngine = new com.acode.hook.HookEngine(loaded.hooks(), new com.acode.hook.HookActions(projectRoot,
+                    prompt -> subAgentRunner().run(agentDefinitions().get("general-purpose"), prompt, "Hook", null, projectRoot)),
                     this::permissionChecker, sessionManager.recorder()::addHookOnce);
         }
         return hookEngine;
@@ -202,11 +203,34 @@ public class ConversationController {
     private com.acode.skill.SkillRepository skillRepository;
     private com.acode.skill.SkillRuntime skillRuntime;
     private com.acode.skill.SkillManager skillManager;
+    private com.acode.subagent.AgentRegistry agentDefinitions;
+    private com.acode.subagent.AgentRegistry agentDefinitions() {
+        if (agentDefinitions == null) {
+            agentDefinitions = new com.acode.subagent.AgentRegistry(projectRoot, userHome(), config.isVerificationAgentEnabled());
+        }
+        return agentDefinitions;
+    }
+    private com.acode.subagent.SubAgentRunner subAgentRunner() {
+        var snapshot = skillRuntime == null ? null : skillRuntime.snapshot();
+        Conversation source = conversation;
+        if (snapshot != null && snapshot.model() != null) {
+            source = new Conversation(snapshot.model(), conversation.thinking(), conversation.maxTokens(), conversation.maxContextTokens());
+            source.setSystemPrompt(conversation.systemPrompt());
+            source.setEnvironment(conversation.environment());
+            source.replaceAll(List.copyOf(conversation.history()));
+        }
+        return new com.acode.subagent.SubAgentRunner(provider, source, toolRegistry, this::permissionChecker, this::hookEngine,
+                () -> toolRegistry.availableList().stream()
+                        .filter(tool -> !planMode || tool.permission() == com.acode.tool.Permission.READ)
+                        .filter(tool -> snapshot == null || snapshot.allows(tool.name()))
+                        .map(com.acode.tool.Tool::name).collect(java.util.stream.Collectors.toUnmodifiableSet()));
+    }
 
     void initSkills() {
         if (skillManager != null) return;
         skillRepository = new com.acode.skill.SkillRepository(projectRoot, userHome(), ignored -> {});
         skillRuntime = new com.acode.skill.SkillRuntime(skillRepository, toolRegistry, conversation);
+        skillRuntime.setForkHost(new com.acode.subagent.SkillForkAdapter(this::subAgentRunner, () -> projectRoot));
         toolRegistry.register(new com.acode.skill.LoadSkillTool(skillRuntime));
         skillManager = new com.acode.skill.SkillManager(skillRepository, skillRuntime, commandRegistry,
                 this::initSessionState, this::emitLine);
@@ -250,6 +274,7 @@ public class ConversationController {
         DefaultToolset.registerAll(toolRegistry);
         toolRegistry.register(new ExitPlanModeTool());
         toolRegistry.register(new AskUserTool());
+        toolRegistry.register(new com.acode.subagent.AgentTool(this::agentDefinitions, this::subAgentRunner));
         // 命令框架装配：一次性注册全部内置命令，注册顺序即帮助与补全的展示顺序
         this.commandRegistry = new CommandRegistry();
         BuiltinCommands.registerAll(commandRegistry);
@@ -288,6 +313,7 @@ public class ConversationController {
         var instructions = ProjectInstructions.load(projectRoot, userHome());
         startupWarnings = new ArrayList<>(instructions.warnings());
         startupWarnings.addAll(memoryManager.drainWarnings());
+        if (agentDefinitions != null) startupWarnings.addAll(agentDefinitions.warnings());
         conversation.setSystemPrompt(PromptBuilder.buildSystemPrompt(
                 instructions.text(), memoryManager.indexText(), skillRepository == null ? "" : skillRepository.indexText()));
         conversation.setEnvironment(SystemReminder.environment(EnvironmentDetector.detect(config.getModel())));
@@ -322,6 +348,7 @@ public class ConversationController {
      * 单个 server 失败只落一条告警，不中断启动。
      */
     void connectMcp() {
+        agentDefinitions();
         if (!mcpManager.serverNames().isEmpty()) {
             emitLine("正在连接 MCP server：" + String.join("、", mcpManager.serverNames()) + " …");
         }
@@ -460,6 +487,22 @@ public class ConversationController {
                     this::lastDeliveredPlanPath,
                     () -> this.deliveredPlanPath = null);
             ui.setPreparedInputSubmitter(input -> handlePreparedExchange(input, this::ctrlCPressed, () -> {}));
+            ui.setForegroundTaskRunner(task -> {
+                var future = new java.util.concurrent.FutureTask<>(task::get);
+                Thread worker = Thread.ofVirtual().name("acode-skill-fork").start(future);
+                try {
+                    while (!future.isDone()) {
+                        if (ctrlCPressed()) { worker.interrupt(); break; }
+                        Thread.sleep(50);
+                    }
+                    // Wait for actual cancellation cleanup, not merely Future.cancel's flag.
+                    ui.appendSystemMessage(future.get().content());
+                } catch (InterruptedException e) {
+                    worker.interrupt(); Thread.currentThread().interrupt();
+                } catch (java.util.concurrent.ExecutionException e) {
+                    ui.appendSystemMessage("子任务执行失败：" + e.getCause().getMessage());
+                }
+            });
             ui.setLatestReply(() -> {
                 var messages = conversation.history();
                 for (int i = messages.size() - 1; i >= 0; i--) {

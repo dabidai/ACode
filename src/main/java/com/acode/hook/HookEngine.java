@@ -21,7 +21,7 @@ public final class HookEngine implements AutoCloseable {
     private final HookAction actions;
     private final Supplier<PermissionChecker> checker;
     private final Consumer<String> onceSink;
-    private final Set<String> once = new HashSet<>();
+    private final Set<String> once;
     private final List<String> prompts = new ArrayList<>();
     private final Set<Future<?>> pending = new HashSet<>();
     private final ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
@@ -29,21 +29,32 @@ public final class HookEngine implements AutoCloseable {
     private boolean closed;
 
     public HookEngine(List<HookConfig> hooks, HookAction actions, Supplier<PermissionChecker> checker, Consumer<String> onceSink) {
+        this(hooks, actions, checker, onceSink, ConcurrentHashMap.newKeySet());
+    }
+    private HookEngine(List<HookConfig> hooks, HookAction actions, Supplier<PermissionChecker> checker,
+                       Consumer<String> onceSink, Set<String> once) {
         this.hooks = List.copyOf(hooks);
         this.actions = actions;
         this.checker = checker;
         this.onceSink = onceSink;
+        this.once = once;
     }
     public FireResult fire(String event, HookContext context) { return fire(event, context, null); }
+    /** Child queues and locks must not share the synchronously waiting parent's monitor.
+     * Agent actions are excluded to prevent spawning through hooks instead of the Agent tool. */
+    public HookEngine childScope(PermissionChecker permission) {
+        return new HookEngine(hooks.stream().filter(h -> h.action().type() != HookConfig.ActionType.AGENT).toList(),
+                actions, () -> permission, onceSink, once);
+    }
     public synchronized FireResult fire(String event, HookContext context, Approval approval) {
         if (closed) return FireResult.allowed();
         for (HookConfig hook : hooks) {
             try {
                 if (!hook.event().equals(event) || (hook.once() && once.contains(hook.id())) || !hook.condition().matches(context)) continue;
                 if (Thread.currentThread().isInterrupted()) break;
+                if (!mark(hook)) continue;
                 long dispatched = generation;
                 if (hook.async()) {
-                    mark(hook);
                     pending.removeIf(Future::isDone);
                     pending.add(workers.submit(() -> {
                         HookAction.Result result = execute(hook, context, null);
@@ -51,7 +62,6 @@ public final class HookEngine implements AutoCloseable {
                     }));
                 } else {
                     HookAction.Result result = execute(hook, context, approval);
-                    mark(hook);
                     enqueue(hook, result, dispatched);
                     if (hook.reject() && result.ok()) return new FireResult(true, result.output());
                 }
@@ -94,11 +104,15 @@ public final class HookEngine implements AutoCloseable {
         if (!allowed) log.warn("Hook 执行失败 [{}]：权限未放行或无交互入口，跳过动作", hook.id());
         return allowed;
     }
-    private void mark(HookConfig hook) {
-        if (hook.once() && once.add(hook.id()) && onceSink != null) {
+    private boolean mark(HookConfig hook) {
+        if (!hook.once()) return true;
+        // Parent and child scopes have different monitors, so reserve atomically before executing.
+        if (!once.add(hook.id())) return false;
+        if (onceSink != null) {
             try { onceSink.accept(hook.id()); }
             catch (Exception e) { log.warn("Hook once 持久化失败 [{}]：{}", hook.id(), e.toString()); }
         }
+        return true;
     }
     private void enqueue(HookConfig hook, HookAction.Result result, long dispatched) {
         if (!closed && dispatched == generation && result.ok() && hook.action().type() == HookConfig.ActionType.PROMPT)

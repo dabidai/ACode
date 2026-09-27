@@ -21,6 +21,11 @@ public interface UIController {
     /** 把文本当作用户输入发给 Agent（走既有对话入口） */
     void submitUserInput(String text);
 
+    /** Run an explicit foreground task without injecting intermediate history into chat. */
+    default void runForegroundTask(java.util.function.Supplier<com.acode.tool.ToolResult> task) {
+        appendSystemMessage(task.get().content());
+    }
+
     /** Prepare input at the history append boundary; null means no new exchange. */
     default void submitPreparedInput(java.util.function.Supplier<String> input) {
         String text = input.get();

@@ -15,9 +15,19 @@ public final class SkillRuntime {
     private final LinkedHashMap<String, SkillActivation> active = new LinkedHashMap<>();
     private long generation;
     private String reminder;
+    private final Conversation conversation;
+    private SkillForkHost forkHost;
+    public void setForkHost(SkillForkHost forkHost) { this.forkHost = forkHost; }
+    public boolean isFork(String name) { return repository.load(name).map(d -> d.mode().equals("fork")).orElse(false); }
+    public SkillRuntime child(ToolRegistry tools, Conversation conversation) {
+        var child = new SkillRuntime(repository, tools, conversation);
+        child.setForkHost((definition, arguments, history) -> ToolResult.failure("子 Agent 不能再创建子 Agent"));
+        return child;
+    }
 
     public SkillRuntime(SkillRepository repository, ToolRegistry tools, Conversation conversation) {
         this.repository = repository; this.tools = tools;
+        this.conversation = conversation;
         conversation.addClearHook(() -> invalidate(false));
         conversation.addRebuildListener(ignored -> invalidate(true));
     }
@@ -25,7 +35,11 @@ public final class SkillRuntime {
         var found = repository.load(name);
         if (found.isEmpty()) return failure("Skill \"" + name + "\" not found.");
         SkillDefinition d = found.get();
-        if (d.mode().equals("fork")) return failure("Skill \"" + name + "\" mode: fork 未实现，阶段十二接入");
+        if (d.mode().equals("fork")) {
+            if (forkHost == null) return failure("Skill \"" + name + "\" mode: fork 未装配子 Agent 运行时");
+            var result = forkHost.execute(d, arguments, List.copyOf(conversation.history()));
+            return new SkillActivation(null, "", "", generation, result);
+        }
         for (String tool : d.allowedTools()) if (tools.available(tool) == null)
             return failure("Skill \"" + name + "\": tool \"" + tool + "\" unavailable.");
         String args = arguments == null ? "" : arguments;

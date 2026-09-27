@@ -178,6 +178,11 @@ public class Conversation {
         return model;
     }
 
+    public String systemPrompt() { return systemPrompt; }
+    public ChatMessage environment() { return environment; }
+    public boolean thinking() { return thinking; }
+    public int maxTokens() { return maxTokens; }
+
     /** 上下文窗口上限（token）：由配置注入，压缩触发点据此计算 */
     public int maxContextTokens() {
         return maxContextTokens;

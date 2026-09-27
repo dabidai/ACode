@@ -18,6 +18,12 @@ public class TerminalUIController implements UIController {
     private final RenderContext renderContext;
     private final Consumer<String> submitUserInput;
     private Consumer<Supplier<String>> preparedInputSubmitter;
+    private Consumer<Supplier<com.acode.tool.ToolResult>> foregroundTaskRunner;
+    public void setForegroundTaskRunner(Consumer<Supplier<com.acode.tool.ToolResult>> runner) { foregroundTaskRunner = runner; }
+    @Override public void runForegroundTask(Supplier<com.acode.tool.ToolResult> task) {
+        if (foregroundTaskRunner == null) UIController.super.runForegroundTask(task);
+        else foregroundTaskRunner.accept(task);
+    }
     private Supplier<String> latestReply = () -> "";
     private ClipboardService clipboard = new ClipboardService();
     public void setLatestReply(Supplier<String> reply) { latestReply = reply; }

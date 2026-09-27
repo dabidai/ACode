@@ -59,8 +59,9 @@ class SkillCommandTest {
         write("a", "model: next", "BODY-NEW\n$ARGUMENTS"); processor.handleLine("/a extra");
         assertEquals("next", provider.receivedRequests().getLast().model());
         assertTrue(provider.receivedRequests().getLast().messages().stream().anyMatch(m -> m.content().contains("取代旧版本")));
-        processor.handleLine("/fork"); assertEquals(2, provider.receivedRequests().size());
-        assertTrue(String.join("\n", output.lines()).contains("阶段十二"));
+        processor.handleLine("/fork"); assertEquals(3, provider.receivedRequests().size());
+        assertTrue(provider.receivedRequests().getLast().messages().getLast().content().contains("fork body"));
+        assertTrue(String.join("\n", output.lines()).contains("done"));
         Files.delete(a); write("new-skill", "", "NEW BODY"); processor.handleLine("/skill reload");
         processor.handleLine("/new-skill");
         assertTrue(provider.receivedRequests().getLast().messages().getFirst().content().contains("new-skill: local skill"));

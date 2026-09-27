@@ -9,6 +9,13 @@ public class ToolContext {
 
     private final Path workingDirectory;
     private final boolean planMode;
+    private boolean fork;
+    private boolean subAgent;
+
+    public boolean isFork() { return fork; }
+    public void setFork(boolean fork) { this.fork = fork; }
+    public boolean isSubAgent() { return subAgent; }
+    public void setSubAgent(boolean subAgent) { this.subAgent = subAgent; }
 
     public ToolContext(Path workingDirectory) {
         this(workingDirectory, false);

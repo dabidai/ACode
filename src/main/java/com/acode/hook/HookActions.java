@@ -15,7 +15,11 @@ import java.util.concurrent.*;
 public final class HookActions implements HookAction {
     private static final Logger log = LoggerFactory.getLogger(HookActions.class);
     private final Path root;
+    private java.util.function.Function<String, com.acode.tool.ToolResult> agentRunner;
     public HookActions(Path root) { this.root = root; }
+    public HookActions(Path root, java.util.function.Function<String, com.acode.tool.ToolResult> agentRunner) {
+        this.root = root; this.agentRunner = agentRunner;
+    }
 
     @Override public Result execute(HookConfig hook, HookContext context) throws Exception {
         return switch (hook.action().type()) {
@@ -23,8 +27,9 @@ public final class HookActions implements HookAction {
             case COMMAND -> command(hook, context);
             case HTTP -> http(hook, context);
             case AGENT -> {
-                log.warn("Hook agent 执行器未实现（待 ch12 SubAgent 运行时对接）[{}]", hook.id());
-                yield Result.failure("agent 执行器未实现");
+                if (agentRunner == null) yield Result.failure("agent 执行器未装配");
+                var result = agentRunner.apply(context.expand(hook.action().value("prompt")));
+                yield new Result(result.isSuccess(), result.content());
             }
         };
     }

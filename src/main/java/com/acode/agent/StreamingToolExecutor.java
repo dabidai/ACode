@@ -169,6 +169,11 @@ public class StreamingToolExecutor {
             return;
         }
         ToolUseBlock call = calls.get(index);
+        if (context.isSubAgent() && call.name().equals("Agent")) {
+            failAndEmit(call, results, index, events, context.isFork()
+                    ? "Fork 子 Agent 不能再创建子 Agent" : "子 Agent 不能再创建子 Agent");
+            return;
+        }
         if (allowedNames != null && !allowedNames.contains(call.name())) {
             failAndEmit(call, results, index, events, "工具范围拒绝：" + call.name());
             return;

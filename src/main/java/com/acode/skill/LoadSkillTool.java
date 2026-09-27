@@ -8,6 +8,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public final class LoadSkillTool implements Tool {
     private final SkillRuntime runtime;
     public LoadSkillTool(SkillRuntime runtime) { this.runtime = runtime; }
+    public SkillRuntime childRuntime(ToolRegistry tools, com.acode.conversation.Conversation conversation) {
+        return runtime.child(tools, conversation);
+    }
     public String name() { return "LoadSkill"; }
     public String description() { return "Load a named Skill from the system index when its description matches the task."; }
     public Permission permission() { return Permission.READ; }

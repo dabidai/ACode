@@ -27,7 +27,7 @@ public class ConfigLoader {
     private static final List<String> KNOWN_KEYS =
             List.of("protocol", "model", "base_url", "api_key",
                     "max_context_tokens", "max_iterations", "tee", "permission_mode", "thinking",
-                    "memory_auto", "mcp_servers");
+                    "memory_auto", "mcp_servers", "verification_agent");
 
     /** 生产入口：全局配置在用户主目录，项目级配置在当前工作目录 */
     public static AppConfig loadDefault() {
@@ -76,7 +76,21 @@ public class ConfigLoader {
 
     private static Map<String, Object> parseYaml(InputStream in, String source) {
         try (Reader reader = new InputStreamReader(in, StandardCharsets.UTF_8)) {
-            Object parsed = new Yaml().load(reader);
+            // Preserve legacy YAML semantics for existing keys, but this new switch accepts only true/false.
+            String yamlText = new java.io.BufferedReader(reader).lines().collect(java.util.stream.Collectors.joining("\n"));
+            var yaml = new Yaml();
+            var node = yaml.compose(new java.io.StringReader(yamlText));
+            if (node instanceof org.yaml.snakeyaml.nodes.MappingNode mapping) {
+                for (var tuple : mapping.getValue()) {
+                    if (tuple.getKeyNode() instanceof org.yaml.snakeyaml.nodes.ScalarNode key
+                            && key.getValue().equals("verification_agent")
+                            && (!(tuple.getValueNode() instanceof org.yaml.snakeyaml.nodes.ScalarNode value)
+                            || !value.getTag().equals(org.yaml.snakeyaml.nodes.Tag.BOOL)
+                            || !List.of("true", "false").contains(value.getValue())))
+                        throw new ConfigException(source + ": verification_agent 必须是 true/false");
+                }
+            }
+            Object parsed = yaml.load(yamlText);
             if (parsed == null) {
                 return Map.of();
             }
@@ -155,6 +169,11 @@ public class ConfigLoader {
                 throw new ConfigException(source + ": memory_auto 必须是 true/false，当前值 " + value);
             }
             config.setMemoryAuto(memoryAutoValue);
+        }
+        if (map.containsKey("verification_agent")) {
+            Object value = map.get("verification_agent");
+            if (!(value instanceof Boolean enabled)) throw new ConfigException(source + ": verification_agent 必须是 true/false");
+            config.setVerificationAgent(enabled);
         }
         if (map.containsKey("mcp_servers")) {
             Object value = map.get("mcp_servers");

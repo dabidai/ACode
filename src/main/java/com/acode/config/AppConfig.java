@@ -19,6 +19,9 @@ public class AppConfig {
     private Boolean thinking;
     private String permissionMode;
     private Boolean memoryAuto;
+    private Boolean verificationAgent;
+    public boolean isVerificationAgentEnabled() { return Boolean.TRUE.equals(verificationAgent); }
+    public void setVerificationAgent(Boolean value) { verificationAgent = value; }
     private Map<String, McpServerConfig> mcpServers;
 
     public String getProtocol() {

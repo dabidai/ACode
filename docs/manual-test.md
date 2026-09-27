@@ -647,3 +647,17 @@
 - [ ] HK4：配置 session_start + prompt + once；新会话首轮体现提醒，退出并 --resume 后不重发，再开新会话重新出现。检查 JSONL 的 hook_once 行无 role。
 - [ ] HK5：post_tool_use 配置 `exit 1`，放行动作后仍完成对话；日志包含 `Hook 命令非零退出 [<id>]：exit=1`，终端无执行异常日志。
 - [ ] HK6：本地、项目、测试用户三个配置各追加不同标记，触发一次事件，核对 local → project → user 顺序；无交互入口的未授权命令应跳过，使用明确允许的固定测试命令验证自动执行。
+
+# 阶段十二（ch12）：子 Agent — 手动验收
+
+本轮未调用真实 provider，也未进行真实终端视觉验收，以下保持未勾选。使用独立临时项目与测试用户目录，复制有效 provider 配置；不要修改真实用户配置。先用 JDK 21 执行 `mvn -DskipTests package`，再运行生成的 jar。记录 jar SHA-256、终端、模型、实际输出。
+
+- [ ] SA1：提出「用 Explore 子 Agent 找出 src/main/java/com/acode/tool 下所有工具实现并总结」。default 档批准 Agent 后，只看到父级派发卡片与完成摘要，中间搜索过程不刷屏，结果引用真实文件。
+- [ ] SA2：连续讨论后提出「用子 Agent 读取 README 前十行，不指定类型」。检查子请求继承背景，子结果以 Scope: 开头且 ≤500 字；主模型转述不要求相同格式。
+- [ ] SA3：拒绝一次 Agent 确认，模型收到失败后调整；批准一次写任务派发但不预先授权子写入，检查子操作被拒绝且无二次弹窗、目标文件不存在。
+- [ ] SA4：进入 `/plan` 请求派活，确认 Agent 不在工具表。配置一个 fork Skill 并在规划模式调用，确认仍只能使用父级只读工具。
+- [ ] SA5：在测试项目 `.acode/agents/bad.md` 写缺 name 的定义，重启后看到带文件路径的跳过告警，仍能正常对话；移除测试文件后告警消失。
+- [ ] SA6：设置 `verification_agent: true` 并重启，派 Verification 检查项目；为确切构建/测试命令配置允许规则，报告包含实际执行证据和 VERDICT。关闭并重启后指定 Verification 返回未知类型。
+- [ ] SA7：定义 `mode: fork`、`context: recent` 的 Skill，用斜杠和 LoadSkill 分别调用；只有结果返回，父级后续请求不含子中间历史或新激活的 Skill 范围。
+- [ ] SA8：配置匹配 ReadFile 的 `post_tool_use` agent Hook，提示其阅读一个固定文件。确认子工具不会递归触发 agent 动作，失败记日志而主对话继续。
+- [ ] SA9：分别在 Agent 工具与斜杠 fork Skill 运行中按 Ctrl+C，清理后继续输入并完成普通对话，终端无残影。

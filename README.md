@@ -160,7 +160,7 @@ mcp_servers:
 ## 🧪 测试
 
 ```bash
-mvn test   # 1139 个用例（1 个平台受限跳过）；本机内存偏紧时建议 MAVEN_OPTS="-Xmx768m" mvn test -DargLine="-Xmx512m"
+mvn test   # 1256 个用例（1 个平台受限跳过）；本机内存偏紧时建议 MAVEN_OPTS="-Xmx768m" mvn test -DargLine="-Xmx512m"
 ```
 
 ## 📁 项目结构
@@ -204,3 +204,27 @@ src/main/resources/
 ## 使用 Skill
 
 支持文件定义任务指引、斜杠命令与模型按需加载。定义格式、优先级、热加载及工具边界见 [阶段十使用说明](docs/ch10/implementation.md)。
+
+## 阶段十二：子 Agent
+
+模型可调用 `Agent` 工具派子任务：`prompt` 和 `description` 必填，`subagent_type` 指定角色，留空则 Fork 当前上下文；可选 `name` 命名任务，`model` 覆盖定义式模型。前台同步执行，界面只展示父级工具卡片及完成摘要。
+
+内置 `Explore`（探索）、`Plan`（规划）、`general-purpose`（通用）和 `Verification`（验证）。验证角色默认关闭，在 `.acode/config.yaml` 或 `~/.acode/config.yaml` 设置 `verification_agent: true` 后重启启用。
+
+自定义 Markdown 放在项目 `.acode/agents/` 或用户 `~/.acode/agents/`，优先级为项目 > 用户 > 内置。示例：
+
+```markdown
+---
+name: reviewer
+description: 检查当前代码的边界情况
+tools: [ReadFile, Glob, Grep]
+model: inherit
+maxTurns: 20
+permissionMode: default
+---
+阅读代码并报告有证据的问题，注明文件路径。
+```
+
+`tools` 是可选白名单，`disallowedTools` 是可选黑名单；两者同时生效。定义启动加载，修改后需重启。父级权限、活动 Skill 范围与规划限制仍生效，子 Agent 不能继续派活；未明确授权的确认请求被拒绝，不弹子审批窗口。
+
+Skill 的 `mode: fork` 与 Hook 的 `type: agent` 已接入同一运行底座。配置及边界详见 [ch12 验收清单](docs/ch12/checklist.md) 和 [接口说明](docs/ch12/interface-notes.md)。真实终端验收步骤见 [manual-test](docs/manual-test.md)。

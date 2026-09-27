@@ -52,7 +52,7 @@ class SkillRuntimeTest {
         assertEquals(Set.of("Grep"), runtime.snapshot().allowed()); assertTrue(runtime.snapshot().allows("LoadSkill"));
         assertEquals("second", runtime.snapshot().model());
         assertFalse(runtime.prepare("bad", null).successful());
-        assertTrue(runtime.prepare("fork", null).result().content().contains("阶段十二"));
+        assertTrue(runtime.prepare("fork", null).result().content().contains("未装配子 Agent 运行时"));
         tools.disable("ReadFile"); assertFalse(runtime.prepare("a", "x").successful()); tools.enable("ReadFile");
         assertEquals("second", runtime.snapshot().model());
         Files.writeString(file, definition("a", "allowedTools: [Glob]\nmodel: third", "new"));

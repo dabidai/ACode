@@ -103,7 +103,7 @@ public class CommandProcessor {
      * 路径都要回退，否则光标留在底部，后续输出会从那里往下写。
      */
     public void mainLoop() {
-        InputPane input = new InputPane(tui.terminal(), InputPane.DEFAULT_PROMPT, registry);
+        InputPane input = new InputPane(tui.terminal(), InputPane.DEFAULT_PROMPT, registry, tui.screen());
         BottomAnchor anchor = new BottomAnchor(tui.terminal());
         if (!statusOwnedInput()) {
             drawFrame();
@@ -113,7 +113,8 @@ public class CommandProcessor {
             int pinned = statusOwnedInput() ? 0 : pin(anchor, prompt);
             String line;
             try {
-                line = statusOwnedInput()
+                line = tui.screen() != null || !tui.interactive() ? input.readLine()
+                        : statusOwnedInput()
                         ? input.readLineFramed(inputFrame::mode, inputFrame::footer,
                                 inputFrame::historyLines)
                         : inputFrame == null

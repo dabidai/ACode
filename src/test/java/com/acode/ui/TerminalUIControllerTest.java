@@ -19,6 +19,21 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TerminalUIControllerTest {
+    @Test void copyUsesContentAndReportsFailureWithoutChangingRealClipboard() {
+        OutputPane output = new OutputPane();
+        output.append("\033[31m正文\033[0m\n\n第二段");
+        TerminalUIController ui = controller(output, renderContext(), s -> {}, b -> {},
+                () -> new UIController.ContextUsage(0, 0), (e, t) -> -1);
+        AtomicReference<String> copied = new AtomicReference<>();
+        ui.setClipboard(new ClipboardService(copied::set));
+        ui.copyTranscript(true);
+        assertEquals("正文\n\n第二段", copied.get());
+        ui.setLatestReply(() -> "**original**"); ui.copyTranscript(false);
+        assertEquals("**original**", copied.get());
+        ui.setClipboard(new ClipboardService(text -> { throw new IllegalStateException("busy"); }));
+        ui.copyTranscript(false);
+        assertEquals("复制失败：系统剪贴板不可用", output.lines().getLast());
+    }
 
     private static RenderContext renderContext() {
         return new RenderContext(new AppConfig());

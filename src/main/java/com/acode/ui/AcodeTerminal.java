@@ -8,14 +8,24 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
-/**
- * 终端生命周期壳：打开/关闭/尺寸/写入，只做主屏输出，不做整屏绘制。
- * 已提交内容追加进原生 scrollback（可划选复制）；底部活跃区重绘由
- * {@link LiveRegionRenderer} 负责，经此写入终端。
- */
+/** Owns terminal setup and full-screen lifetime; redirected terminals use plain text. */
 public class AcodeTerminal implements AutoCloseable {
 
     private final Terminal terminal;
+    private ScreenRenderer screen;
+    public ScreenRenderer screen() { return screen; }
+    public boolean interactive() {
+        return !terminal.getType().startsWith("dumb") && terminal.getHeight() > 0
+                && terminal.getStringCapability(InfoCmp.Capability.cursor_address) != null;
+    }
+    public ScreenRenderer openScreen(OutputPane output) {
+        if (!interactive()) return null;
+        if (screen == null) {
+            screen = new ScreenRenderer(terminal, output);
+            screen.open();
+        }
+        return screen;
+    }
 
     /** 包可见：测试用虚拟终端（TerminalBuilder + 固定尺寸）构造，生产路径只走 {@link #open()}。 */
     AcodeTerminal(Terminal terminal) {
@@ -24,16 +34,19 @@ public class AcodeTerminal implements AutoCloseable {
 
     /**
      * 打开系统终端并进入 raw 模式。
-     * 无可用终端（或 JLine 静默回退到不支持光标绘制的 dumb 终端）时抛 IllegalStateException。
-     * 活跃区重绘依赖光标上移（cursor_up）与清到屏尾（clr_eos）能力，需一并检查。
+     * 支持光标定位的交互终端使用全屏；重定向或 dumb 终端保留普通文本路径。
+     * 输入、输出编码分别设置，避免 Windows 本地代码页覆盖通用编码。
      */
     public static AcodeTerminal open() {
         Terminal terminal;
         try {
             TerminalBuilder builder = TerminalBuilder.builder()
                     .system(true)
-                    .dumb(false)
-                    .encoding("UTF-8");
+                    .dumb(true)
+                    .encoding(StandardCharsets.UTF_8)
+                    .stdinEncoding(StandardCharsets.UTF_8)
+                    .stdoutEncoding(StandardCharsets.UTF_8)
+                    .stderrEncoding(StandardCharsets.UTF_8);
             String type = statusBarSafeType();
             if (type != null) {
                 builder.type(type);
@@ -41,12 +54,6 @@ public class AcodeTerminal implements AutoCloseable {
             terminal = builder.build();
         } catch (IOException | IllegalStateException e) {
             throw new IllegalStateException("无法初始化终端（需在真实终端中运行）：" + e.getMessage(), e);
-        }
-        if (terminal.getHeight() <= 0
-                || terminal.getStringCapability(InfoCmp.Capability.cursor_up) == null
-                || terminal.getStringCapability(InfoCmp.Capability.clr_eos) == null) {
-            closeQuietly(terminal);
-            throw new IllegalStateException("未检测到支持活跃区绘制的终端（需光标上移/清屏能力），请在真实终端中运行 ACode");
         }
         terminal.enterRawMode();
         return new AcodeTerminal(terminal);
@@ -117,7 +124,8 @@ public class AcodeTerminal implements AutoCloseable {
     @Override
     public void close() {
         try {
-            terminal.close();
+            try { if (screen != null) screen.close(); }
+            finally { terminal.close(); }
         } catch (IOException e) {
             // 退出时尽力恢复终端；失败可忽略
         }

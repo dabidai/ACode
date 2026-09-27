@@ -22,22 +22,23 @@ public class ConfirmationPrompt {
 
     /** 渲染确认提示并弹三选一菜单；Esc/Ctrl+C/EOF 视为取消=拒绝。 */
     public PermissionResponse ask(String toolName, String argsSummary) {
-        live.appendCommitted(writer, promptLine(toolName, argsSummary));
+        live.notice(writer, promptLine(toolName, argsSummary));
         live.commitRegion();
-        int selected = new SelectionMenu(List.of("放行", "始终允许", "拒绝"), null, 0).select(live, writer, keys);
+        int selected = new SelectionMenu(List.of("放行", "始终允许", "拒绝"),
+                live instanceof ScreenRenderer ? promptLine(toolName, argsSummary) : null, 0).select(live, writer, keys);
         if (selected == 0) {
-            live.appendCommitted(writer, "（已批准执行「" + toolName + "」）");
+            live.notice(writer, "（已批准执行「" + toolName + "」）");
             return PermissionResponse.ALLOW;
         }
         if (selected == 1) {
-            live.appendCommitted(writer, "（已记录「始终允许」：「" + toolName + "」）");
+            live.notice(writer, "（已记录「始终允许」：「" + toolName + "」）");
             return PermissionResponse.ALLOW_ALWAYS;
         }
         if (selected == 2) {
-            live.appendCommitted(writer, "（已拒绝执行「" + toolName + "」）");
+            live.notice(writer, "（已拒绝执行「" + toolName + "」）");
             return PermissionResponse.DENY;
         }
-        live.appendCommitted(writer, "（已取消）");
+        live.notice(writer, "（已取消）");
         return PermissionResponse.DENY;
     }
 

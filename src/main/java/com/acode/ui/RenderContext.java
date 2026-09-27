@@ -57,6 +57,11 @@ public final class RenderContext {
      * 上移行数就会与实际屏幕内容对不上、重绘错位。尺寸仍是随读随取（构造器收的是 supplier）。
      */
     public LiveRegionRenderer liveRenderer() {
+        if (tui != null && tui.screen() != null) return tui.screen();
+        if (tui != null && !tui.interactive()) {
+            if (cachedLive == null) cachedLive = new PlainTextRenderer();
+            return cachedLive;
+        }
         // 测试注入的假渲染器
         if (live != null) {
             return live;
@@ -83,6 +88,8 @@ public final class RenderContext {
      * 调用方按「无页脚」降级。
      */
     public Status status() {
+        if (tui != null && tui.screen() != null) return null;
+        if (tui != null && !tui.interactive()) return null;
         if (status == null && tui != null) {
             status = LiveRegionRenderer.statusOf(tui);
         }

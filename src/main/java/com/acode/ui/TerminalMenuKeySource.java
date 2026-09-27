@@ -38,6 +38,7 @@ public class TerminalMenuKeySource implements MenuKeySource {
                     if (ch == 'B') {
                         return KEY_DOWN;
                     }
+                    for (int i = 0; ch >= 0 && ch < 0x40 && i < 64; i++) ch = reader.read(50);
                     return KEY_NONE;
                 }
                 return KEY_CANCEL; // 裸 Esc

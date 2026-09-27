@@ -15,6 +15,13 @@ import java.util.function.Supplier;
 
 /** LineReader that rebuilds ACode's input frame prompt when the terminal is resized. */
 final class ResizeAwareLineReader extends LineReaderImpl {
+    private ScreenRenderer screen;
+    void screen(ScreenRenderer screen) { this.screen = screen; }
+    private String completionBuffer;
+    void completionOverlay(List<String> lines) {
+        completionBuffer = lines == null ? null : buf.toString();
+        screen.overlay(lines == null ? List.of() : lines);
+    }
 
     private volatile Supplier<String> activePromptSupplier;
     private volatile Runnable activeFooterRedraw;
@@ -85,6 +92,12 @@ final class ResizeAwareLineReader extends LineReaderImpl {
 
     @Override
     public boolean mouse() {
+        if (screen != null) {
+            MouseEvent event = readMouseEvent();
+            if (event.getButton() == MouseEvent.Button.WheelUp) screen.scroll(-3);
+            if (event.getButton() == MouseEvent.Button.WheelDown) screen.scroll(3);
+            return true;
+        }
         if (frameMode == null) {
             return super.mouse();
         }
@@ -137,6 +150,14 @@ final class ResizeAwareLineReader extends LineReaderImpl {
     // WINCH can arrive on a terminal signal thread while readLine is painting.
     // Share the monitor with handleSignal so JLine's Display cache is not mutated concurrently.
     protected synchronized void redisplay(boolean flush) {
+        if (screen != null) {
+            if (completionBuffer != null && !completionBuffer.equals(buf.toString())) {
+                completionBuffer = null;
+                screen.overlay(List.of());
+            }
+            screen.edit(buf.toString(), buf.upToCursor().length());
+            return;
+        }
         if (frameMode == null) {
             super.redisplay(flush);
             return;
@@ -232,6 +253,12 @@ final class ResizeAwareLineReader extends LineReaderImpl {
 
     @Override
     protected synchronized void handleSignal(Terminal.Signal signal) {
+        if (screen != null && signal == Terminal.Signal.WINCH) {
+            resizedDuringLastRead = true;
+            size.copy(terminal.getSize());
+            redisplay(true);
+            return;
+        }
         Runnable footerRedraw = activeFooterRedraw;
         boolean rebuildFrame = false;
         if (signal == Terminal.Signal.WINCH && frameMode != null) {

@@ -19,11 +19,14 @@ public class FakeTerminal {
     private final StringBuilder[] rows;
     private int row = 0;
     private int col = 0;
+    private int savedRow, savedCol, scrollTop, scrollBottom;
+    private String[] primary;
     private final StringBuilder debugLog = new StringBuilder();
 
     public FakeTerminal(int termWidth, int height) {
         this.termWidth = termWidth;
         this.height = height;
+        this.scrollBottom = height - 1;
         this.rows = new StringBuilder[height];
         for (int i = 0; i < height; i++) {
             rows[i] = new StringBuilder();
@@ -71,7 +74,27 @@ public class FakeTerminal {
                     }
                     char finalByte = j < n ? s.charAt(j) : 0;
                     j++;
-                    if (finalByte == 'A') {
+                    String paramText = params.toString();
+                    String[] coordinates = paramText.split(";", -1);
+                    if (finalByte == 'H' || finalByte == 'f') {
+                        row = Math.max(0, Math.min(height - 1, parseInt(coordinates[0], 1) - 1));
+                        col = Math.max(0, Math.min(termWidth - 1, coordinates.length > 1 ? parseInt(coordinates[1], 1) - 1 : 0));
+                    } else if (finalByte == 'r' && !paramText.startsWith("?")) {
+                        scrollTop = Math.max(0, parseInt(coordinates[0], 1) - 1);
+                        scrollBottom = Math.min(height - 1, coordinates.length > 1 ? parseInt(coordinates[1], height) - 1 : height - 1);
+                        row = col = 0;
+                    } else if (finalByte == 's') {
+                        savedRow = row; savedCol = col;
+                    } else if (finalByte == 'u') {
+                        row = savedRow; col = savedCol;
+                    } else if (paramText.equals("?1049") && finalByte == 'h') {
+                        primary = new String[height];
+                        for (int r = 0; r < height; r++) { primary[r] = rows[r].toString(); rows[r].setLength(0); }
+                        savedRow = row; savedCol = col; row = col = 0;
+                    } else if (paramText.equals("?1049") && finalByte == 'l' && primary != null) {
+                        for (int r = 0; r < height; r++) rows[r] = new StringBuilder(primary[r]);
+                        row = savedRow; col = savedCol; primary = null;
+                    } else if (finalByte == 'A') {
                         int up = parseInt(params.toString(), 1);
                         row = Math.max(0, row - up);
                     } else if (finalByte == 'B') {
@@ -85,7 +108,8 @@ public class FakeTerminal {
                             }
                         }
                     } else if (finalByte == 'K') {
-                        rows[row].setLength(Math.min(col, rows[row].length()));
+                        if (parseInt(paramText, 0) == 2) rows[row].setLength(0);
+                        else rows[row].setLength(Math.min(col, rows[row].length()));
                     }
                     // 其余（SGR 着色等）无布局影响，直接跳过
                     i = j;
@@ -97,9 +121,9 @@ public class FakeTerminal {
                 i++;
             } else if (c == '\n') {
                 row++;
-                if (row >= height) {
+                if (row > scrollBottom) {
                     scrollUp(1);
-                    row = height - 1;
+                    row = scrollBottom;
                 }
                 i++;
             } else {
@@ -147,10 +171,10 @@ public class FakeTerminal {
     }
 
     private void scrollUp(int lines) {
-        for (int r = 0; r + lines < height; r++) {
+        for (int r = scrollTop; r + lines <= scrollBottom; r++) {
             rows[r] = rows[r + lines];
         }
-        for (int r = Math.max(0, height - lines); r < height; r++) {
+        for (int r = Math.max(scrollTop, scrollBottom + 1 - lines); r <= scrollBottom; r++) {
             rows[r] = new StringBuilder();
         }
     }

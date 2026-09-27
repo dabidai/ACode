@@ -18,6 +18,15 @@ public class TerminalUIController implements UIController {
     private final RenderContext renderContext;
     private final Consumer<String> submitUserInput;
     private Consumer<Supplier<String>> preparedInputSubmitter;
+    private Supplier<String> latestReply = () -> "";
+    private ClipboardService clipboard = new ClipboardService();
+    public void setLatestReply(Supplier<String> reply) { latestReply = reply; }
+    public void setClipboard(ClipboardService clipboard) { this.clipboard = clipboard; }
+    @Override public void copyTranscript(boolean all) {
+        String text = all ? String.join("\n", output.lines().stream().map(ScreenLayout::plain).toList()) : latestReply.get();
+        if (text == null || text.isEmpty()) { appendSystemMessage("没有可复制的回复"); return; }
+        appendSystemMessage(clipboard.copy(text) ? (all ? "已复制当前对话" : "已复制最新回复") : "复制失败：系统剪贴板不可用");
+    }
 
     public void setPreparedInputSubmitter(Consumer<Supplier<String>> submitter) {
         this.preparedInputSubmitter = submitter;

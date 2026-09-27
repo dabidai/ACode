@@ -28,11 +28,46 @@ public class InputPane {
     private final String prompt;
 
     public InputPane(Terminal terminal, String prompt, CommandRegistry registry) {
+        this(terminal, prompt, registry, null);
+    }
+
+    public InputPane(Terminal terminal, String prompt, CommandRegistry registry, ScreenRenderer screen) {
         this.prompt = prompt;
-        this.reader = new ResizeAwareLineReader(terminal, "acode");
+        this.reader = new ResizeAwareLineReader(screen == null ? terminal : EditorTerminal.wrap(terminal), "acode");
+        reader.screen(screen);
         reader.option(LineReader.Option.ERASE_LINE_ON_FINISH, true);
         reader.setCompleter(new SlashCompleter(registry));
         bindKeys();
+        if (screen != null) {
+            reader.option(LineReader.Option.MOUSE, true);
+            // Completion menus must not use JLine's independent screen buffer.
+            reader.option(LineReader.Option.AUTO_LIST, false);
+            reader.option(LineReader.Option.AUTO_MENU, false);
+            reader.option(LineReader.Option.LIST_AMBIGUOUS, false);
+            bindScreenKey("acode-page-up", "\033[5~", () -> screen.page(-1));
+            bindScreenKey("acode-page-down", "\033[6~", () -> screen.page(1));
+            bindScreenKey("acode-bottom", "\033[1;5F", screen::bottom);
+            reader.getKeyMaps().get(LineReader.MAIN).bind(new Reference("acode-bottom"), "\033[4;5~");
+            reader.getWidgets().put("acode-complete", () -> {
+                String value = reader.getBuffer().toString();
+                if (!value.startsWith("/") || value.contains(" ")) return true;
+                var matches = registry.visible().stream()
+                        .filter(command -> command.name().toLowerCase(java.util.Locale.ROOT)
+                                .startsWith(value.substring(1).toLowerCase(java.util.Locale.ROOT))).toList();
+                if (matches.size() == 1) {
+                    reader.getBuffer().clear(); reader.getBuffer().write("/" + matches.getFirst().name() + " ");
+                    reader.completionOverlay(null);
+                } else reader.completionOverlay(matches.stream().map(command -> "/" + command.name() + "  " + command.description()).toList());
+                return true;
+            });
+            reader.getKeyMaps().get(LineReader.MAIN).bind(new Reference("acode-complete"), "\t");
+            bindScreenKey("acode-dismiss-completion", "\033", () -> reader.completionOverlay(null));
+        }
+    }
+
+    private void bindScreenKey(String name, String sequence, Runnable action) {
+        reader.getWidgets().put(name, () -> { action.run(); return true; });
+        reader.getKeyMaps().get(LineReader.MAIN).bind(new Reference(name), sequence);
     }
 
     private void bindKeys() {

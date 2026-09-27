@@ -35,16 +35,17 @@ public final class PromptAnswerer {
         }
         LiveRegionRenderer live = renderContext.liveRenderer();
         Writer writer = renderContext.screenWriter();
-        live.appendCommitted(writer, event.question());
+        live.notice(writer, event.question());
         live.commitRegion();
-        int selected = new SelectionMenu(event.options(), "（↑/↓ 选择，回车确认，Esc 取消）", 0)
+        int selected = new SelectionMenu(event.options(),
+                (live instanceof ScreenRenderer ? event.question() + "\n" : "") + "（↑/↓ 选择，回车确认，Esc 取消）", 0)
                 .select(live, writer, new TerminalMenuKeySource(tui.terminal().reader()));
         if (selected < 0) {
-            live.appendCommitted(writer, "（已取消）");
+            live.notice(writer, "（已取消）");
             return null;
         }
         String picked = event.options().get(selected);
-        live.appendCommitted(writer, "（已选择「" + picked + "」）");
+        live.notice(writer, "（已选择「" + picked + "」）");
         return picked;
     }
 }

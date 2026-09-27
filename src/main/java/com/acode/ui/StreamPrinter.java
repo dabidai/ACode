@@ -34,6 +34,7 @@ public class StreamPrinter {
     /** 本次回复已出现的工具调用卡片（Anthropic 文本块先于 tool_use 块，之后不再有文本）。 */
     private final List<ToolCallDisplay> toolCalls = new ArrayList<>();
     private boolean textFinalized = false;
+    private boolean toolsDone;
     /** 当前文本块已提交进回滚的完整渲染行（去重：onDelta 全量 render，只追加新完成行）。 */
     private final List<String> committedLines = new ArrayList<>();
 
@@ -54,6 +55,7 @@ public class StreamPrinter {
     }
 
     public void onToolUse(ToolUseBlock toolUse) {
+        toolsDone = false;
         if (!textFinalized) {
             textFinalized = true;
             replaceTail(renderer.render());
@@ -70,17 +72,22 @@ public class StreamPrinter {
      * elapsedMsList 与 results 按声明顺序平行对齐，缺位补 0。
      */
     public void updateToolCalls(List<ToolResult> results, List<Long> elapsedMsList) {
+        if (live instanceof ScreenRenderer && toolsDone) return;
         if (toolCalls.isEmpty()) {
             return;
         }
         for (int i = 0; i < toolCalls.size(); i++) {
             ToolResult result = (i < results.size()) ? results.get(i) : null;
             long elapsed = (i < elapsedMsList.size()) ? elapsedMsList.get(i) : 0;
+            if (live instanceof ScreenRenderer) {
+                for (String heading : toolCalls.get(i).renderedLines()) output.appendLine(heading);
+            }
             List<String> lines = toolCalls.get(i).appendDone(result, elapsed);
             for (String line : lines) {
                 output.appendLine(line);
             }
         }
+        toolsDone = true;
         flushCards();
     }
 
@@ -91,6 +98,7 @@ public class StreamPrinter {
         committedLines.clear();
         toolCalls.clear();
         textFinalized = false;
+        if (live instanceof ScreenRenderer screen) screen.activity("");
         String msg = error.getMessage() != null ? error.getMessage() : error.getClass().getSimpleName();
         String errorLine = "（错误：" + msg + "）";
         output.appendLine(errorLine);
@@ -107,16 +115,17 @@ public class StreamPrinter {
         toolCalls.clear();
         responseLines = 0;
         textFinalized = false;
+        if (live instanceof ScreenRenderer screen) screen.activity("");
     }
 
     private void replaceTail(String rendered) {
         output.removeLast(responseLines);
         responseLines = 0;
         if (!rendered.isEmpty()) {
-            int before = output.lineCount();
             output.append(rendered);
-            responseLines = output.lineCount() - before;
+            responseLines = Math.min(output.lineCount(), Strings.splitLines(rendered).size());
         }
+        if (live instanceof ScreenRenderer screen) screen.refresh();
         flushCompletedLines();
     }
 
@@ -154,6 +163,15 @@ public class StreamPrinter {
 
     /** 追加各卡片尚未写屏的渲染行进回滚（运行中一行、终态一行，各只写一次）。 */
     private void flushCards() {
+        if (live instanceof ScreenRenderer screen) {
+            List<String> running = new ArrayList<>();
+            for (ToolCallDisplay card : toolCalls) {
+                if (!toolsDone) running.addAll(card.renderedLines());
+            }
+            screen.activity(String.join(" · ", running));
+            // Completed cards are already in OutputPane; never append duplicate screen lines.
+            return;
+        }
         for (ToolCallDisplay card : toolCalls) {
             List<String> lines = card.renderedLines();
             int from = card.screenAppended();

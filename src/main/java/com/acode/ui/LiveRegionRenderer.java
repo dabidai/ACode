@@ -204,6 +204,9 @@ public class LiveRegionRenderer {
         rowsWritten = 0;
     }
 
+    /** A notice with no separate OutputPane append at the call site. */
+    public void notice(Writer out, String text) { appendCommitted(out, text); }
+
     private static void writeSequence(Writer out, int up, List<String> segs) {
         try {
             if (up > 0) {

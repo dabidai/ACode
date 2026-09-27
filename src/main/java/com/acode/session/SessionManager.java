@@ -115,13 +115,19 @@ public final class SessionManager {
     public void renderLoaded(String action, String id, List<ChatMessage> messages) {
         LiveRegionRenderer live = renderContext.liveRenderer();
         Writer writer = renderContext.screenWriter();
-        live.clearScreen(writer);
-        output.clear();
-        String banner = "（已" + action + "会话 " + id + "，共 " + messages.size() + " 条消息）";
-        output.appendLine(banner);
-        live.appendCommitted(writer, banner);
-        for (ChatMessage message : messages) {
-            appendHistoryMessage(message, live, writer);
+        com.acode.ui.ScreenRenderer screen = live instanceof com.acode.ui.ScreenRenderer s ? s : null;
+        if (screen != null) screen.beginUpdate();
+        try {
+            live.clearScreen(writer);
+            output.clear();
+            String banner = "（已" + action + "会话 " + id + "，共 " + messages.size() + " 条消息）";
+            output.appendLine(banner);
+            live.appendCommitted(writer, banner);
+            for (ChatMessage message : messages) {
+                appendHistoryMessage(message, live, writer);
+            }
+        } finally {
+            if (screen != null) screen.endUpdate();
         }
     }
 

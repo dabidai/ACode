@@ -16,6 +16,7 @@ public interface UIController {
 
     /** 追加一行系统消息（进输出区与回滚） */
     void appendSystemMessage(String text);
+    default void copyTranscript(boolean all) { appendSystemMessage("没有可复制的回复"); }
 
     /** 把文本当作用户输入发给 Agent（走既有对话入口） */
     void submitUserInput(String text);

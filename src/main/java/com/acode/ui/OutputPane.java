@@ -13,6 +13,9 @@ public class OutputPane {
 
     private final int maxLines;
     private final List<String> lines = new ArrayList<>();
+    private long firstLine;
+    public record Snapshot(long firstLine, List<String> lines) {}
+    public synchronized Snapshot snapshot() { return new Snapshot(firstLine, List.copyOf(lines)); }
 
     public OutputPane() {
         this(DEFAULT_MAX_LINES);
@@ -43,11 +46,13 @@ public class OutputPane {
         lines.add(line);
         while (lines.size() > maxLines) {
             lines.remove(0);
+            firstLine++;
         }
     }
 
     public synchronized void clear() {
         lines.clear();
+        firstLine = 0;
     }
 
     /** 从末尾移除 count 行（超出已有行数则全部移除）；count ≤ 0 无操作。 */

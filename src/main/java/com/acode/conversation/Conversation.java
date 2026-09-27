@@ -232,6 +232,10 @@ public class Conversation {
     }
 
     public ChatRequest buildRequest(List<Tool> requestTools, ChatMessage turnReminder, String modelOverride) {
+        return buildRequestWithReminders(requestTools, turnReminder == null ? List.of() : List.of(turnReminder), modelOverride);
+    }
+
+    public ChatRequest buildRequestWithReminders(List<Tool> requestTools, List<ChatMessage> reminders, String modelOverride) {
         List<ChatMessage> requestMessages = new ArrayList<>();
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             requestMessages.add(ChatMessage.of(ChatMessage.Role.SYSTEM, systemPrompt));
@@ -240,9 +244,7 @@ public class Conversation {
             requestMessages.add(environment);
         }
         requestMessages.addAll(sanitize(messages));
-        if (turnReminder != null) {
-            requestMessages.add(turnReminder);
-        }
+        requestMessages.addAll(reminders);
         return ChatRequest.builder()
                 .model(modelOverride == null ? model : modelOverride)
                 .thinking(thinking)

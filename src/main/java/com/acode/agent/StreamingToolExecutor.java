@@ -28,6 +28,24 @@ import java.util.concurrent.atomic.AtomicReference;
  * ALLOW 直接执行；「始终允许」记会话 + 持久化本地规则（写盘失败仅警告，不阻断）。
  */
 public class StreamingToolExecutor {
+    private com.acode.hook.HookEngine hookEngine;
+    public void setHookEngine(com.acode.hook.HookEngine engine) { this.hookEngine = engine; }
+
+    private com.acode.hook.HookEngine.Approval hookApproval(BlockingQueue<AgentEvent> events, AtomicBoolean cancelled) {
+        return (tool, args) -> {
+            if (cancelled.get()) return false;
+            ToolUseBlock request = new ToolUseBlock("hook-" + java.util.UUID.randomUUID(), tool.name(), args);
+            PermissionResponse answer = confirmationGate.confirm(request, events, cancelled);
+            if (answer == PermissionResponse.ALLOW_ALWAYS && permissionChecker != null) rememberAlwaysAllow(tool, request);
+            return !cancelled.get() && answer != PermissionResponse.DENY;
+        };
+    }
+
+    private void postHook(ToolUseBlock call, ToolResult result, BlockingQueue<AgentEvent> events, AtomicBoolean cancelled) {
+        if (hookEngine != null && !cancelled.get()) hookEngine.fire(com.acode.hook.HookEvents.POST_TOOL_USE,
+                new com.acode.hook.HookContext(com.acode.hook.HookEvents.POST_TOOL_USE, call.name(), call.input(), null,
+                        result.isError() ? result.content() : null), hookApproval(events, cancelled));
+    }
 
     private static final Logger log = LoggerFactory.getLogger(StreamingToolExecutor.class);
 
@@ -181,11 +199,23 @@ public class StreamingToolExecutor {
             failAndEmit(call, results, index, events, "用户拒绝执行「" + call.name() + "」");
             return;
         }
+        if (cancelled.get()) return;
+        if (tool != null && hookEngine != null) {
+            var decision = hookEngine.fire(com.acode.hook.HookEvents.PRE_TOOL_USE,
+                    new com.acode.hook.HookContext(com.acode.hook.HookEvents.PRE_TOOL_USE, call.name(), call.input(), null, null),
+                    hookApproval(events, cancelled));
+            if (decision.rejected()) {
+                failAndEmit(call, results, index, events, "Hook 拒绝" + (decision.reason().isEmpty() ? "" : "：" + decision.reason()));
+                return;
+            }
+        }
+        if (cancelled.get()) return;
         if (tool instanceof InteractiveTool interactive) {
             ToolResult result = interactive.executeInteractive(call, events, cancelled);
             if (cancelled.get()) {
                 return; // fillCancelled 兜底「已取消」
             }
+            postHook(call, result, events, cancelled);
             results[index] = result;
             // 交互耗时记 0：不含用户思考时间
             AgentEvent.putSafe(events, new ToolResultEvent(call.id(), call.name(),
@@ -199,6 +229,7 @@ public class StreamingToolExecutor {
         if (cancelled.get()) {
             return;
         }
+        if (tool != null) postHook(call, result, events, cancelled);
         results[index] = result;
         AgentEvent.putSafe(events, new ToolResultEvent(call.id(), call.name(),
                 result.content(), result.isError(), elapsedMs, result.display()));

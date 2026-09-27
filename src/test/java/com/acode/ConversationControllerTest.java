@@ -44,6 +44,13 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ConversationControllerTest {
+    private String originalHome;
+    @TempDir Path fakeHome;
+    @org.junit.jupiter.api.BeforeEach void isolateHome() {
+        originalHome = System.getProperty("user.home");
+        System.setProperty("user.home", fakeHome.toString());
+    }
+    @org.junit.jupiter.api.AfterEach void restoreHome() { System.setProperty("user.home", originalHome); }
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -790,7 +797,7 @@ class ConversationControllerTest {
         List<String> names = controller.commandRegistry.visible().stream()
                 .map(Command::name).toList();
 
-        assertEquals(List.of("help", "compact", "resume", "memory", "permission",
+        assertEquals(List.of("help", "compact", "resume", "copy", "memory", "permission",
                         "status", "quit", "clear", "plan", "do", "review"), names,
                 "注册中心应在构造期装配全部内置命令，顺序即展示顺序");
     }

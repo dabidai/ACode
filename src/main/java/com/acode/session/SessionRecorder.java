@@ -34,6 +34,22 @@ public class SessionRecorder {
 
     private Path file;
     private BufferedWriter writer;
+    private final java.util.Set<String> hookOnceIds = new java.util.LinkedHashSet<>();
+
+    public synchronized void addHookOnce(String id) {
+        if (!hookOnceIds.add(id)) return;
+        try {
+            ensureWriter();
+            writer.write(hookLine(id, nowSeconds.getAsLong()));
+            writer.newLine();
+            writer.flush();
+        } catch (IOException e) { log.warn("Hook once 写盘失败：{}", e.getMessage()); }
+    }
+
+    private static String hookLine(String id, long ts) {
+        return com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                .put("hook_once", id).put("ts", ts).toString();
+    }
 
     /** 挂起重建监听：加载/恢复会话期间为 true，此时读出来的历史不该被当作"重建"整段重写 */
     private boolean suspended;
@@ -85,6 +101,7 @@ public class SessionRecorder {
         }
         long ts = nowSeconds.getAsLong();
         StringBuilder content = new StringBuilder();
+        for (String id : hookOnceIds) content.append(hookLine(id, ts)).append('\n');
         for (ChatMessage message : messages) {
             String line = SessionCodec.encode(message, ts);
             if (line != null) {
@@ -110,6 +127,8 @@ public class SessionRecorder {
     public synchronized void bind(Path sessionFile) {
         closeWriter();
         this.file = sessionFile;
+        hookOnceIds.clear();
+        if (sessionFile != null) hookOnceIds.addAll(SessionStore.readHookOnceIds(sessionFile));
     }
 
     /** 关闭句柄（/quit、EOF、中断都调）；幂等 */

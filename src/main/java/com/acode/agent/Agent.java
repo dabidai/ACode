@@ -47,6 +47,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 流错误。run() 在虚拟线程跑循环并返回事件队列，UI 订阅事件渲染。
  */
 public class Agent {
+    private com.acode.hook.HookEngine hookEngine;
+    private String hookMessage;
+    public void setHookEngine(com.acode.hook.HookEngine engine, String message) {
+        this.hookEngine = engine;
+        this.hookMessage = message;
+    }
     private com.acode.skill.SkillRuntime skillRuntime;
     private java.util.Set<String> requestToolNames;
     private long skillGeneration;
@@ -174,6 +180,8 @@ public class Agent {
         running.set(true);
         loopThread = Thread.ofVirtual().name("acode-agent").start(() -> {
             try {
+                if (hookEngine != null && !cancelled.get()) hookEngine.fire(com.acode.hook.HookEvents.TURN_START,
+                        com.acode.hook.HookContext.lifecycle(com.acode.hook.HookEvents.TURN_START, hookMessage));
                 loop();
             } catch (RuntimeException e) {
                 // 顶层兜底：未捕获异常转 ERROR 终止并通知 UI，避免虚拟线程静默死亡、用户无感知
@@ -479,6 +487,7 @@ public class Agent {
         }
         StreamingToolExecutor executor =
                 new StreamingToolExecutor(registry, planMode ? planContext : context, permissionChecker, confirmationGate);
+        executor.setHookEngine(hookEngine);
         if (requestToolNames != null) executor.setAllowedNames(requestToolNames);
         var candidates = new java.util.concurrent.ConcurrentHashMap<String, com.acode.skill.SkillActivation>();
         executor.setStagedExecution((call, tool) -> {
@@ -546,9 +555,12 @@ public class Agent {
             model = snapshot.model();
         }
         requestToolNames = tools.stream().map(Tool::name).collect(java.util.stream.Collectors.toUnmodifiableSet());
-        return conversation.buildRequest(tools, planMode
-                ? SystemReminder.wrap(PlanModePrompt.buildReminder(turn))
-                : turn == 1 ? oneShotReminder : null, model);
+        List<ChatMessage> reminders = new ArrayList<>();
+        ChatMessage reminder = planMode ? SystemReminder.wrap(PlanModePrompt.buildReminder(turn))
+                : turn == 1 ? oneShotReminder : null;
+        if (reminder != null) reminders.add(reminder);
+        if (hookEngine != null) hookEngine.drainPrompts().stream().map(SystemReminder::wrap).forEach(reminders::add);
+        return conversation.buildRequestWithReminders(tools, reminders, model);
     }
 
     /** plan 模式工具列表：读类工具 + ExitPlanMode，各恰好一次 */
@@ -579,6 +591,9 @@ public class Agent {
     }
 
     private void emit(AgentEvent event) {
+        if (event instanceof LoopComplete && hookEngine != null && !cancelled.get())
+            hookEngine.fire(com.acode.hook.HookEvents.TURN_END,
+                    com.acode.hook.HookContext.lifecycle(com.acode.hook.HookEvents.TURN_END, hookMessage));
         AgentEvent.putSafe(events, event);
     }
 

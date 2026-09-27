@@ -26,6 +26,20 @@ import java.util.stream.Stream;
  * 只负责目录、id 分配与读取（容忍坏行）；写入与句柄由 {@link SessionRecorder} 持有。
  */
 public class SessionStore {
+    public static Set<String> readHookOnceIds(Path file) {
+        Set<String> result = new java.util.LinkedHashSet<>();
+        if (file == null) return result;
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        try (var lines = Files.lines(file, StandardCharsets.UTF_8)) {
+            lines.forEach(line -> {
+                try {
+                    var json = mapper.readTree(line);
+                    if (json != null && !json.has("role") && json.path("hook_once").isTextual()) result.add(json.get("hook_once").asText());
+                } catch (IOException ignored) { }
+            });
+        } catch (IOException | java.io.UncheckedIOException e) { log.warn("读取 Hook once 失败：{}", e.getMessage()); }
+        return result;
+    }
 
     private static final Logger log = LoggerFactory.getLogger(SessionStore.class);
 

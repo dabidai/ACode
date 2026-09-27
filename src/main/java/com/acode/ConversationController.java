@@ -153,6 +153,25 @@ public class ConversationController {
     private PermissionChecker permissionChecker;
 
     private ExchangeRunner exchangeRunner;
+    private com.acode.hook.HookEngine hookEngine;
+    private boolean hookSessionStarted;
+
+    com.acode.hook.HookEngine hookEngine() {
+        if (hookEngine == null) {
+            var loaded = com.acode.hook.HookLoader.load(projectRoot, userHome());
+            loaded.errors().forEach(System.err::println);
+            hookEngine = new com.acode.hook.HookEngine(loaded.hooks(), new com.acode.hook.HookActions(projectRoot),
+                    this::permissionChecker, sessionManager.recorder()::addHookOnce);
+        }
+        return hookEngine;
+    }
+
+    private void startHookSession() {
+        if (hookSessionStarted) return;
+        hookSessionStarted = true;
+        hookEngine().fire(com.acode.hook.HookEvents.SESSION_START,
+                com.acode.hook.HookContext.lifecycle(com.acode.hook.HookEvents.SESSION_START, null));
+    }
     private CommandProcessor commandProcessor;
 
     /**
@@ -322,15 +341,21 @@ public class ConversationController {
     }
 
     private void start() {
+        hookEngine(); // Report invalid configuration before opening the full-screen UI.
         try (AcodeTerminal terminal = AcodeTerminal.open()) {
             this.tui = terminal;
             try {
                 this.renderContext.attachTui(terminal);
                 this.output = new OutputPane();
+                terminal.openScreen(output);
+                if (terminal.screen() != null) terminal.screen().labels(() -> permissionChecker().mode().configValue(), () -> {
+                    int max = conversation.maxContextTokens();
+                    return StatusBar.infoLine(conversation.model(), max <= 0 ? 0 :
+                            (double) conversation.estimateContextTokens() / max,
+                            projectRoot.toString(), Math.max(1, terminal.width() - 1));
+                });
                 LiveRegionRenderer live = liveRenderer();
                 Writer writer = screenWriter();
-                renderContext.updateStatusLines(java.util.Collections.nCopies(
-                        StatusBar.frameReservedRows(terminal.height()), ""));
                 output.append(BANNER);
                 live.appendCommitted(writer, BANNER);
                 output.appendLine("输入 /help 查看命令，/quit 退出");
@@ -341,6 +366,7 @@ public class ConversationController {
                 // 恢复会话后再构建 system 提示：注入的是恢复后的状态（projectRoot 也已定型）
                 restoreIfResume();
                 initSessionState();
+                startHookSession();
                 commandProcessor().mainLoop();
             } finally {
                 // Restore the full scrolling region before Terminal.close();
@@ -348,7 +374,7 @@ public class ConversationController {
                 renderContext.closeStatus();
                 // Leave the shell on a clean visible screen while preserving
                 // the terminal's scrollback for the user's own history.
-                liveRenderer().clearScreen(screenWriter());
+                if (terminal.screen() == null) liveRenderer().clearScreen(screenWriter());
             }
         } catch (IllegalStateException e) {
             System.err.println(e.getMessage());
@@ -413,6 +439,9 @@ public class ConversationController {
         loaded.staleReminder().ifPresent(text -> pendingTurnReminder = text);
 
         sessionManager().renderLoaded(action, session.id(), loaded.messages());
+        hookEngine().loadOnceIds(SessionStore.readHookOnceIds(file));
+        hookSessionStarted = false;
+        startHookSession();
     }
 
     /**
@@ -431,6 +460,14 @@ public class ConversationController {
                     this::lastDeliveredPlanPath,
                     () -> this.deliveredPlanPath = null);
             ui.setPreparedInputSubmitter(input -> handlePreparedExchange(input, this::ctrlCPressed, () -> {}));
+            ui.setLatestReply(() -> {
+                var messages = conversation.history();
+                for (int i = messages.size() - 1; i >= 0; i--) {
+                    var message = messages.get(i);
+                    if (message.role() == ChatMessage.Role.ASSISTANT && !message.content().isEmpty()) return message.content();
+                }
+                return "";
+            });
             // 上下文工厂：只有 args 每次不同，其余依赖装配时固定打包
             PermissionChecker checker = permissionChecker();
             ContextManager contexts = contextManager();
@@ -493,6 +530,11 @@ public class ConversationController {
                 @Override
                 public void erase() {
                     footerVisible = false;
+                    if (tui != null && !tui.interactive()) return;
+                    if (tui != null && tui.screen() != null) {
+                        tui.screen().submitted();
+                        return;
+                    }
                     org.jline.utils.Status status = renderContext.status();
                     if (status != null && status.size() > 0 && tui != null) {
                         tui.terminal().puts(InfoCmp.Capability.cursor_address,
@@ -549,7 +591,7 @@ public class ConversationController {
      * <p>终端不支持信号（测试路径、dumb 终端）时跳过即可，只是退回「下一轮刷新」这条更慢的路径。
      */
     private void installResizeRefresh() {
-        if (tui == null) {
+        if (tui == null || tui.screen() != null) {
             return;
         }
         try {
@@ -582,6 +624,7 @@ public class ConversationController {
         renderContext.hideStatusLines();
         liveRenderer().clearScreen(screenWriter());
         output.clear();
+        if (tui != null && tui.screen() != null) tui.screen().refresh();
     }
 
     /** 上下文管理门面：懒装配一次（provider/conversation/工作目录/预算策略）；clear 钩子已挂 conversation */
@@ -687,12 +730,14 @@ public class ConversationController {
 
     /** 交换执行器：惰性构造，必须晚于全部测试 setter（捕获当时的 output/RenderContext/应答器）。 */
     private ExchangeRunner exchangeRunner() {
+        startHookSession();
         if (exchangeRunner == null) {
             exchangeRunner = new ExchangeRunner(provider, config, conversation, toolRegistry,
                     output, renderContext, confirmAnswerer, choiceAnswerer, projectRoot, this::permissionChecker);
             exchangeRunner.setContextManager(contextManager());
             exchangeRunner.setMemoryManager(memoryManager);
             exchangeRunner.setSkillRuntime(skillRuntime);
+            exchangeRunner.setHookEngine(hookEngine());
         }
         return exchangeRunner;
     }
@@ -730,6 +775,7 @@ public class ConversationController {
             return false;
         }
         try {
+            if (tui.screen() != null) return tui.screen().pollNavigation();
             if (tui.terminal().reader().peek(10) == 0x03) {
                 tui.terminal().reader().read(0);
                 return true;
@@ -742,6 +788,7 @@ public class ConversationController {
 
     /** 退出路径：关闭活跃会话句柄（不整存、不新建文件）。 */
     void closeSession() {
+        if (hookEngine != null) hookEngine.close();
         sessionManager().closeSession();
     }
 

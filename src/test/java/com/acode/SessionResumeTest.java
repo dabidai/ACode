@@ -32,6 +32,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** T6 恢复四步的集成验证：悬空工具调用、超长会话自动压缩、时间跨度提醒只出现一次。 */
 class SessionResumeTest {
+    private String originalHome;
+    @TempDir Path fakeHome;
+    @org.junit.jupiter.api.BeforeEach void isolateHome() {
+        originalHome = System.getProperty("user.home");
+        System.setProperty("user.home", fakeHome.toString());
+    }
+    @org.junit.jupiter.api.AfterEach void restoreHome() { System.setProperty("user.home", originalHome); }
 
     private static final ObjectMapper JSON = new ObjectMapper();
 

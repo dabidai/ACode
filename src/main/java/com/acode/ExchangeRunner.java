@@ -51,6 +51,8 @@ import java.util.function.Supplier;
 
 /** 单轮 exchange 的执行：追加用户消息 → 建 Agent → 事件轮询分发 → 收尾。 */
 public class ExchangeRunner {
+    private com.acode.hook.HookEngine hookEngine;
+    void setHookEngine(com.acode.hook.HookEngine engine) { this.hookEngine = engine; }
     private com.acode.skill.SkillRuntime skillRuntime;
     void setSkillRuntime(com.acode.skill.SkillRuntime runtime) { this.skillRuntime = runtime; }
 
@@ -128,6 +130,7 @@ public class ExchangeRunner {
         }
         output.append("● " + input + "\n");
         LiveRegionRenderer live = renderContext.liveRenderer();
+        if (live instanceof com.acode.ui.ScreenRenderer screen) screen.bottom();
         Writer writer = renderContext.screenWriter();
         live.commitRegion(); // 上一轮活跃区已留在屏上作历史，本轮菜单重绘状态归零
         live.appendCommitted(writer, "● " + input);
@@ -136,6 +139,7 @@ public class ExchangeRunner {
                 new ToolContext(projectRoot), maxIterations(), contextManager);
         agent.setPlanMode(planMode);
         agent.setSkillRuntime(skillRuntime);
+        agent.setHookEngine(hookEngine, input);
         agent.setConfirmationGate(new EventConfirmationGate());
         agent.setPermissionChecker(permissionCheckerSupplier.get());
         agent.setOneShotReminder(pendingReminder);

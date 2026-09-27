@@ -23,6 +23,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * （注册时机在 Agent 首次构建前）。
  */
 class McpWiringTest {
+    private String originalHome;
+    @TempDir Path fakeHome;
+    @org.junit.jupiter.api.BeforeEach void isolateHome() {
+        originalHome = System.getProperty("user.home");
+        System.setProperty("user.home", fakeHome.toString());
+    }
+    @org.junit.jupiter.api.AfterEach void restoreHome() { System.setProperty("user.home", originalHome); }
 
     @TempDir
     Path tempDir;

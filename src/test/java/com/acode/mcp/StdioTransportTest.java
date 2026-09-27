@@ -110,7 +110,7 @@ class StdioTransportTest {
     void subprocessReceivesOnlyWhitelistedEnvironment() throws Exception {
         List<String> whitelist = ProcessEnv.keysFor(System.getProperty("os.name"));
         String excludedKey = System.getenv().keySet().stream()
-                .filter(k -> !whitelist.contains(k) && !k.isBlank())
+                .filter(k -> whitelist.stream().noneMatch(allowed -> allowed.equalsIgnoreCase(k)) && !k.isBlank())
                 .findFirst()
                 .orElse("ACODE_TEST_UNSET");
         StdioTransport transport = new StdioTransport(fakeServerCommand(), WORK_DIR);

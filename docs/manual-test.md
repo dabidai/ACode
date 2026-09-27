@@ -617,3 +617,33 @@
 - [ ] 临时 Git 仓库含已暂存、未暂存及敏感文件，调用 `/commit`：核对仅指定文件进入提交、英文 conventional 标题不超过 72 字符、权限确认记录正确。
 - [ ] `/test` 分别处理测试全绿、代码错误和断言错误；无报告时覆盖率显示“未测量”，有报告时只报告实际数值。
 - [ ] 创建 `mode: fork` 定义，命令和模型加载都显示未实现提示，随后正常对话仍可进行。
+
+## 全屏 UI 回归（2026-09-26）
+
+当前构建使用备用屏幕；对话独立滚动、输入框固定底部。退出后应恢复原 shell 画面。复制使用 `/copy`（最新回复）或 `/copy all`（保留的对话），不依赖原生回滚。
+
+先在项目根目录执行 `mvn package -DskipTests`。在 Windows Terminal 的 PowerShell 中执行 `./probe/run-fullscreen-ui.ps1`，或在 CMD 中执行 `java -cp target/acode.jar probe/FullscreenProbe.java`。
+
+探针不连接模型、MCP 或真实会话，只用合成消息，复用生产渲染器、编辑器、菜单和会话恢复绘制入口。
+
+1. 80×24、120×40 下分别启动，欢迎内容应从顶部排列，输入框只在底部出现一次。
+2. 输入 `/resume`，依次选择短会话、长会话、空会话，再打开菜单按 Esc；正文内部不增加布局空行，旧菜单不留残影。
+3. 滚轮和 PageUp/PageDown 回看历史，Ctrl+End 返回末尾；输入框不随内容滚动。
+4. 使用 Shift+Enter 输入多行中文和英文，粘贴多行内容，连续拖动窗口后提交；内容不丢失、提交一次。
+5. `/stream` 期间回看和缩放，未换行的尾部也应逐步出现，回看位置不被抢走。
+6. `/copy` 后粘贴到文本编辑器；探针复制当前合成对话。生产程序 `/copy` 复制最新助手回复。
+7. `/quit`、Ctrl+C、空输入 Ctrl+D 各测试一次，检查 shell 光标与鼠标恢复。
+
+探针通过后，再用 `java -jar target/acode.jar` 在实际应用中复核首次启动及 `/resume`。不要将自动化通过或探针通过等同于实际应用真机验收。记录 Windows Terminal 版本、shell、尺寸、jar SHA-256 和每项结果。
+
+# 阶段十一（ch11）：Hook 生命周期钩子与自动化 — 手动验收
+
+本轮未运行真实终端/真实 provider，以下保持未勾选。自动化覆盖见 docs/ch11/checklist.md。
+准备独立临时项目和测试用用户目录，不改真实用户配置；使用 JDK 21，先执行 mvn package。配置范例见 docs/ch11/implementation.md。
+
+- [ ] HK1：写 `event: pre_toool_use` 的 hooks.yaml，运行最新 jar；进入全屏前看到配置文件路径、条目序号、id 和事件名错误，仍可正常交互。
+- [ ] HK2：为 post_tool_use + WriteFile 配置 command，将带引号的 `$FILE_PATH` 追加进临时标记文件；让模型写 Java 文件，确认工具成功后标记出现。所需权限确认应正常展示。
+- [ ] HK3：为 package-lock.json 配置 pre_tool_use + prompt + reject，要求模型写该文件；确认拒绝原因可见、模型换做法、文件不存在。
+- [ ] HK4：配置 session_start + prompt + once；新会话首轮体现提醒，退出并 --resume 后不重发，再开新会话重新出现。检查 JSONL 的 hook_once 行无 role。
+- [ ] HK5：post_tool_use 配置 `exit 1`，放行动作后仍完成对话；日志包含 `Hook 命令非零退出 [<id>]：exit=1`，终端无执行异常日志。
+- [ ] HK6：本地、项目、测试用户三个配置各追加不同标记，触发一次事件，核对 local → project → user 顺序；无交互入口的未授权命令应跳过，使用明确允许的固定测试命令验证自动执行。

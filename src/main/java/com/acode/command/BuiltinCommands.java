@@ -49,6 +49,7 @@ public final class BuiltinCommands {
         registry.register(help(registry));
         registry.register(compact());
         registry.register(resume());
+        registry.register(copy());
         registry.register(memory());
         registry.register(permission());
         registry.register(status());
@@ -200,6 +201,16 @@ public final class BuiltinCommands {
             } else {
                 emit(ctx.ui(), List.of("（已取消）"));
             }
+            return CommandResult.CONTINUE;
+        });
+    }
+
+    static Command copy() {
+        return new Command("copy", List.of(), "复制最新回复或当前对话", "/copy [all]",
+                CommandType.LOCAL, null, false, ctx -> {
+            if (ctx.args() != null && !ctx.args().equals("all")) {
+                emit(ctx.ui(), List.of("用法：/copy [all]"));
+            } else ctx.ui().copyTranscript("all".equals(ctx.args()));
             return CommandResult.CONTINUE;
         });
     }

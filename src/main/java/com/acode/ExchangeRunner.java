@@ -67,6 +67,8 @@ public class ExchangeRunner {
     private final Function<ConfirmationRequestEvent, PermissionResponse> confirmAnswerer;
     private final Function<ChoiceRequestEvent, String> choiceAnswerer;
     private final Path projectRoot;
+    private Supplier<Path> workingDirectory;
+    void setWorkingDirectory(Supplier<Path> supplier) { workingDirectory = supplier; }
     private final Supplier<PermissionChecker> permissionCheckerSupplier;
 
     /** 上下文管理门面（T8 装配注入）：大结果落盘 + 自动/紧急压缩随 Agent 每轮生效；null 则跳过 */
@@ -136,7 +138,7 @@ public class ExchangeRunner {
         live.appendCommitted(writer, "● " + input);
 
         Agent agent = new Agent(provider, conversation, toolRegistry,
-                new ToolContext(projectRoot), maxIterations(), contextManager);
+                new ToolContext(workingDirectory == null ? projectRoot : workingDirectory.get()), maxIterations(), contextManager);
         agent.setPlanMode(planMode);
         agent.setSkillRuntime(skillRuntime);
         agent.setHookEngine(hookEngine, input);

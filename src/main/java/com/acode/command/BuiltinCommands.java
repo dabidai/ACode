@@ -46,6 +46,10 @@ public final class BuiltinCommands {
 
     /** 一次性注册全部内置命令；注册顺序即帮助与补全的展示顺序 */
     public static void registerAll(CommandRegistry registry) {
+        registerAll(registry, () -> null);
+    }
+
+    public static void registerAll(CommandRegistry registry, java.util.function.Supplier<com.acode.worktree.WorktreeManager> worktrees) {
         registry.register(help(registry));
         registry.register(compact());
         registry.register(resume());
@@ -53,6 +57,7 @@ public final class BuiltinCommands {
         registry.register(memory());
         registry.register(permission());
         registry.register(status());
+        registry.register(WorktreeCommand.command(worktrees));
         registry.register(quit());
         registry.register(clear());
         registry.register(plan());

@@ -23,6 +23,18 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class PermissionCheckerTest {
+    @Test void worktreeRelativePlanPathCannotBorrowMainRepositoryPlanException() throws Exception {
+        Path worktree = Files.createDirectories(projectRoot.resolve(".acode/worktrees/a"));
+        Files.createDirectories(worktree.resolve(".acode/plans"));
+        var permission = checker(PermissionMode.PLAN);
+        var write = tool("WriteFile", Permission.WRITE);
+        var input = args("file_path", ".acode/plans/task.md");
+        assertEquals(Decision.ALLOW, permission.check(write, input).decision());
+        assertEquals(Decision.ASK, permission.check(write, input, worktree).decision());
+        assertEquals(Decision.ALLOW, permission.check(write,
+                args("file_path", projectRoot.resolve(".acode/plans/task.md").toString()), worktree).decision());
+    }
+
 
     @TempDir
     Path projectRoot;

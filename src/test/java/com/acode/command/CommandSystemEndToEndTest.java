@@ -626,7 +626,7 @@ class CommandSystemEndToEndTest {
         FakeProvider provider = FakeProvider.streaming("回答");
         ConversationController controller = controller(provider);
 
-        assertEquals(List.of("/help", "/compact", "/resume", "/copy", "/memory", "/permission", "/status", "/quit",
+        assertEquals(List.of("/help", "/compact", "/resume", "/copy", "/memory", "/permission", "/status", "/worktree", "/quit",
                         "/clear", "/plan", "/do", "/review"),
                 candidates(controller.commandRegistry, "/"), "候选顺序与注册顺序一致");
         assertEquals(List.of("/compact"), candidates(controller.commandRegistry, "/com"), "按前缀过滤");

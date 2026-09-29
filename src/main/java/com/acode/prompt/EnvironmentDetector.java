@@ -27,7 +27,7 @@ public final class EnvironmentDetector {
         return detect(model, System.getProperty("user.dir"));
     }
 
-    static EnvironmentSnapshot detect(String model, String workDir) {
+    public static EnvironmentSnapshot detect(String model, String workDir) {
         return detect(model, workDir, new ShellDetector());
     }
 

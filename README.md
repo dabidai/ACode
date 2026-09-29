@@ -21,8 +21,8 @@ ACode 按阶段迭代构建，每阶段有独立设计文档（`docs/chXX/`）�
 | 阶段九 | Slash Command | `docs/ch09/` | ✅ 已完成 |
 | 阶段十 | Skill 系统 | `docs/ch10/` | ✅ 已实现（真实 provider 手测待验收） |
 | 阶段十一 | Hook 系统 | `docs/ch11/` | ✅ 已实现（真实 provider 手测待验收） |
-| 阶段十二 | SubAgent | `docs/ch12/`（待建） | 🚧 规划中 |
-| 阶段十三 | Worktree | `docs/ch13/`（待建） | 🚧 规划中 |
+| 阶段十二 | SubAgent | `docs/ch12/` | ✅ 已实现（终端手测待验收） |
+| 阶段十三 | Worktree | `docs/ch13/` | ✅ 已实现（终端手测待验收） |
 | 阶段十四 | Agent Teams | `docs/ch14/`（待建） | 🚧 规划中 |
 
 > 各章 spec / tasks / checklist 的共创流程见 `CLAUDE.md` 与 `AGENTS.md`。
@@ -74,6 +74,7 @@ java -jar target/acode.jar --resume # 恢复上次会话
 
 | 命令 | 别名 | 说明 |
 |---|---|---|
+| `/worktree` | — | 查看工作树；`create/enter/exit/remove/prune` 管理隔离工作目录 |
 | `/help` | `h` / `?` | 显示帮助；`/help <命令名>` 查看详细用法 |
 | `/compact` | `c` | 压缩上下文；占用低于 5000 token 时提示无需压缩；带参数作为保留重点 |
 | `/resume` | — | 弹出会话选择菜单恢复历史会话（↑/↓ 选择、回车加载、Esc 取消） |
@@ -160,7 +161,7 @@ mcp_servers:
 ## 🧪 测试
 
 ```bash
-mvn test   # 1256 个用例（1 个平台受限跳过）；本机内存偏紧时建议 MAVEN_OPTS="-Xmx768m" mvn test -DargLine="-Xmx512m"
+mvn test   # 1281 个用例（1 个平台受限跳过）；本机内存偏紧时建议 MAVEN_OPTS="-Xmx768m" mvn test -DargLine="-Xmx512m"
 ```
 
 ## 📁 项目结构
@@ -228,3 +229,18 @@ permissionMode: default
 `tools` 是可选白名单，`disallowedTools` 是可选黑名单；两者同时生效。定义启动加载，修改后需重启。父级权限、活动 Skill 范围与规划限制仍生效，子 Agent 不能继续派活；未明确授权的确认请求被拒绝，不弹子审批窗口。
 
 Skill 的 `mode: fork` 与 Hook 的 `type: agent` 已接入同一运行底座。配置及边界详见 [ch12 验收清单](docs/ch12/checklist.md) 和 [接口说明](docs/ch12/interface-notes.md)。真实终端验收步骤见 [manual-test](docs/manual-test.md)。
+
+## 阶段十三：Worktree
+
+在 Git 仓库根目录启动，使用 `/worktree create feat-a` 创建并进入；`/worktree enter feat-a` 切换已有目录；`/worktree exit` 返回主目录。无参查看当前箭头、分支和变更。`/worktree remove feat-a` 保护未提交、未跟踪、忽略文件及新增提交；确认丢弃时退出该工作树后输入 `/worktree remove feat-a --force`。移除前先断开链接，防止 Windows Git 沿 junction 删除主目录依赖。
+
+目录位于 `.acode/worktrees/`，只从当前提交创建，不复制主目录未提交修改。`--resume` 恢复工作树会话；`/worktree exit` 清除该记录。工作树操作不修改进程 cwd；模型环境提示、文件工具、Bash 及子 Agent 的工具目录跟随当前工作树。权限根、命令、记忆、会话和指令仍属于项目根；MCP 服务与 Hook command 保持启动目录。
+
+| 配置 | 默认值 | 含义 |
+|---|---|---|
+| `worktree.symlinkDirectories` | `[node_modules, .venv, vendor]` | 需要共享的单段依赖目录；空列表禁用链接 |
+| `worktree.staleAfterDays` | `7` | 临时工作树过期天数，正整数 |
+
+创建时尽力复制 `settings.local.json`、链接依赖、按 `.worktreeinclude` 复制忽略文件。清单仅支持根相对正向模式：`*`、`**`、`?`、目录尾 `/`、注释，不支持 `!`。已有文件不覆盖，管理目录不复制。hooks 沿用现有 Git 配置；只有仓库已启用 `extensions.worktreeConfig` 才配置工作树专属的绝对 hooks 路径，其他情况告警且不改共享配置。
+
+`/worktree prune` 与启动清理只处理管理器登记为 temporary 且匹配临时名称的过期工作树。手动创建（即使名为 `agent-a1234567`）永不自动清理；有忽略文件、未推送提交、活动会话或无法确认状态时保留。本章不自动为子 Agent 创建工作树，不自动合并或 push。元数据文件损坏时保留现场；不要同时运行多个 ACode 进程管理同一项目的工作树。

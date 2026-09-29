@@ -650,7 +650,7 @@
 
 # 阶段十二（ch12）：子 Agent — 手动验收
 
-本轮未调用真实 provider，也未进行真实终端视觉验收，以下保持未勾选。使用独立临时项目与测试用户目录，复制有效 provider 配置；不要修改真实用户配置。先用 JDK 21 执行 `mvn -DskipTests package`，再运行生成的 jar。记录 jar SHA-256、终端、模型、实际输出。
+2026-09-28 已完成真实 provider 的 Explore/Fork/Verification 底座冒烟，3/3 通过，共 11 次请求，证据与重跑方式见 [ch12/live-validation.md](ch12/live-validation.md)。下列场景还包含主流程或终端交互，不能据此整体勾选。用户确认暂不方便进行人工终端验收，保留待验收状态。手动操作时使用独立临时项目与测试用户目录，配置有效 provider；不要修改真实用户配置。先用 JDK 21 执行 `mvn -DskipTests package`，再运行生成的 jar。记录 jar SHA-256、终端、模型、实际输出。
 
 - [ ] SA1：提出「用 Explore 子 Agent 找出 src/main/java/com/acode/tool 下所有工具实现并总结」。default 档批准 Agent 后，只看到父级派发卡片与完成摘要，中间搜索过程不刷屏，结果引用真实文件。
 - [ ] SA2：连续讨论后提出「用子 Agent 读取 README 前十行，不指定类型」。检查子请求继承背景，子结果以 Scope: 开头且 ≤500 字；主模型转述不要求相同格式。
@@ -661,3 +661,20 @@
 - [ ] SA7：定义 `mode: fork`、`context: recent` 的 Skill，用斜杠和 LoadSkill 分别调用；只有结果返回，父级后续请求不含子中间历史或新激活的 Skill 范围。
 - [ ] SA8：配置匹配 ReadFile 的 `post_tool_use` agent Hook，提示其阅读一个固定文件。确认子工具不会递归触发 agent 动作，失败记日志而主对话继续。
 - [ ] SA9：分别在 Agent 工具与斜杠 fork Skill 运行中按 Ctrl+C，清理后继续输入并完成普通对话，终端无残影。
+
+## 阶段十三：Worktree（在仓库 clone 副本中验证）
+
+- [ ] 在路径含空格的 clone 根启动，`/help` 和 Tab 补全包含 `/worktree`。
+- [ ] `/worktree create demo` 后列表有当前箭头；让 Agent 读写相对文件，主目录同名文件不变。
+- [ ] `/worktree exit` 后再次读取同名文件得到主目录内容；`/status` 始终显示项目根。
+- [ ] 有修改时 `/worktree remove demo` 提示 `--force`；确认弃用后强制删除成功，主仓库依赖仍存在。
+- [ ] 配置依赖目录在 Windows 可用（符号链接或 junction）；配置失败时看到警告，创建仍成功。
+- [ ] 进入工作树后 `/quit`，以 `--resume` 重启回到该工作树；`/worktree exit` 后重启不恢复该记录。
+- [ ] `/worktree prune` 不删除手动创建的 `agent-a1234567`，错误命令给出用法并可继续输入。
+
+自动化使用临时真实 Git 仓库及 FakeProvider，证据见 `docs/ch13/test-review.md`；上述终端项目未实跑时不得勾选。
+
+## 2026-09-28 Resize 死锁专项
+- 使用修复后的 jar，在 CMD、PowerShell、Windows Terminal 中分别输入中文与英文多行；编辑时连续拖拽缩放至少 20 次，包括小窗口和恢复。
+- 测试补全、历史回看、提交一次、下一轮输入，以及 Ctrl+C / 空输入 Ctrl+D / /quit；观察无卡死、丢字、重复提交、新增残影，退出恢复终端。
+- 此项尚未实跑；自动化结果见 docs/ui-resize-deadlock/test-review.md，未实测不勾选根 checklist 中的真实终端项目。

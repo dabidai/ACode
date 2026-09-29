@@ -27,7 +27,7 @@ public class ConfigLoader {
     private static final List<String> KNOWN_KEYS =
             List.of("protocol", "model", "base_url", "api_key",
                     "max_context_tokens", "max_iterations", "tee", "permission_mode", "thinking",
-                    "memory_auto", "mcp_servers", "verification_agent");
+                    "memory_auto", "mcp_servers", "verification_agent", "worktree");
 
     /** 生产入口：全局配置在用户主目录，项目级配置在当前工作目录 */
     public static AppConfig loadDefault() {
@@ -128,6 +128,33 @@ public class ConfigLoader {
         }
         if (map.containsKey("base_url")) {
             config.setBaseUrl(stringValue(map, "base_url", source));
+        }
+        if (map.containsKey("worktree")) {
+            if (!(map.get("worktree") instanceof Map<?, ?> worktree))
+                throw new ConfigException(source + ": worktree 必须是映射");
+            for (Object key : worktree.keySet())
+                if (!List.of("symlinkDirectories", "staleAfterDays").contains(key))
+                    throw new ConfigException(source + ": worktree 未知字段 " + key);
+            if (worktree.containsKey("staleAfterDays")) {
+                Object days = worktree.get("staleAfterDays");
+                if (!(days instanceof Integer n) || n <= 0)
+                    throw new ConfigException(source + ": worktree.staleAfterDays 必须是正整数，当前值 " + days);
+                config.setWorktreeStaleAfterDays(n);
+            }
+            if (worktree.containsKey("symlinkDirectories")) {
+                if (!(worktree.get("symlinkDirectories") instanceof List<?> dirs))
+                    throw new ConfigException(source + ": worktree.symlinkDirectories 必须是列表");
+                var checked = new java.util.ArrayList<String>();
+                for (Object value : dirs) {
+                    if (!(value instanceof String dir) || !dir.matches("[a-zA-Z0-9._-]+")
+                            || dir.equals(".") || dir.equals("..") || dir.endsWith(".")
+                            || dir.equalsIgnoreCase(".git") || dir.equalsIgnoreCase(".acode")
+                            || com.acode.worktree.WorktreeNames.device(dir))
+                        throw new ConfigException(source + ": worktree.symlinkDirectories 含非法项 " + value + "：只允许单段相对目录名（如 node_modules）");
+                    checked.add(dir);
+                }
+                config.setWorktreeSymlinkDirectories(checked);
+            }
         }
         if (map.containsKey("api_key")) {
             config.setApiKey(stringValue(map, "api_key", source));

@@ -180,7 +180,7 @@ public class StreamingToolExecutor {
         }
         Tool tool = registry.available(call.name());
         if (tool != null && permissionChecker != null) {
-            CheckResult decision = permissionChecker.check(tool, call.input());
+            CheckResult decision = permissionChecker.check(tool, call.input(), context.workingDirectory());
             switch (decision.decision()) {
                 case DENY -> {
                     failAndEmit(call, results, index, events, "权限拒绝：" + decision.reason());

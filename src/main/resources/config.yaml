@@ -55,3 +55,7 @@ tee: false
 #     # permission: read                   # 可选：声明 read 则该 server 工具在 /plan 模式可见
 #     # enabled: true                      # 可选：开关，默认开
 
+
+worktree:
+  symlinkDirectories: [node_modules, .venv, vendor]
+  staleAfterDays: 7

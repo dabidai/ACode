@@ -153,6 +153,21 @@ public class ConversationController {
     private PermissionChecker permissionChecker;
 
     private ExchangeRunner exchangeRunner;
+    private com.acode.worktree.WorktreeManager worktreeManager;
+    private Thread worktreeCleanup;
+    private Path environmentWorkingDirectory;
+    synchronized com.acode.worktree.WorktreeManager worktrees() {
+        if (worktreeManager == null) worktreeManager = new com.acode.worktree.WorktreeManager(projectRoot, config);
+        return worktreeManager;
+    }
+    private Path toolWorkingDirectory() { return worktrees().workingDirectory(); }
+    void startWorktreeCleanup() {
+        if (worktreeCleanup != null) return;
+        var manager = worktrees();
+        worktreeCleanup = Thread.ofVirtual().name("worktree-cleanup").start(() -> {
+            try { manager.prune(); } catch (IOException e) { log.debug("Worktree 启动清理跳过：{}", e.getMessage()); }
+        });
+    }
     private com.acode.hook.HookEngine hookEngine;
     private boolean hookSessionStarted;
 
@@ -161,7 +176,7 @@ public class ConversationController {
             var loaded = com.acode.hook.HookLoader.load(projectRoot, userHome());
             loaded.errors().forEach(System.err::println);
             hookEngine = new com.acode.hook.HookEngine(loaded.hooks(), new com.acode.hook.HookActions(projectRoot,
-                    prompt -> subAgentRunner().run(agentDefinitions().get("general-purpose"), prompt, "Hook", null, projectRoot)),
+                    prompt -> subAgentRunner().run(agentDefinitions().get("general-purpose"), prompt, "Hook", null, toolWorkingDirectory())),
                     this::permissionChecker, sessionManager.recorder()::addHookOnce);
         }
         return hookEngine;
@@ -230,7 +245,7 @@ public class ConversationController {
         if (skillManager != null) return;
         skillRepository = new com.acode.skill.SkillRepository(projectRoot, userHome(), ignored -> {});
         skillRuntime = new com.acode.skill.SkillRuntime(skillRepository, toolRegistry, conversation);
-        skillRuntime.setForkHost(new com.acode.subagent.SkillForkAdapter(this::subAgentRunner, () -> projectRoot));
+        skillRuntime.setForkHost(new com.acode.subagent.SkillForkAdapter(this::subAgentRunner, this::toolWorkingDirectory));
         toolRegistry.register(new com.acode.skill.LoadSkillTool(skillRuntime));
         skillManager = new com.acode.skill.SkillManager(skillRepository, skillRuntime, commandRegistry,
                 this::initSessionState, this::emitLine);
@@ -277,7 +292,7 @@ public class ConversationController {
         toolRegistry.register(new com.acode.subagent.AgentTool(this::agentDefinitions, this::subAgentRunner));
         // 命令框架装配：一次性注册全部内置命令，注册顺序即帮助与补全的展示顺序
         this.commandRegistry = new CommandRegistry();
-        BuiltinCommands.registerAll(commandRegistry);
+        BuiltinCommands.registerAll(commandRegistry, this::worktrees);
         this.mcpManager = new McpManager(config, projectRoot);
         // 连接在 start() 里 UI 就位后做：连接耗时（含超时）不该挡在 banner 之前，
         // 告警也要落进输出区而不是裸 stderr
@@ -316,7 +331,8 @@ public class ConversationController {
         if (agentDefinitions != null) startupWarnings.addAll(agentDefinitions.warnings());
         conversation.setSystemPrompt(PromptBuilder.buildSystemPrompt(
                 instructions.text(), memoryManager.indexText(), skillRepository == null ? "" : skillRepository.indexText()));
-        conversation.setEnvironment(SystemReminder.environment(EnvironmentDetector.detect(config.getModel())));
+        environmentWorkingDirectory = toolWorkingDirectory();
+        conversation.setEnvironment(SystemReminder.environment(EnvironmentDetector.detect(config.getModel(), environmentWorkingDirectory.toString())));
         emitStartupWarnings();
     }
 
@@ -394,6 +410,7 @@ public class ConversationController {
                 restoreIfResume();
                 initSessionState();
                 startHookSession();
+                startWorktreeCleanup();
                 commandProcessor().mainLoop();
             } finally {
                 // Restore the full scrolling region before Terminal.close();
@@ -433,6 +450,8 @@ public class ConversationController {
         if (!resume) {
             return;
         }
+        String worktreeNotice = worktrees().restore();
+        if (worktreeNotice != null) emitLine(worktreeNotice);
         List<Session> sessions = sessionManager().store().list();
         if (sessions.isEmpty()) {
             sessionManager().notice("（没有可恢复的会话）");
@@ -720,6 +739,8 @@ public class ConversationController {
     /** 测试用：注入权限沙箱根（避免 @TempDir 文件路径被 sandbox 拦截）。 */
     void setProjectRoot(Path projectRoot) {
         this.projectRoot = projectRoot;
+        this.worktreeManager = null;
+        this.environmentWorkingDirectory = null;
     }
 
     /** 交互应答器：惰性构造，首次调用捕获当前 tui（语义与每次读 tui 字段一致）。 */
@@ -754,6 +775,11 @@ public class ConversationController {
     }
 
     private void handlePreparedExchange(java.util.function.Supplier<String> input, BooleanSupplier ctrlC, Runnable repaint) {
+        Path directory = toolWorkingDirectory();
+        if (!directory.equals(environmentWorkingDirectory)) {
+            conversation.setEnvironment(SystemReminder.environment(EnvironmentDetector.detect(config.getModel(), directory.toString())));
+            environmentWorkingDirectory = directory;
+        }
         ExchangeRunner runner = exchangeRunner();
         // 恢复会话后首轮的轮次提醒：只进请求、不进历史，用掉即清（第二轮不再出现）
         if (pendingTurnReminder != null) {
@@ -777,6 +803,7 @@ public class ConversationController {
         if (exchangeRunner == null) {
             exchangeRunner = new ExchangeRunner(provider, config, conversation, toolRegistry,
                     output, renderContext, confirmAnswerer, choiceAnswerer, projectRoot, this::permissionChecker);
+            exchangeRunner.setWorkingDirectory(this::toolWorkingDirectory);
             exchangeRunner.setContextManager(contextManager());
             exchangeRunner.setMemoryManager(memoryManager);
             exchangeRunner.setSkillRuntime(skillRuntime);
@@ -831,6 +858,10 @@ public class ConversationController {
 
     /** 退出路径：关闭活跃会话句柄（不整存、不新建文件）。 */
     void closeSession() {
+        if (worktreeCleanup != null) {
+            worktreeCleanup.interrupt();
+            try { worktreeCleanup.join(5000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        }
         if (hookEngine != null) hookEngine.close();
         sessionManager().closeSession();
     }

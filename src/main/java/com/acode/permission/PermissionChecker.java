@@ -136,6 +136,11 @@ public class PermissionChecker {
     }
 
     public CheckResult check(Tool tool, JsonNode args) {
+        return check(tool, args, null);
+    }
+
+    /** The sandbox root stays fixed; relative targets must match the actual tool working directory. */
+    public CheckResult check(Tool tool, JsonNode args, Path workingDirectory) {
         if (tool == null) {
             return CheckResult.ask();
         }
@@ -154,16 +159,22 @@ public class PermissionChecker {
             }
         }
 
+        String targetPath = content;
+        if ("file_path".equals(fieldOf(tool)) && content != null && workingDirectory != null) {
+            try { targetPath = workingDirectory.resolve(content).normalize().toString(); }
+            catch (java.nio.file.InvalidPathException e) { return CheckResult.deny("非法文件路径"); }
+        }
+
         // ④ 路径沙箱（内容字段为 file_path 的工具）：硬边界
-        if ("file_path".equals(fieldOf(tool)) && content != null && !sandbox.check(content)) {
-            return CheckResult.deny(sandbox.denyReason(content));
+        if ("file_path".equals(fieldOf(tool)) && content != null && !sandbox.check(targetPath)) {
+            return CheckResult.deny(sandbox.denyReason(targetPath));
         }
 
         // ⑤ plan 例外（仅 permission_mode=plan、写类工具）：canonical 判断在沙箱之后，防逃逸
         if (mode == PermissionMode.PLAN
                 && tool.permission() == Permission.WRITE
                 && content != null
-                && inPlansDir(content)) {
+                && inPlansDir(targetPath)) {
             return CheckResult.allow();
         }
 

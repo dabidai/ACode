@@ -798,7 +798,7 @@ class ConversationControllerTest {
                 .map(Command::name).toList();
 
         assertEquals(List.of("help", "compact", "resume", "copy", "memory", "permission",
-                        "status", "quit", "clear", "plan", "do", "review"), names,
+                        "status", "worktree", "quit", "clear", "plan", "do", "review"), names,
                 "注册中心应在构造期装配全部内置命令，顺序即展示顺序");
     }
 

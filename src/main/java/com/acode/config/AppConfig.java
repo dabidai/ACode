@@ -9,6 +9,12 @@ import java.util.Map;
  */
 public class AppConfig {
 
+    private java.util.List<String> worktreeSymlinkDirectories = java.util.List.of("node_modules", ".venv", "vendor");
+    private int worktreeStaleAfterDays = 7;
+    public java.util.List<String> getWorktreeSymlinkDirectories() { return worktreeSymlinkDirectories; }
+    public void setWorktreeSymlinkDirectories(java.util.List<String> value) { worktreeSymlinkDirectories = java.util.List.copyOf(value); }
+    public int getWorktreeStaleAfterDays() { return worktreeStaleAfterDays; }
+    public void setWorktreeStaleAfterDays(int value) { worktreeStaleAfterDays = value; }
     private String protocol;
     private String model;
     private String baseUrl;

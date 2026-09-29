@@ -154,6 +154,21 @@ public class ConversationController {
 
     private ExchangeRunner exchangeRunner;
     private com.acode.worktree.WorktreeManager worktreeManager;
+    private com.acode.team.TeamSession teamSession;
+    synchronized com.acode.team.TeamSession teams() {
+        if (teamSession == null) teamSession = new com.acode.team.TeamSession(projectRoot, provider, conversation,
+                toolRegistry, this::permissionChecker, () -> toolRegistry.availableList().stream()
+                    .filter(tool -> !planMode || tool.permission() == com.acode.tool.Permission.READ)
+                    .filter(tool -> skillRuntime == null || skillRuntime.snapshot().allows(tool.name()))
+                    .map(com.acode.tool.Tool::name).collect(java.util.stream.Collectors.toSet()),
+                new com.acode.team.TeamSession.Worktrees() {
+                    public Path create(String name) throws Exception { return Path.of(worktrees().create(name).entry().path()); }
+                    public void verifyRemovable(String name) throws Exception { worktrees().verifyRemovable(name); }
+                    public void remove(String name) throws Exception { worktrees().remove(name, false); }
+                }, this::emitLine);
+        teamSession.setHooks(this::hookEngine);
+        return teamSession;
+    }
     private Thread worktreeCleanup;
     private Path environmentWorkingDirectory;
     synchronized com.acode.worktree.WorktreeManager worktrees() {
@@ -289,7 +304,9 @@ public class ConversationController {
         DefaultToolset.registerAll(toolRegistry);
         toolRegistry.register(new ExitPlanModeTool());
         toolRegistry.register(new AskUserTool());
-        toolRegistry.register(new com.acode.subagent.AgentTool(this::agentDefinitions, this::subAgentRunner));
+        toolRegistry.register(new com.acode.subagent.AgentTool(this::agentDefinitions, this::subAgentRunner, this::teams));
+        for (String name : List.of("TeamCreate", "TeamDelete", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "SendMessage"))
+            toolRegistry.register(new com.acode.team.tools.LazyTeamTool(name, this::teams));
         // 命令框架装配：一次性注册全部内置命令，注册顺序即帮助与补全的展示顺序
         this.commandRegistry = new CommandRegistry();
         BuiltinCommands.registerAll(commandRegistry, this::worktrees);
@@ -325,6 +342,7 @@ public class ConversationController {
      * 启动告警（指令越界/跳过等）只在 UI 已就位时输出，启动不因记忆设施失败而中断。
      */
     void initSessionState() {
+        if (teamSession != null) { teamSession.close(); teamSession = null; }
         var instructions = ProjectInstructions.load(projectRoot, userHome());
         startupWarnings = new ArrayList<>(instructions.warnings());
         startupWarnings.addAll(memoryManager.drainWarnings());
@@ -424,6 +442,7 @@ public class ConversationController {
             System.err.println(e.getMessage());
         } finally {
             // /quit 与异常退出都关闭会话句柄并清理 MCP 子进程，避免残留句柄与进程
+            if (teamSession != null) teamSession.close();
             closeSession();
             closeMcpManager();
         }
@@ -738,6 +757,7 @@ public class ConversationController {
 
     /** 测试用：注入权限沙箱根（避免 @TempDir 文件路径被 sandbox 拦截）。 */
     void setProjectRoot(Path projectRoot) {
+        if (teamSession != null) { teamSession.close(); teamSession = null; }
         this.projectRoot = projectRoot;
         this.worktreeManager = null;
         this.environmentWorkingDirectory = null;
@@ -807,6 +827,7 @@ public class ConversationController {
             exchangeRunner.setContextManager(contextManager());
             exchangeRunner.setMemoryManager(memoryManager);
             exchangeRunner.setSkillRuntime(skillRuntime);
+            exchangeRunner.setAgentConfigurer(agent -> teams().configureLead(agent, config.isCoordinatorMode()));
             exchangeRunner.setHookEngine(hookEngine());
         }
         return exchangeRunner;
@@ -858,6 +879,7 @@ public class ConversationController {
 
     /** 退出路径：关闭活跃会话句柄（不整存、不新建文件）。 */
     void closeSession() {
+        if (teamSession != null) teamSession.close();
         if (worktreeCleanup != null) {
             worktreeCleanup.interrupt();
             try { worktreeCleanup.join(5000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }

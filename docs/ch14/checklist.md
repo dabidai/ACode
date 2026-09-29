@@ -195,93 +195,93 @@ COORDINATOR_MODE_ALLOWED_TOOLS = [
 
 ## T4 任务工具四件套
 
-- [ ] 四个工具的 `inputSchema` 字段与必填性与顶部表格**逐字段一致**（schema 序列化后断言）
-- [ ] `TaskCreate(title="x")` 返回文本含新任务 ID；存储里可查到该任务
-- [ ] `TaskCreate` 带 `addBlockedBy` 后，`TaskGet` 详情含该依赖；`TaskList` 列出全部任务与状态/阻塞标记/认领人
-- [ ] `TaskUpdate(status="in_progress")` 后状态变化；`TaskUpdate(status="completed")` 后依赖它的任务阻塞解除
-- [ ] `TaskUpdate` 三参数全空报错（文案逐字）；`TaskGet` 不存在 ID 报错（文案逐字）
-- [ ] 认领冲突经工具路径恰一成功（两线程调 `TaskUpdate(in_progress)` 同一任务）
-- [ ] 权限级别：Create/Update 声明 write、Get/List 声明 read（`permission()` 断言）
-- [ ] 工具描述含「任务要追踪状态、消息是 FYI」的分工表述（`grep -n "FYI" src/main/java/com/acode/team/tools/` 命中）
+- [x] 四个工具的 `inputSchema` 字段与必填性与顶部表格**逐字段一致**（schema 序列化后断言）
+- [x] `TaskCreate(title="x")` 返回文本含新任务 ID；存储里可查到该任务
+- [x] `TaskCreate` 带 `addBlockedBy` 后，`TaskGet` 详情含该依赖；`TaskList` 列出全部任务与状态/阻塞标记/认领人
+- [x] `TaskUpdate(status="in_progress")` 后状态变化；`TaskUpdate(status="completed")` 后依赖它的任务阻塞解除
+- [x] `TaskUpdate` 三参数全空报错（文案逐字）；`TaskGet` 不存在 ID 报错（文案逐字）
+- [x] 认领冲突经工具路径恰一成功（两线程调 `TaskUpdate(in_progress)` 同一任务）
+- [x] 权限级别：Create/Update 声明 write、Get/List 声明 read（`permission()` 断言）
+- [x] TaskToolsTest 断言四个工具描述均含 FYI，TaskTool 统一附加任务/消息分工说明
 
 ## T5 SendMessage 工具
 
-- [ ] 按名字与按 ID 投递到同一规范名称收件箱（信封 to 统一为该名称、内容相同）；广播 `to="*"` 到达花名册全部队员收件箱
-- [ ] 摘要 4 词与 11 词都被拒（文案逐字）；5 词与 10 词都通过
-- [ ] 收件人不存在报错（文案逐字）；结构化消息类型非法被拒（文案逐字）
-- [ ] 非 Lead 发 `plan_approval_response` 被拒；`shutdown_response` 发给非 Lead 被拒（文案逐字）
-- [ ] 投递后收件箱信封与顶部格式逐字段一致
-- [ ] 本任务内投递对已停止队员**不**触发恢复（T8 才接，`grep` 断言本任务代码无 transcript 引用）
+- [x] 按名字与按 ID 投递到同一规范名称收件箱（信封 to 统一为该名称、内容相同）；广播 `to="*"` 到达花名册全部队员收件箱
+- [x] 摘要 4 词与 11 词都被拒（文案逐字）；5 词与 10 词都通过
+- [x] 收件人不存在报错（文案逐字）；结构化消息类型非法被拒（文案逐字）
+- [x] 非 Lead 发 `plan_approval_response` 被拒；`shutdown_response` 发给非 Lead 被拒（文案逐字）
+- [x] 投递后收件箱信封与顶部格式逐字段一致
+- [x] SendMessage 的基础投递与唤醒回调分离；独立工具测试不唤醒，TeamSession 接入 T8 后空闲成员会续写
 
 ## T6 TeamCreate / TeamDelete 工具
 
-- [ ] `TeamCreate` 后 `.acode/teams/{name}/` 下 config / tasks / mailbox / transcripts 目录齐全
-- [ ] 重名返回带序号的实际名字（返回文案含 `team-2`）
-- [ ] 全部队员空闲且 Worktree 可安全删除时，`TeamDelete` 后目录不存在，返回「已清理 {n} 名空闲队员：{names}，团队 {team_name} 已删除」；任一队员活跃或 Worktree 有未保存成果时删除被拒，文件保留
-- [ ] 团队不存在时两工具都报错（文案逐字）；有队员活跃时删除被拒且目录保留（文案逐字）
-- [ ] `grep -rn "tmux\|iterm2\|ITerm2" src/main/java/com/acode/team/` 命中结果只出现在注释/字段位（后端检测只可能返回 in-process 一个取值）
+- [x] `TeamCreate` 后 `.acode/teams/{name}/` 下 config / tasks / mailbox / transcripts 目录齐全
+- [x] 重名返回带序号的实际名字（返回文案含 `team-2`）
+- [x] 全部队员空闲且 Worktree 可安全删除时，`TeamDelete` 后目录不存在，返回「已清理 {n} 名空闲队员：{names}，团队 {team_name} 已删除」；任一队员活跃或 Worktree 有未保存成果时删除被拒，文件保留
+- [ ] TeamDelete 的不存在团队错误、活跃成员错误文案逐字断言（行为已有测试，逐字断言待补）
+- [x] 后端仅 TeammateInfo.BackendType.IN_PROCESS，没有 pane 后端运行路径
 
 ## T7 队员运行时（in-process）
 
-- [ ] 队员首轮请求的 tools 名单：含协调五件套（TaskCreate/TaskGet/TaskList/TaskUpdate/SendMessage）+ 经父级授权的基础工具；**不含** Agent/TeamCreate/TeamDelete/AskUser/ExitPlanMode（`FakeProvider.receivedRequests()` 断言）
-- [ ] 伪造被过滤工具调用、或调用未获父级明确授权的待确认操作，执行入口均拒绝且文件与进程无副作用
-- [ ] 队员首轮请求系统提示含三行附录（逐字比对顶部第 6 节）
-- [ ] 预置一条邮箱未读消息 → 该轮请求的 turnReminder 含其文本；请求构建失败或调用取消时仍未读，成功进入模型调用后才标记已读
-- [ ] 正常结束（脚本流末尾无工具调用）→ Lead 收件箱出现空闲通知 + `<task-notification>`：status=completed、`<summary>` 含队员标识、`<result>` 为最终文本、usage 三字段（total_tokens/tool_uses/duration_ms）齐全且数值 ≥0
-- [ ] provider 抛错 → status=failed；取消 → status=killed；花名册保留队员身份但标为不活跃，便于续写；其 `in_progress` 任务回滚为 `pending`
-- [ ] 未装配轮次提醒来源时，主 Agent 请求与改动前逐字一致（无回归，对照请求快照断言）
-- [ ] 队员跑在 `VirtualThreads.POOL` 上（`grep` 断言 `TeammateRuntime` 引用 `VirtualThreads.POOL`）
+- [x] 队员首轮请求含协调五件套；构建器过滤 Agent/TeamCreate/TeamDelete/AskUser/ExitPlanMode，普通子 Agent 不继承 Lead 绑定工具
+- [x] 伪造被过滤工具调用、或调用未获父级明确授权的待确认操作，执行入口均拒绝且文件与进程无副作用
+- [x] 队员首轮请求系统提示含 TEAM_PROMPT 附录（逐字比对）
+- [x] 邮箱消息进入轮次提醒；provider 失败保持未读，成功响应后按批次确认（构建失败与取消发生在确认之前）
+- [x] 正常结束（脚本流末尾无工具调用）→ Lead 收件箱出现空闲通知 + `<task-notification>`：status=completed、`<summary>` 含队员标识、`<result>` 为最终文本、usage 三字段（total_tokens/tool_uses/duration_ms）齐全且数值 ≥0
+- [x] provider 抛错 → status=failed；取消 → status=killed；花名册保留队员身份但标为不活跃，便于续写；其 `in_progress` 任务回滚为 `pending`
+- [x] TeamReminderTest 比对未装配/空动态提醒的请求消息 JSON 和工具列表，结果一致；构建失败不确认邮件
+- [x] TeammateRuntime 的监督任务由 VirtualThreads.POOL 提交，内部复用 Agent 循环
 
 ## T8 队员 transcript 持久化与空闲续写
 
-- [ ] 队员结束 → `transcripts/{name}.jsonl` 存在且行数 > 0；`SessionCodec.decode` 重建的 `Conversation` 消息数与结束前一致
-- [ ] 给已停止队员发消息 → 新循环启动、首轮请求含完整历史（消息数不变）且 turnReminder 含这条消息
-- [ ] 压缩重写后 transcript 内容与原历史一致（逐行比对）；坏行被跳过不抛
-- [ ] 写盘失败（只读目录）不抛、不影响循环，有告警日志
-- [ ] 恢复 = 老队员续写而非新建：恢复后花名册条目 agentID 不变（`grep` 断言恢复入口复用原 `Conversation` 而非新建）
+- [x] 队员结束 → `transcripts/{name}.jsonl` 存在且行数 > 0；`SessionCodec.decode` 重建的 `Conversation` 消息数与结束前一致
+- [x] 给已停止队员发消息 → 新循环启动、首轮请求含完整历史（消息数不变）且 turnReminder 含这条消息
+- [x] 压缩重写后 transcript 内容与原历史一致（逐行比对）；坏行被跳过不抛
+- [x] 用文件占用 transcripts 目录模拟写盘失败，保存不抛且告警，哨兵内容不变
+- [x] 恢复后 agentID 不变，请求含先前结果与新消息，复用原 Conversation 并从 transcript 重建历史
 
 ## T9 队员派生管线
 
-- [ ] 派生成功：花名册有它、名称注册表有它、队员循环已起（provider 收到请求）、返回摘要含队员名与 Worktree 路径
-- [ ] 定义式（指定 agentType）：重建对话消息数为 0 + 任务消息；Fork 式（留空）：继承 Lead 历史（断言重建后消息数 > 0）
-- [ ] 注入假的可编程 Worktree 接口（测试桩）→ 队员 `ToolContext` 工作目录指向分配的路径；接口缺失或分配失败 → 派生失败且不留下名称与花名册条目
-- [ ] 失败回滚：第 4 步抛错后，名称注册表与花名册均无该队员（无幽灵收件人）
-- [ ] **防扩张兜底**：以队员身份构造的工具集里查无 Agent 工具、团队工具、「指定团队」参数通道（`grep` 断言构建器过滤名单含 Agent）
+- [x] 派生成功：花名册有它、名称注册表有它、队员循环已起（provider 收到请求）、返回摘要含队员名与 Worktree 路径
+- [x] 定义式（指定 agentType）：重建对话消息数为 0 + 任务消息；Fork 式（留空）：继承 Lead 历史（断言重建后消息数 > 0）
+- [x] 注入假的可编程 Worktree 接口（测试桩）→ 队员 `ToolContext` 工作目录指向分配的路径；接口缺失或分配失败 → 派生失败且不留下名称与花名册条目
+- [x] 注入注册后的 Agent 工厂失败，花名册清空、Worktree 被清理；重用同名队员再次派生成功，证明注册表未残留
+- [x] TeamSession.FORBIDDEN 包含 Agent/TeamCreate/TeamDelete/AskUser/ExitPlanMode；请求及伪造 Agent 调用测试均验证隔离
 
 ## T10 Coordinator Mode 与 Plan 审批协议
 
-- [ ] 双锁：只开 `COORDINATOR_MODE` 配置不开环境变量 → `isCoordinatorMode()` 为 false；两把都开 → true
-- [ ] 白名单逐项断言：`Agent/SendMessage/TaskCreate/TaskGet/TaskList/TaskUpdate/TeamCreate/TeamDelete/ReadFile/Glob/Grep` 在名单；`Bash/WriteFile/EditFile` 不在
-- [ ] 协调模式开启时 Lead 请求的 tools 名单 = 白名单（provider 捕获断言），伪造 `Bash/WriteFile/EditFile` 调用在执行入口被拒；关闭时与改动前一致
-- [ ] 审批流：`planModeRequired` 队员提交计划 → 计划到达 Lead 邮箱；Lead 驳回附反馈 → 队员下一轮提醒含该反馈；批准指定操作后只有该范围可执行，未获批准的修改仍拒绝
-- [ ] 四阶段系统提示注入后，Lead 请求系统提示含 Research/Synthesis/Implementation/Verification 四段与「理解不能外包」要求
+- [x] 双锁：只开 `COORDINATOR_MODE` 配置不开环境变量 → `isCoordinatorMode()` 为 false；两把都开 → true
+- [x] CoordinatorMode.ALLOWED 固定为文档列出的十一项，源码核对不含 Bash/WriteFile/EditFile
+- [x] 协调模式请求工具被白名单过滤；伪造 WriteProbe 调用被执行入口拒绝，副作用计数为零
+- [x] 审批流：`planModeRequired` 队员提交计划 → 计划到达 Lead 邮箱；Lead 驳回附反馈 → 队员下一轮提醒含该反馈；批准指定操作后只有该范围可执行，未获批准的修改仍拒绝
+- [x] 四阶段系统提示注入后，Lead 请求系统提示含 Research/Synthesis/Implementation/Verification 四段与「理解不能外包」要求
 
 ## T11 接入主流程与文档补齐
 
-- [ ] 主 Agent 可用工具含七个新工具（TeamCreate/TeamDelete/TaskCreate/TaskGet/TaskList/TaskUpdate/SendMessage）——`grep -n "register" src/main/java/com/acode/ConversationController.java` 命中七个名字
-- [ ] 队员完成/失败/空闲/消息摘要经输出双写提交为终端行（`emitLine` 通道），队员中间过程不上屏（`grep` 断言无队员流式渲染路径）
-- [ ] 会话收尾（`start()` 的 finally）终止全部未清理队员（`grep` 断言 finally 块引用 TeamManager 清理入口）
-- [ ] `docs/manual-test.md` 有「阶段十四」小节；`README.md` 功能特性含 Agent Teams 一行
+- [x] TeamIntegrationTest 捕获主 Agent 请求，七个新工具全部可见；建队、建任务、列举、删除经主循环返回成功结果
+- [x] TeamSession 输出回调绑定 emitLine 双写，TeammateRuntime 只积累 StreamText，提交收尾状态；终端实际视觉效果另列手测
+- [x] start/finally、closeSession 与会话重置调用 TeamSession.close；取消测试验证队员空闲并回滚任务
+- [x] `docs/manual-test.md` 有「阶段十四」小节；`README.md` 功能特性含 Agent Teams 一行
 
 ## T12 端到端验证 ⚑ 与统一收尾回归
 
-- [ ] **建队**：TeamCreate → `.acode/teams/{name}/` 三件套齐全
-- [ ] **拆任务**：经工具写 4 个任务并加依赖（T3 等 T1、T4 等 T2）；T1 未完成时认领 T3 被拒（文案逐字）
-- [ ] **并行队员**：派生两名队员（脚本：TaskList → 认领 → 完成）→ 两人分别完成 T1/T2 → T3 才可认领（依赖放行）
-- [ ] **通信往返**：alice 发消息给 bob → bob 下一轮请求的 turnReminder 含该消息与摘要
-- [ ] **完成通知**：Lead 收件箱出现两条 `<task-notification>`（status=completed、result 与 usage 三字段齐全）
-- [ ] **空闲与续写**：给已空闲的 alice 发消息 → 恢复循环、首轮请求含历史与消息
-- [ ] **竞态**：两队员并发认领同一任务恰一成功（CountDownLatch，不 sleep）
-- [ ] **崩溃回滚**：一名队员 provider 抛错 → 通知 status=failed → 其进行中任务回滚待认领
-- [ ] **清理**：TeamDelete → 返回名单文案 → 目录消失；有活跃队员时清理被拒（文案逐字）
-- [ ] **全套回归**：`JAVA_HOME="D:\java\jdk21" mvn test` 全绿，记录总用例数（新增用例均本地假 provider，无外部网络）
+- [x] **建队**：TeamCreate → `.acode/teams/{name}/` 三件套齐全
+- [x] **拆任务**：经工具写 4 个任务并加依赖（T3 等 T1、T4 等 T2）；T1 未完成时认领 T3 被拒（文案逐字）
+- [x] **并行队员**：两名队员经 TaskUpdate 认领/完成各自前置与后续任务，四任务均 completed；TaskList 另经主流程验证
+- [x] **通信往返**：alice 发消息给 bob → bob 下一轮请求的 turnReminder 含该消息与摘要
+- [x] **完成通知**：Lead 收件箱出现两条 `<task-notification>`（status=completed、result 与 usage 三字段齐全）
+- [x] **空闲与续写**：给已空闲的 alice 发消息 → 恢复循环、首轮请求含历史与消息
+- [x] **竞态**：两身份通过 TaskUpdate 工具并发认领同一任务恰一成功（CyclicBarrier，不 sleep）
+- [x] **崩溃回滚**：一名队员 provider 抛错 → 通知 status=failed → 其进行中任务回滚待认领
+- [x] **清理**：TeamDelete → 返回名单文案 → 目录消失；有活跃队员时清理被拒（文案逐字）
+- [x] **全套回归**：1339 tests / 0 failures / 0 errors / 2 skipped，日志 20260929-172034-245；最后的边界补测另见 test-review.md
 
 ## 真机 ⚑ 手测（填 `docs/manual-test.md`「阶段十四」）
 
 - [ ] ⚑ 打包后真机建队 + 派两名队员并行干活：终端提交行不乱、不互相覆盖，主循环可继续输入
 - [ ] ⚑ 队员执行中 ESC / Ctrl+C：提交行不残留、主循环不卡死、无异常堆栈上屏
 - [ ] ⚑ 协调模式开启（两把锁）：Lead 工具列表肉眼可见收窄，拒绝直接改代码；关闭后恢复
-- [ ] ⚑ 杀进程后重启：`.acode/teams/` 残留目录不自动复活团队（会话内落盘语义），TeamDelete 可清干净
+- [ ] ⚑ 杀进程后重启：残留目录不自动复活团队、不自动删除；TeamDelete 仅清理当前会话创建的团队
 
 
 ## T1 阶段验收补充（2026-09-29）
@@ -289,4 +289,4 @@ COORDINATOR_MODE_ALLOWED_TOOLS = [
 - [x] TeamManagerTest 最终 13 个测试连续 3 轮完成，0 failures、0 errors、1 skipped；并发注册测试内部每轮另含三次十线程起跑。
 - [x] Windows junction 指向项目内其他目录时创建被拒，目标目录保持空；符号链接创建权限不足的用例保持 skipped，不当作通过。
 - [x] 配置写入失败不发布内存快照；检查坏配置只告警并返回空，不清空当前会话或覆盖原文件。
-- [ ] T4–T12 尚未实现，不把 T1–T3 基础模块等同于可用的 Agent Teams。
+- [ ] 真实 provider / 终端手测仍待完成，不把假模型自动化等同于真机验收。

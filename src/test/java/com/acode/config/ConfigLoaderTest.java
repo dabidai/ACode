@@ -12,6 +12,17 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ConfigLoaderTest {
+    @Test void coordinatorSwitchIsLayeredAndBoolean() throws IOException {
+        assertEquals(false, ConfigLoader.load(globalFile(), projectDir()).getCoordinatorMode());
+        validGlobal();
+        Files.writeString(globalFile(), "\nCOORDINATOR_MODE: true\n", java.nio.file.StandardOpenOption.APPEND);
+        write(projectConfig(), "memory_auto: false\n");
+        assertEquals(true, ConfigLoader.load(globalFile(), projectDir()).getCoordinatorMode());
+        write(projectConfig(), "COORDINATOR_MODE: false\n");
+        assertEquals(false, ConfigLoader.load(globalFile(), projectDir()).getCoordinatorMode());
+        write(projectConfig(), "COORDINATOR_MODE: 'true'\n");
+        assertThrows(ConfigException.class, () -> ConfigLoader.load(globalFile(), projectDir()));
+    }
     @Test void verificationSwitchIsStrictAndDefaultsOff() throws IOException {
         assertTrue(!ConfigLoader.load(globalFile(), projectDir()).isVerificationAgentEnabled());
         validGlobal();

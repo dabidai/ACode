@@ -55,6 +55,8 @@ public class ExchangeRunner {
     void setHookEngine(com.acode.hook.HookEngine engine) { this.hookEngine = engine; }
     private com.acode.skill.SkillRuntime skillRuntime;
     void setSkillRuntime(com.acode.skill.SkillRuntime runtime) { this.skillRuntime = runtime; }
+    private java.util.function.Consumer<Agent> agentConfigurer = agent -> {};
+    void setAgentConfigurer(java.util.function.Consumer<Agent> configurer) { agentConfigurer = configurer; }
 
     private static final Logger log = LoggerFactory.getLogger(ExchangeRunner.class);
 
@@ -146,6 +148,7 @@ public class ExchangeRunner {
         agent.setPermissionChecker(permissionCheckerSupplier.get());
         agent.setOneShotReminder(pendingReminder);
         agent.setMemoryManager(memoryManager);
+        agentConfigurer.accept(agent);
         pendingReminder = null; // 只用一次：恢复后的第二轮不再注入
         BlockingQueue<AgentEvent> events = agent.run();
 

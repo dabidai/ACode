@@ -57,6 +57,15 @@ public class Agent {
     private java.util.Set<String> requestToolNames;
     private long skillGeneration;
     public void setSkillRuntime(com.acode.skill.SkillRuntime runtime) { this.skillRuntime = runtime; }
+    private java.util.function.Supplier<ChatMessage> turnReminderSource;
+    private Runnable requestAccepted;
+    private java.util.function.Supplier<java.util.Set<String>> toolCeiling;
+    private String systemPromptSuffix;
+    public void setSystemPromptSuffix(String suffix) { systemPromptSuffix = suffix; }
+    public void setTurnReminderSource(java.util.function.Supplier<ChatMessage> source, Runnable accepted) {
+        turnReminderSource = source; requestAccepted = accepted;
+    }
+    public void setToolCeiling(java.util.function.Supplier<java.util.Set<String>> ceiling) { toolCeiling = ceiling; }
 
     private static final Logger log = LoggerFactory.getLogger(Agent.class);
 
@@ -347,6 +356,7 @@ public class Agent {
                 return TurnOutcome.error();
             }
 
+            if (requestAccepted != null) requestAccepted.run();
             // 流式收集完成：处理本轮内容
             if (isTruncated(collector.stopReason())) {
                 if (recoveryCount >= MAX_TRUNCATION_RECOVERY) {
@@ -554,13 +564,21 @@ public class Agent {
             tools = snapshot.filter(tools);
             model = snapshot.model();
         }
+        if (toolCeiling != null) {
+            var allowed = toolCeiling.get();
+            tools = tools.stream().filter(tool -> allowed.contains(tool.name())).toList();
+        }
         requestToolNames = tools.stream().map(Tool::name).collect(java.util.stream.Collectors.toUnmodifiableSet());
         List<ChatMessage> reminders = new ArrayList<>();
         ChatMessage reminder = planMode ? SystemReminder.wrap(PlanModePrompt.buildReminder(turn))
                 : turn == 1 ? oneShotReminder : null;
         if (reminder != null) reminders.add(reminder);
         if (hookEngine != null) hookEngine.drainPrompts().stream().map(SystemReminder::wrap).forEach(reminders::add);
-        return conversation.buildRequestWithReminders(tools, reminders, model);
+        if (turnReminderSource != null) {
+            ChatMessage dynamic = turnReminderSource.get();
+            if (dynamic != null) reminders.add(dynamic);
+        }
+        return conversation.buildRequestWithReminders(tools, reminders, model, systemPromptSuffix);
     }
 
     /** plan 模式工具列表：读类工具 + ExitPlanMode，各恰好一次 */

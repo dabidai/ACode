@@ -9,3 +9,10 @@ T1 已新增三个生产类与测试类；首轮沙箱因临时路径权限失�
 2026-09-29 T2/T3 完成：新增锁、JSON 原子文件、邮箱、名称注册表、共享任务存储；成员移除接入任务回滚。回归修复释放时路径检查竞态与同 JVM 写者饥饿。最终三轮各 31/0/0/1，证据 target/resize-validation/20260929-140116-045。文档同步真实语义；下一项 T4 任务工具四件套，随后 T5 SendMessage。未进行全量或真实 Agent Teams 端到端测试，尚未主流程接入；没有数据库修改或提交。
 
 T2/T3 打包完成：退出 0，44.06 秒，target/resize-validation/20260929-140549-467；target/acode.jar 已更新。git diff --check 通过。
+
+2026-09-29 继续 T4–T12：新增四个任务工具、SendMessage、建队/删除工具、TeamSession、TeammateRuntime、transcript 与精确操作审批；接入 Agent 工具 team_name、主 Exchange、协调配置双锁及系统提示。TeamSessionTest 覆盖并行两队员四任务图、消息往返、续写、审批、取消、失败回滚；TeamIntegrationTest 经主控制器调用建队/任务/删除。扩展定向 79 tests / 0 failures / 0 errors / 1 skipped，日志 20260929-163613-765。尚待全量与真机，不提交。
+本轮纠错：测试构造参数与 RuleEngine 构造签名不符导致编译失败，已按真实接口修复；请求内容不能用 ChatRequest/ChatMessage 默认 toString 检查，改查消息 content；团队目录新增 mailbox/tasks/transcripts 后更新旧目录断言。修正创建 Worktree 失败时可能清理已有同名目录的风险，仅清理本次成功分配的目录；普通子 Agent 不继承 Lead 绑定工具。
+
+最终全量 1339/0/0/2，200.93 秒，20260929-172034-245；最后空审批/提醒快照/取消邮件边界专项 11/0/0/0，16.52 秒，20260929-172721-756。此前一次 TeamPermissionTest 把系统临时目录当越界而失败，测试改选临时目录之外路径后专项 110/0/0/1。代码与使用文档、真实手测清单已同步；打包进行中，无数据库修改，无自动提交。
+
+最终打包通过：9.61 秒，退出 0，20260929-172838-674。T1–T11 代码与 T12 自动化完成，剩余真实 provider/终端验收清单未勾选。本轮工作保留未提交，既有 ch12 等其他改动未动。

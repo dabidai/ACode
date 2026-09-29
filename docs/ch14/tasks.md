@@ -331,7 +331,7 @@
 
 ## 实施进度（2026-09-29）
 
-T1 已实现团队/成员不可变模型与 TeamManager 可编程接口。T2/T3 已补充文件锁、邮箱、名称注册表和共享任务存储，验证记录见 test-review.md。T4–T12 尚未实现；不存在用户可调用的 TeamCreate/TeamDelete 工具，不应据此宣称 Agent Teams 全章完成。
+T1–T11 的代码已接入，T12 的假模型集成测试已覆盖并行队员、四任务依赖图、消息、续写、审批、取消与主控制器工具闭环。全量与最终专项数据见 test-review.md，真实 provider / 终端手测仍独立待验收，不宣称真机已完成。
 
 结合当前代码作以下细化：
 - 名称复用 ch13 WorktreeNames 的实际规则，再限制为单目录段；因此采用更严格的 Windows 保留名称、末尾点与 Git 段校验。自动后缀仍保持总长度不超过 64。
@@ -348,3 +348,15 @@ T2/T3 的实际实现约定：
 - 名称注册表未命中返回 Optional.empty，面向模型的错误由 T5 负责。收件箱以注册表解析后的规范名称定位。
 - 任务只落盘 blockedBy，blocks 与 blocked 由图派生；认领后不再新增其依赖，完成只能由持有者操作。
 - removeMember 先回滚任务再移除花名册；任务写失败保留成员。两文件不是跨文件事务，配置写失败时任务可能已回滚，可重试移除；T7/T9 调用前必须停止该成员运行时。
+
+T4–T11 实际落点与补充约定：
+- 工具在 team/tools，TaskTool 统一字符串数组 schema 与业务错误翻译，调用者身份由宿主绑定。
+- TeamSession 汇总原设计的派生器、运行时装配与会话清理职责；TeamMessaging 按当前花名册解析名称/ID，lead 是保留地址，AgentNameRegistry 记录注册冲突。
+- Agent 的 team_name / name 进入长期队员路径，plan_mode_required 控制审批；未传 team_name 保持 ch12 路径。Worktree 使用 ch13 create/verifyRemovable/remove，不复用主工作目录。
+- TeammateRuntime 以 VirtualThreads.POOL 消费既有 Agent 队列，输出结果行；每轮 Hook scope 在收尾关闭。结束保留身份并标空闲，未完成任务回滚。
+- TeamTranscriptStore 监听追加/重建，续写前读回原 Conversation。先投递邮件再唤醒，避免首轮抢跑；不按旧设计的“先恢复再投递”执行。
+- 邮件在成功模型响应且未取消后按本批 ID 确认，比“刚进入调用即确认”更保守；模型失败可重试，确认失败可能重复投递，不提供 exactly-once 模型消费承诺。
+- TeamApproval 只接受 Lead 的结构化 JSON 审批，按 tool + 完整 input 精确匹配，批准替换旧范围；Hook 始终只读，不能借 Hook 绕审批。详见 usage.md。
+- 协调开关的四阶段提示进入 SYSTEM 段，请求工具名单与执行入口共同执行白名单；关闭时不增加协调提示。
+- 清理先检查全部队员空闲和全部 Worktree 安全，再逐个移除；多文件/多 Worktree 清理不是事务，失败报告并保留剩余数据。TeamDelete 不清理此前进程留下的未知团队。
+- ConversationController 注册七工具，ExchangeRunner 配置 Lead 邮箱及协调模式，退出/重置会话关闭队员；普通子 Agent 过滤全部 Lead 绑定团队工具。

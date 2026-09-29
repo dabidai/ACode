@@ -71,6 +71,9 @@ public final class TeamManager {
                 // A failed initial write leaves the reserved directory for diagnosis;
                 // a later create will use the next suffix rather than overwrite it.
                 persist(team);
+                Files.createDirectory(directory.resolve("mailbox"));
+                Files.createDirectory(directory.resolve("transcripts"));
+                new TeamJsonFile(directory.resolve("tasks.json")).write(JSON.createArrayNode());
                 teams.put(name, team);
                 return team;
             }
@@ -81,6 +84,26 @@ public final class TeamManager {
 
     public synchronized Optional<Team> find(String name) { return Optional.ofNullable(teams.get(name)); }
 
+    /** Runtime must be stopped and worktrees safely removed by the host before this call. */
+    public synchronized Team delete(String name) {
+        Team team = requireTeam(name);
+        for (TeammateInfo member : team.members()) {
+            if (!Boolean.FALSE.equals(member.isActive()))
+                throw new IllegalArgumentException("队员 " + member.name() + " 仍在活跃中");
+        }
+        Path directory = team.configPath().getParent();
+        try {
+            verifyPath(directory);
+            List<Path> paths;
+            try (var walk = Files.walk(directory)) { paths = walk.sorted(java.util.Comparator.reverseOrder()).toList(); }
+            // Validate the complete tree before any deletion; never follow redirected paths.
+            for (Path path : paths) verifyPath(path);
+            for (Path path : paths) Files.delete(path);
+            teams.remove(name);
+            return team;
+        } catch (IOException e) { throw new UncheckedIOException("团队删除失败：" + name, e); }
+    }
+
     public synchronized Optional<TeammateInfo> member(String teamName, String nameOrID) {
         return requireTeam(teamName).members().stream()
                 .filter(member -> member.name().equals(nameOrID) || member.agentID().equals(nameOrID)).findFirst();
@@ -88,6 +111,9 @@ public final class TeamManager {
 
     public synchronized Team register(String teamName, TeammateInfo member) {
         Team team = requireTeam(teamName);
+        if (member.name().equals(TeamMessaging.LEAD) || member.agentID().equals(TeamMessaging.LEAD)
+                || member.name().equals(team.leadAgentID()) || member.agentID().equals(team.leadAgentID()))
+            throw new IllegalArgumentException("队员名称或标识已存在：" + member.name());
         for (TeammateInfo existing : team.members()) {
             if (existing.name().equals(member.name()) || existing.agentID().equals(member.agentID())
                     || existing.name().equals(member.agentID()) || existing.agentID().equals(member.name()))

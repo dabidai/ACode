@@ -241,9 +241,15 @@ public class Conversation {
     }
 
     public ChatRequest buildRequestWithReminders(List<Tool> requestTools, List<ChatMessage> reminders, String modelOverride) {
+        return buildRequestWithReminders(requestTools, reminders, modelOverride, null);
+    }
+
+    public ChatRequest buildRequestWithReminders(List<Tool> requestTools, List<ChatMessage> reminders, String modelOverride, String systemSuffix) {
         List<ChatMessage> requestMessages = new ArrayList<>();
-        if (systemPrompt != null && !systemPrompt.isBlank()) {
-            requestMessages.add(ChatMessage.of(ChatMessage.Role.SYSTEM, systemPrompt));
+        String effectiveSystem = systemPrompt == null ? "" : systemPrompt;
+        if (systemSuffix != null && !systemSuffix.isBlank()) effectiveSystem += "\n\n" + systemSuffix;
+        if (!effectiveSystem.isBlank()) {
+            requestMessages.add(ChatMessage.of(ChatMessage.Role.SYSTEM, effectiveSystem));
         }
         if (environment != null) {
             requestMessages.add(environment);

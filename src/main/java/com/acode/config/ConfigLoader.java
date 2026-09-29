@@ -27,7 +27,7 @@ public class ConfigLoader {
     private static final List<String> KNOWN_KEYS =
             List.of("protocol", "model", "base_url", "api_key",
                     "max_context_tokens", "max_iterations", "tee", "permission_mode", "thinking",
-                    "memory_auto", "mcp_servers", "verification_agent", "worktree");
+                    "memory_auto", "mcp_servers", "verification_agent", "worktree", "COORDINATOR_MODE");
 
     /** 生产入口：全局配置在用户主目录，项目级配置在当前工作目录 */
     public static AppConfig loadDefault() {
@@ -114,6 +114,11 @@ public class ConfigLoader {
 
     /** 把配置映射应用到 config：只覆盖出现的字段；未知键、类型错误直接报错 */
     private static void apply(AppConfig config, Map<String, Object> map, String source) {
+        if (map.containsKey("COORDINATOR_MODE")) {
+            if (!(map.get("COORDINATOR_MODE") instanceof Boolean enabled))
+                throw new ConfigException(source + ": COORDINATOR_MODE 必须为布尔值");
+            config.setCoordinatorMode(enabled);
+        }
         for (String key : map.keySet()) {
             // 把配置中写的出错的键的问题暴露出来，防止静默失败
             if (!KNOWN_KEYS.contains(key)) {

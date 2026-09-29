@@ -30,3 +30,26 @@
 首次沙箱执行因临时目录真实路径访问受限报错；未弱化路径防护，后续以正常本机权限运行。没有修改数据库或用户配置。T7 尚未把确认接到模型请求交接点，当前仅验证存储 API；跨文件成员移除不是事务，配置写失败后可重试。T4–T12、全章端到端及全量回归仍待完成。
 
 本轮打包退出 0，44.06 秒，更新 target/acode.jar；日志 `target/resize-validation/20260929-140549-467/Package-1.*.log`。git diff --check 通过；测试源码无 Thread.sleep，生产邮箱无文件 APPEND 写入。
+
+## T4–T12 工具、运行时与主流程（2026-09-29）
+
+实现七个团队工具、TeamSession 装配与派生、TeammateRuntime 后台循环、TeamTranscriptStore 持久化/恢复、TeamApproval 精确操作授权和 CoordinatorMode。主控制器经 LazyTeamTool 延迟绑定当前项目，ExchangeRunner 接入动态邮件及协调模式；Agent 工具增加 team_name、name、plan_mode_required。普通子 Agent 过滤 Lead 绑定团队工具。
+
+测试分层：
+- TaskToolsTest / SendMessageToolTest：schema、业务文案、正反依赖、工具层认领竞态、规范地址、摘要边界、广播、结构化消息权限。
+- TeamSessionTest：两队员四任务依赖图与消息往返、失败/取消任务回滚、独立工作目录、定义式与 Fork 历史、空闲续写、审批范围与驳回、协调模式执行入口拒绝伪造写工具、通知 usage 字段。
+- TeamTranscriptStoreTest / TeamSpawnFailureTest：历史追加/重建、坏行跳过、写失败告警；创建失败不删除已有 Worktree，注册后失败回滚并能重用队员名。
+- TeamIntegrationTest：通过 ConversationController 的实际模型工具循环完成 TeamCreate → TaskCreate → TaskList → TeamDelete。
+- TeamPermissionTest / TeamApprovalTest：带 workingDirectory 的权限检查同样执行父级上限，审批 Hook 只读，非法审批不能扩大授权、驳回撤销授权。
+
+验证历史：首个扩展专项 79 / 0 / 0 / 1，日志 `20260929-163613-765`；首轮全量 1334 / 0 / 0 / 2，215.14 秒，日志 `target/resize-validation/20260929-165752-195/`。补充权限重载和 Hook 生命周期后，专项 110 / 0 / 0 / 1，24.22 秒，日志 `target/resize-validation/20260929-171101-726/`。后续最终验证数据另记于下方，不混用前一版结果。
+
+本轮实际修正：未修改旧目录清单断言导致 T1 失败；测试需读取 ChatMessage.content 而非默认 toString。文件沙箱允许系统临时目录，所以越界测试改为临时根之外的绝对路径，未弱化生产沙箱。权限检查执行器调用三参重载，已把父级授权交集覆盖到该重载。审批成员不包装只读 LoadSkillTool，保持其原有分阶段执行能力；其 Hook 受只读权限门槛约束。
+
+边界：所有新模型调用均为本地假 provider；团队 Worktree 集成使用注入接口，既有 ch13 全量测试使用真实临时 Git 仓库。真实 provider、真实终端及其组合尚未验收。没有数据库操作，没有替用户提交本轮改动。shutdown 消息为协商协议，任意自由文本不会自动强杀成员；残留旧团队不由新会话自动删除。
+
+最终验证：
+- 全量 `Full`：**1339 tests / 0 failures / 0 errors / 2 skipped**，200.93 秒，`target/resize-validation/20260929-172034-245/`。跳过为 InstructionExpanderTest.rejectsSymlinkEscapeFromProjectRoot 与 TeamManagerTest.rejectsLinkedTeamDirectory，属于符号链接环境限制。
+- 在全量启动后补了空审批回复防护及两个提醒边界测试，随后单独跑 TeamApprovalTest、TeamReminderTest、TeamSessionTest：**11 / 0 / 0 / 0**，16.52 秒，`target/resize-validation/20260929-172721-756/`。证明空/坏审批不授权、驳回撤销授权、无动态提醒的请求快照一致、请求构建失败与取消保留邮件。未把新增三用例虚报进先前全量总数。
+- git diff --check 通过。章节 checklist 中未执行的真实终端项目保持未勾选。
+- 最终打包退出 0，9.61 秒，`target/resize-validation/20260929-172838-674/Package-1.*.log`；target/acode.jar 已更新，包含本轮工具、运行时、权限修正与主流程接入。

@@ -69,12 +69,20 @@ public class PermissionChecker {
 
     /** Same rules and sandbox, but no inherited session approvals; decisions are intersected. */
     public PermissionChecker child(PermissionMode requested) {
+        return child(requested, projectRoot);
+    }
+
+    /** Host-allocated worktree replaces the child sandbox root; rule/mode ceilings remain. */
+    public PermissionChecker child(PermissionMode requested, Path allocatedRoot) {
         PermissionMode ceiling = mode;
-        var parentBoundary = new PermissionChecker(ceiling, projectRoot, ruleEngine, extraSandboxRoots);
-        return new PermissionChecker(stricter(ceiling, requested), projectRoot, ruleEngine, extraSandboxRoots) {
+        var parentBoundary = new PermissionChecker(ceiling, allocatedRoot, ruleEngine, extraSandboxRoots);
+        return new PermissionChecker(stricter(ceiling, requested), allocatedRoot, ruleEngine, extraSandboxRoots) {
             @Override public CheckResult check(Tool tool, JsonNode args) {
-                CheckResult parent = parentBoundary.check(tool, args);
-                CheckResult child = super.check(tool, args);
+                return check(tool, args, null);
+            }
+            @Override public CheckResult check(Tool tool, JsonNode args, Path workingDirectory) {
+                CheckResult parent = parentBoundary.check(tool, args, workingDirectory);
+                CheckResult child = super.check(tool, args, workingDirectory);
                 if (parent.decision() == Decision.DENY) return parent;
                 if (child.decision() == Decision.DENY) return child;
                 if (parent.decision() == Decision.ASK || child.decision() == Decision.ASK) return CheckResult.ask();
@@ -87,6 +95,18 @@ public class PermissionChecker {
         if (a == PermissionMode.DEFAULT || b == PermissionMode.DEFAULT) return PermissionMode.DEFAULT;
         if (a == PermissionMode.ACCEPT_EDITS || b == PermissionMode.ACCEPT_EDITS) return PermissionMode.ACCEPT_EDITS;
         return PermissionMode.BYPASS;
+    }
+
+    /** For approval-gated background hooks: no implicit write authorization via hooks. */
+    public PermissionChecker readOnly() {
+        PermissionChecker source = this;
+        return new PermissionChecker(PermissionMode.PLAN, projectRoot, ruleEngine, extraSandboxRoots) {
+            @Override public CheckResult check(Tool tool, JsonNode args) { return check(tool, args, null); }
+            @Override public CheckResult check(Tool tool, JsonNode args, Path workingDirectory) {
+                if (tool == null || tool.permission() != Permission.READ) return CheckResult.deny("审批队员的 Hook 仅允许只读操作");
+                return source.check(tool, args, workingDirectory);
+            }
+        };
     }
 
     public void setMode(PermissionMode mode) {

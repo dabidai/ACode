@@ -137,7 +137,7 @@ class TeamManagerTest {
         assertTrue(manager.find("team").orElseThrow().members().isEmpty());
         assertEquals("keep", Files.readString(team.configPath().resolve("sentinel")));
         try (var files = Files.list(team.configPath().getParent())) {
-            assertEquals(List.of("config.json"), files.map(path -> path.getFileName().toString()).toList());
+            assertEquals(List.of("config.json", "mailbox", "tasks.json", "transcripts"), files.map(path -> path.getFileName().toString()).sorted().toList());
         }
     }
 

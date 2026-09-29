@@ -189,6 +189,12 @@ public final class WorktreeManager {
         if (branchResult.code() != 0) warnings.add("警告：已移除目录，保留分支 " + entry.branch() + "：" + branchResult.output().strip());
         var records = registry(); records.remove(name); write("worktree_registry.json", records);
     }
+    /** Read-only preflight used before a team cleanup begins removing any worktree. */
+    public synchronized void verifyRemovable(String name) throws IOException {
+        Entry entry = verify(name, true);
+        if (current != null && current.name().equals(name)) throw new IOException("请先 /worktree exit 再删除当前 Worktree");
+        if (changed(entry)) throw new IOException("Worktree 有未提交改动或新 commit，未删除：" + name);
+    }
     /** Git for Windows can recurse through junctions. Unlink reparse points before Git removes a tree. */
     private void detachLinks(Path target, boolean force) throws IOException {
         Path realRoot = target.toRealPath();

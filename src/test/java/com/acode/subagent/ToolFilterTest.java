@@ -9,6 +9,13 @@ import static com.acode.subagent.SubAgentTestSupport.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ToolFilterTest {
+    @Test void ordinaryChildrenCannotInheritLeadBoundTeamTools() {
+        var registry = new ToolRegistry();
+        for (String name : List.of("TeamCreate", "TeamDelete", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "SendMessage"))
+            registry.register(tool(name, Permission.WRITE, new AtomicInteger()));
+        assertTrue(ToolFilter.filter(registry, null, true).isEmpty());
+        assertTrue(ToolFilter.filter(registry, definition(List.of(), List.of(), 20, PermissionMode.DEFAULT), false).isEmpty());
+    }
     @Test void globalForkIntersectionAndBlacklist() {
         var registry = new ToolRegistry();
         for (String name : List.of("Agent", "AskUser", "ExitPlanMode", "ReadFile", "WriteFile", "Bash")) registry.register(tool(name, Permission.READ, new AtomicInteger()));

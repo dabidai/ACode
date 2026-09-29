@@ -23,7 +23,7 @@ ACode 按阶段迭代构建，每阶段有独立设计文档（`docs/chXX/`）�
 | 阶段十一 | Hook 系统 | `docs/ch11/` | ✅ 已实现（真实 provider 手测待验收） |
 | 阶段十二 | SubAgent | `docs/ch12/` | ✅ 已实现（终端手测待验收） |
 | 阶段十三 | Worktree | `docs/ch13/` | ✅ 已实现（终端手测待验收） |
-| 阶段十四 | Agent Teams | `docs/ch14/` | 🚧 实现中（T1 团队模型底座已完成，T2–T12 待做） |
+| 阶段十四 | Agent Teams | `docs/ch14/` | ✅ 已实现（自动化回归通过，真实终端手测待验收） |
 
 > 各章 spec / tasks / checklist 的共创流程见 `CLAUDE.md` 与 `AGENTS.md`。
 
@@ -31,6 +31,7 @@ ACode 按阶段迭代构建，每阶段有独立设计文档（`docs/chXX/`）�
 
 - 🖥️ **终端 TUI**：基于 JLine 的流式输出渲染（活跃区重绘、原生回滚可复制），支持行编辑与上下键选择菜单
 - 🤖 **Agent 循环**：模型可多轮调用工具（ReAct），自动规划与执行任务
+- 👥 **Agent Teams**：建队、共享任务依赖与原子认领、文件消息、独立 Worktree 队员、空闲续写与精确操作审批；可选协调模式限制 Lead 直接修改。使用说明见 `docs/ch14/usage.md`，真实终端验收状态见本章测试记录。
 - 🔧 **内置工具集**：`ReadFile` / `EditFile` / `WriteFile` / `Bash` / `Glob` / `Grep` / `AskUser`，plan 模式额外提供 `ExitPlanMode`
 - 🛡️ **权限系统**：五层防线决策链（危险命令黑名单 / 安全命令白名单 / 路径沙箱 / 规则引擎 / 会话「始终允许」→ 四档模式矩阵），敏感操作三选一确认（放行 / 始终允许 / 拒绝）
 - 🎯 **Plan 模式**：`/plan` 只读探索并落盘计划，`/do` 按计划执行

@@ -8,6 +8,10 @@ import java.util.Map;
  * permission_mode / memory_auto / mcp_servers
  */
 public class AppConfig {
+    private boolean coordinatorMode;
+    public boolean isCoordinatorMode() { return com.acode.team.CoordinatorMode.enabled(coordinatorMode, System.getenv("ACODE_COORDINATOR_MODE")); }
+    public boolean getCoordinatorMode() { return coordinatorMode; }
+    public void setCoordinatorMode(boolean enabled) { coordinatorMode = enabled; }
 
     private java.util.List<String> worktreeSymlinkDirectories = java.util.List.of("node_modules", ".venv", "vendor");
     private int worktreeStaleAfterDays = 7;

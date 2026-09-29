@@ -15,6 +15,8 @@ public final class ToolFilter {
         }
         return registry.availableList().stream()
                 .filter(t -> !Set.of("AskUser", "ExitPlanMode").contains(t.name()))
+                // Team tools bind the Lead identity; children receive separately bound tools only.
+                .filter(t -> !Set.of("TeamCreate", "TeamDelete", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "SendMessage").contains(t.name()))
                 .filter(t -> fork || !t.name().equals("Agent"))
                 .filter(t -> definition == null || !definition.disallowedTools().contains(t.name()))
                 .filter(t -> definition == null || definition.tools().isEmpty() || definition.tools().contains(t.name()))

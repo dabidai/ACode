@@ -48,6 +48,7 @@ class FullscreenCommandFlowTest {
                 sessions.renderLoaded("恢复", session.id(), session.messages()); loads.incrementAndGet();
             });
             AtomicInteger submitted = new AtomicInteger();
+            var inputs = new java.util.concurrent.CopyOnWriteArrayList<String>();
             AtomicReference<String> clipboard = new AtomicReference<>();
             var ui = new TerminalUIController(f.output, render, text -> {}, enabled -> {},
                     () -> new UIController.ContextUsage(0, 0),
@@ -66,13 +67,24 @@ class FullscreenCommandFlowTest {
             processor.setCommandDispatcher(new CommandDispatcher(registry,
                     args -> new CommandContext(args, ui, null, null, null, sessions, directory, null, "test"),
                     text -> {
+                        inputs.add(text);
                         submitted.incrementAndGet(); f.output.appendLine("● " + text);
                         var stream = new StreamPrinter(f.output, f.screen, f.terminal.writer(), false);
                         stream.onDelta("answer to " + text); stream.finishTurn();
                     }));
             CompletableFuture<Void> loop = new CompletableFuture<>();
             Thread.ofVirtual().start(() -> { try { processor.mainLoop(); loop.complete(null); } catch (Throwable e) { loop.completeExceptionally(e); } });
-            f.send("hello\r");
+            f.send("he");
+            await(() -> f.view().screenText().contains("> he"), loop);
+            var resize = CompletableFuture.runAsync(() -> {
+                for (int i = 0; i < 20; i++) {
+                    f.terminal.setSize(new org.jline.terminal.Size(i % 2 == 0 ? 60 : 80, 24));
+                    f.terminal.raise(org.jline.terminal.Terminal.Signal.WINCH);
+                }
+            });
+            f.send("llo");
+            resize.get(5, TimeUnit.SECONDS);
+            f.send("\r");
             await(() -> f.view().screenText().contains("answer to hello"), loop);
             f.send("/resume\r");
             await(() -> f.view().screenText().contains("Esc 取消"), loop);
@@ -92,6 +104,7 @@ class FullscreenCommandFlowTest {
             f.send("again\r");
             await(() -> f.view().screenText().contains("answer to again"), loop);
             assertEquals(2, submitted.get());
+            assertEquals(List.of("hello", "again"), inputs);
             assertFalse(f.view().screenText().contains("saved answer"));
             f.send("/quit\r"); loop.get(5, TimeUnit.SECONDS);
             f.screen.close();

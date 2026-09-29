@@ -19,13 +19,8 @@ final class ResizeAwareLineReader extends LineReaderImpl {
     void screen(ScreenRenderer screen) { this.screen = screen; }
     private String completionBuffer;
     void completionOverlay(List<String> lines) {
-        lock.lock();
-        try {
-            completionBuffer = lines == null ? null : buf.toString();
-            screen.overlay(lines == null ? List.of() : lines);
-        } finally {
-            lock.unlock();
-        }
+        completionBuffer = lines == null ? null : buf.toString();
+        screen.overlay(lines == null ? List.of() : lines);
     }
 
     private volatile Supplier<String> activePromptSupplier;
@@ -44,37 +39,16 @@ final class ResizeAwareLineReader extends LineReaderImpl {
         super(terminal, appName, null);
     }
 
-    @Override
-    public String readLine(String prompt) {
-        lock.lock();
-        try {
-            resizedDuringLastRead = false;
-        } finally {
-            lock.unlock();
-        }
-        return super.readLine(prompt);
-    }
-
     String readLine(Supplier<String> promptSupplier, Runnable footerRedraw) {
         String initialPrompt = promptSupplier.get();
-        lock.lock();
-        try {
-            resizedDuringLastRead = false;
-            activePromptSupplier = promptSupplier;
-            activeFooterRedraw = footerRedraw;
-        } finally {
-            lock.unlock();
-        }
+        resizedDuringLastRead = false;
+        activePromptSupplier = promptSupplier;
+        activeFooterRedraw = footerRedraw;
         try {
             return super.readLine(initialPrompt);
         } finally {
-            lock.lock();
-            try {
-                activePromptSupplier = null;
-                activeFooterRedraw = null;
-            } finally {
-                lock.unlock();
-            }
+            activePromptSupplier = null;
+            activeFooterRedraw = null;
         }
     }
 
@@ -88,55 +62,36 @@ final class ResizeAwareLineReader extends LineReaderImpl {
         if (status == null) {
             return readLine(() -> StatusBar.framedInputPrompt(mode.get(), terminal.getWidth()), () -> {});
         }
+        resizedDuringLastRead = false;
+        frameMode = mode;
+        frameFooter = footer;
+        frameHistoryLines = historyLines;
+        frameNeedsHistoryPaint = status.size() != StatusBar.frameReservedRows(terminal.getHeight());
+        historyOffset = 0;
         boolean mouseWasEnabled = isSet(Option.MOUSE);
         // Native Windows mouse capture disables direct console selection.
         // Keep the user's chosen drag-to-copy behavior in CMD, PowerShell,
         // and Windows Terminal. Other terminal providers can use the frame's
         // wheel handler without changing Windows QuickEdit.
         boolean captureMouse = !(terminal instanceof AbstractWindowsTerminal<?>);
-        lock.lock();
-        try {
-            resizedDuringLastRead = false;
-            frameMode = mode;
-            frameFooter = footer;
-            frameHistoryLines = historyLines;
-            frameNeedsHistoryPaint = status.size() != StatusBar.frameReservedRows(terminal.getHeight());
-            historyOffset = 0;
-            option(Option.MOUSE, captureMouse);
-        } finally {
-            lock.unlock();
-        }
+        option(Option.MOUSE, captureMouse);
         try {
             return super.readLine("");
         } finally {
-            lock.lock();
-            try {
-                if (historyOffset > 0) {
-                    paintHistory(0);
-                }
-            } finally {
-                frameMode = null;
-                frameFooter = null;
-                frameHistoryLines = null;
-                frameNeedsHistoryPaint = false;
-                frameLines = List.of();
-                option(Option.MOUSE, mouseWasEnabled);
-                lock.unlock();
+            if (historyOffset > 0) {
+                paintHistory(0);
             }
+            frameMode = null;
+            frameFooter = null;
+            frameHistoryLines = null;
+            frameNeedsHistoryPaint = false;
+            frameLines = List.of();
+            option(Option.MOUSE, mouseWasEnabled);
         }
     }
 
     @Override
     public boolean mouse() {
-        lock.lock();
-        try {
-            return mouseLocked();
-        } finally {
-            lock.unlock();
-        }
-    }
-
-    private boolean mouseLocked() {
         if (screen != null) {
             MouseEvent event = readMouseEvent();
             if (event.getButton() == MouseEvent.Button.WheelUp) screen.scroll(-3);
@@ -192,19 +147,9 @@ final class ResizeAwareLineReader extends LineReaderImpl {
     }
 
     @Override
-    // JLine calls this while holding its protected reentrant lock. Reuse that
-    // lock for the buffer, frame lifecycle and painting; never acquire the reader
-    // monitor here (its signal handler also redraws, which used to invert order).
-    protected void redisplay(boolean flush) {
-        lock.lock();
-        try {
-            redisplayLocked(flush);
-        } finally {
-            lock.unlock();
-        }
-    }
-
-    private void redisplayLocked(boolean flush) {
+    // WINCH can arrive on a terminal signal thread while readLine is painting.
+    // Share the monitor with handleSignal so JLine's Display cache is not mutated concurrently.
+    protected synchronized void redisplay(boolean flush) {
         if (screen != null) {
             if (completionBuffer != null && !completionBuffer.equals(buf.toString())) {
                 completionBuffer = null;
@@ -307,32 +252,12 @@ final class ResizeAwareLineReader extends LineReaderImpl {
     }
 
     @Override
-    protected void handleSignal(Terminal.Signal signal) {
-        Runnable footerRedraw;
-        // Acquire JLine's lock BEFORE super's reader monitor, including CONT.
-        // No second application painting lock is needed.
-        lock.lock();
-        try {
-            footerRedraw = handleSignalLocked(signal);
-        } finally {
-            lock.unlock();
-        }
-        // External callbacks must not run inside our signal critical section.
-        if (footerRedraw != null) {
-            try {
-                footerRedraw.run();
-            } catch (RuntimeException ignored) {
-                // The prompt is already usable; the footer will refresh next round.
-            }
-        }
-    }
-
-    private Runnable handleSignalLocked(Terminal.Signal signal) {
+    protected synchronized void handleSignal(Terminal.Signal signal) {
         if (screen != null && signal == Terminal.Signal.WINCH) {
             resizedDuringLastRead = true;
             size.copy(terminal.getSize());
             redisplay(true);
-            return null;
+            return;
         }
         Runnable footerRedraw = activeFooterRedraw;
         boolean rebuildFrame = false;
@@ -352,7 +277,7 @@ final class ResizeAwareLineReader extends LineReaderImpl {
             }
         }
         super.handleSignal(signal);
-        if (rebuildFrame && terminal.getHeight() >= 6) {
+        if (rebuildFrame) {
             historyOffset = 0;
             // JLine has now established the new Status geometry. Repaint the
             // current viewport from OutputPane without appending duplicate
@@ -360,7 +285,13 @@ final class ResizeAwareLineReader extends LineReaderImpl {
             terminal.writer().write("\033[2J\033[H");
             paintFrameAndHistory();
         }
-        return signal == Terminal.Signal.WINCH ? footerRedraw : null;
+        if (signal == Terminal.Signal.WINCH && footerRedraw != null) {
+            try {
+                footerRedraw.run();
+            } catch (RuntimeException ignored) {
+                // The prompt is already usable; the footer will refresh next round.
+            }
+        }
     }
 
     private void paintFrameAndHistory() {

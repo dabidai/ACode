@@ -1,0 +1,33 @@
+# Progress
+
+- 2026-09-18：开始诊断启动后缩放窗口导致输入框显示错误的问题；按用户要求不加载 SecondBrain。
+- 已定位输入框提示符在 `readLine()` 期间不会随 WINCH 重建；当前 resize handler 只刷新页脚。
+- 已确认底部锚定位置同样只在进入 `readLine()` 前计算一次，现有测试未覆盖阻塞读取期间的 resize。
+- 已核对 JLine 版本为 3.27.1；正在确认自定义 `terminal.handle(WINCH, ...)` 是否覆盖 JLine 的默认处理器。
+- 已确认活动 `readLine()` 会覆盖 ACode 的 WINCH handler 且不委托它，导致 resize 时应用层不能重算提示符与页脚内容。
+- 已确认该问题在 ch09 T16 被明确登记为未修缺陷，并发现现成复现工具 `probe/ResizeProbe.java`。
+- 已读完 ResizeProbe：现有实验已把根因推进到 JLine Display 记账与终端 reflow 不一致；准备运行现有 UI 单测确认自动化覆盖缺口。
+- UI 定向测试 133/133 通过，证明问题位于现有单测未覆盖的真实终端 resize 路径；开始汇总诊断与建议。
+- 诊断完成：确认两层根因、既有未修登记、自动化覆盖缺口与推荐修复边界；未修改产品代码。
+- 2026-09-25：修复开始落地。新增无反射的 `ResizeAwareLineReader`，接入动态 prompt、CPR 重锚定与 footer resize 回调。
+- 第一版真机失败：ANSI CPR 响应与 JLine 用户输入竞争，产生控制序列文本污染、重复框线和错位；该路径已废弃。
+- 第二版改用 JNA `GetConsoleScreenBufferInfo` 原生读取 Windows 光标坐标，活动读取期间不再访问 terminal reader。
+- 自动化覆盖虚拟终端 80x24 → 60x20、新宽度 prompt/footer、输入完整性与“无 CPR 请求”。
+- 第二版真机失败：放大导致输入区异常变高，缩小产生重复页眉；根因是 watcher 与 JLine 内部 WINCH 同时重绘。
+- 第三版删除 watcher，统一到覆写的 `LineReaderImpl.handleSignal(WINCH)` 串行路径；一次信号只执行一次 JLine 重绘。
+- 第三版定向测试及全量回归通过：**1123 tests，0 failures，0 errors，1 skipped**；真实终端拖拽视觉验收待执行。
+- 第三版真机失败：连续缩放产生阶梯状重复页眉，确认外部真实光标与 JLine Display 内部坐标失同步。
+- 第四版取消活动输入期间的应用层光标移动/清屏，并使 resize 前旧 pin 回退量失效。
+- 第四版事件风暴、输入完整性、下一轮复位及全量回归通过：**1123 tests，0 failures，0 errors，1 skipped**。
+- 第五版把模式信息与输入标记合并成单行提示符，并为编辑文本留空间；页脚宽度少用最右一列。首轮全量测试 1132 个用例，0 failures、0 errors、1 skipped，打包成功。
+- 首次 CMD 启动时 `set TERM= &&` 留下空格 TERM 值，JLine 误把它作为终端类型并在 banner 前打印 `infocmp` 异常栈；现已把空白 TERM 视为未指定，138 个定向测试通过，并重新打包。真实 CMD 视觉反馈待确认。
+- 用户明确要求 `[default]`、上边线、`> ` 输入行、下边线、模型状态行固定贴底，多行输入向上增高；第五版单行结构不符合要求。已升级 JLine 3.30.16 并恢复三行活动提示符，定向测试 136/136、全量测试 1131 个用例（0 失败、0 错误、1 跳过），新版 CMD 视觉验收待反馈。
+- 三行提示符在真实 CMD 连续缩放后仍留下成组的 `[default]` 与横线；输入 `abcdef` 仍只提交一次，因此改由 JLine 底部状态区统一绘制五层输入框。
+- 首版统一状态区在真实 CMD 仍出现旧帧残影和横向错位。活动 WINCH 改为清除终端回流并从 `OutputPane` 重放 ACode 对话后，用户确认 CMD 连续缩放**无残影**且 `abcdef` **只提交一次**。
+- 首版多行状态区在 CMD 中换行后吞掉上一行文字；将状态区固定为半屏预留高度，在预留空白中向上展开后，用户确认 `abc` / `def` 同时可见、边线和页脚贴底。
+- CMD 通过鼠标事件接管滚轮会关闭 QuickEdit 鼠标拖选。当前在原生 CMD/PowerShell 停用事件接管，用户确认 CMD 鼠标复制恢复；滚轮回看时输入框随终端整个视口移动，此交互取舍仍待用户确定。
+- 当前全量测试 **1133 tests，0 failures，0 errors，1 skipped**；CMD 缩放和多行已通过真机检查，PowerShell、Windows Terminal 和退出行为仍需验收。
+- 用户随后确认 PowerShell 与 Windows Terminal 的缩放、`abc` + resize + `def` 和多行输入均正常，并选择 CMD 优先保留鼠标拖选复制。原生 Windows 终端关闭鼠标捕获；滚轮查看旧视口时输入框随整个终端视口移动，回到最新画面后贴底。
+- CMD `/quit` 首次暴露 `Terminal has been closed`：`Status.close()` 在 try-with-resources 关闭 Terminal 后才执行。改为终端关闭前恢复滚动区域，并在收起输入框后放回光标；用户确认新版 CMD `/quit` 正常、无异常。
+- 退出修复后的全量测试再次通过：**1133 tests，0 failures，0 errors，1 skipped**。CMD Ctrl+C/Ctrl+D、超长输入和三种终端的退出后历史仍待验收。
+- 用户确认 CMD Ctrl+C、PowerShell 和 Windows Terminal 的 `/quit` 均正常，三处退出后仍可滚轮回看 ACode 对话。补充 150 字符、12 行输入跨缩放测试后，全量回归 **1134 tests，0 failures，0 errors，1 skipped**。

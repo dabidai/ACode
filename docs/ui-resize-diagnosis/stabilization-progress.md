@@ -1,0 +1,48 @@
+# Progress（2026-09-25 稳定性收尾会话）
+
+> 归档自仓库根目录。与同目录 `progress.md`（2026-09-18 诊断会话）是两段不同的记录。
+
+- 2026-09-25：开始阶段九后的稳定性收尾。
+- 已确认真实测试基线：1118 tests，1 failure，0 errors，1 skipped。
+- 当前处理阶段 1：Windows 子进程环境隔离测试。
+- 已修正 `StdioTransportTest`：选择未白名单变量时按 Windows 语义忽略大小写。
+- 定向测试 `StdioTransportTest,ProcessEnvTest` 已通过。
+- 阶段 1 完成，开始复核 resize 方案。
+- 已核对 JLine 文档与本地 3.27.1 源码：可用 `LineReaderImpl` 的公开/受保护扩展点实现 resize 感知读取器，不需要反射。
+- resize 设计复核完成，开始实现动态 prompt、底部重锚定与 footer 刷新链路。
+- 已新增无反射的 `ResizeAwareLineReader`，接入 `InputPane`/`CommandProcessor`/footer resize 回调，并补充提示符行数测试。
+- 首轮定向测试已编译通过，但 `ConversationControllerTest` 在受限沙箱内因 C:\ 临时目录权限出现既有环境性失败，准备以正常本机权限复测。
+- 正常本机权限下 6 组定向测试通过。
+- 新增活动 `readLine` resize 集成测试：虚拟终端从 80x24 改为 60x20，确认动态 prompt 与 footer 回调被触发；测试通过。
+- 阶段 3 完成，进入全量回归与真机验证评估。
+- 全量回归通过：1121 tests，0 failures，0 errors，1 skipped；`mvn package -DskipTests` 成功生成最新 jar。
+- 尝试在 Codex 命令 PTY 启动 ResizeProbe，但该 PTY 不具备 ACode 所需终端能力；需改用真实 Windows 终端窗口。
+- 已同步 ch09 checklist/ui-align-plan、manual-test、resize 诊断记录与 README 测试数；真机验收项保持未勾选。
+- 已打开真实 Windows 终端运行 `ResizeProbe fix`，等待用户按屏上步骤完成拖拽验收并反馈结果。
+- 首个外部 cmd 因继承 `TERM=dumb` 被 ACode 拒绝；已用 `set TERM=` 清空变量并重新打开探针窗口。
+- 用户真机结果：启动布局即错误，缩放产生大量重复框线和 CPR 文本污染；`ResizeProbe` 12 次接管均记录 CPR 失败。当前 resize 实现判定不合格，阶段 3 重新打开。
+- 第二版改为 Windows JNA 原生光标查询；活动读取修复不再访问 terminal reader，原生坐标不可用时整段跳过。定向测试通过。
+- 第二版全量回归通过：1123 tests，0 failures，0 errors，1 skipped；最新 jar 已重新打包。旧 `ResizeProbe fix` 已加废弃保护，后续直接验证 ACode 本体。
+- 第二版真机仍失败：放大导致输入区异常变高，缩小产生重复页眉。开始第三版：删除轮询线程，统一到 JLine 内部 WINCH handler。
+- 第三版已实现：动态 prompt/原生重锚定在 `super.handleSignal(WINCH)` 前准备，JLine 随后只执行一次 Display/Status 重绘，footer 在其后刷新；自动化断言一次 WINCH 只触发一次回调。
+- 第三版全量回归通过：1123 tests，0 failures，0 errors，1 skipped；等待最新 jar 的真实终端拖拽验收。
+- 第三版真机失败：连续缩放产生阶梯状重复页眉。已确认单一回调仍不足以保证安全，根因是外部真实光标移动与 JLine 内部 Display 坐标不同步，并叠加终端物理折行。
+- 已制定第四版稳定优先方案，新建 `spec.md`、`tasks.md`、`checklist.md`；计划取消活动输入期间的外部重锚定，并使 resize 前的旧钉底回退量失效。
+- 第四版实现开始：`ResizeAwareLineReader` 的活动 WINCH 不再查询/移动真实光标或清屏，只在 JLine 默认重绘前替换动态 prompt。
+- `InputPane` 暴露最近一次动态读取是否发生 resize；`CommandProcessor` 据此把旧尺寸下的 unpin 距离置零。
+- 新增 20 次交替尺寸 WINCH 的事件风暴测试与编辑中缩放测试；首批定向测试通过。
+- resize、钉底、主循环、页脚六组定向测试通过；第二轮无 resize 时标记能正确复位。
+- 第四版全量回归通过：1123 tests，0 failures，0 errors，1 skipped；静态检查确认活动 WINCH 路径无应用层光标移动、清屏、CPR 或轮询。
+- `mvn package -DskipTests` 成功生成第四版 `target/acode.jar`；进入真实 Windows 终端验收。
+- 第四版真机仍失败：连续 resize 重复输出模式行和长分隔线，但编辑内容 `abcdef` 完整提交。
+- 启动第五版结构性修复：停止让 JLine 在 Windows resize 中维护多行 prompt，改为模式信息与输入标记合并的严格单行提示符。
+- 第五版单行提示符、页脚右侧留白、对应测试已完成；正常本机权限下全量测试 1132 个用例，0 failures、0 errors、1 skipped，fat jar 打包成功。
+- 首次真机启动暴露空白 TERM 导致 JLine 调用缺失的 infocmp；修正空白 TERM 识别后 138 个定向用例通过，重新打包并启动 CMD 复核。
+- 空白 TERM 修复后的全量测试通过：1133 个用例，0 failures、0 errors、1 skipped。
+- 用户明确要求五层底部输入框和多行输入向上增高，否定第五版单行布局。已恢复三行活动提示符，升级 JLine 到 3.30.16（WINCH 重建 Display），下方两行仍由 Status 管理。
+- 新布局的定向测试 136 个用例全通过；全量测试 1131 个用例，0 failures、0 errors、1 skipped；fat jar 已重打包并打开新版 CMD，等待拖拽视觉结果。
+- 第六版多行 prompt 在 CMD 仍堆叠。现将五层框统一交给 JLine Status，缩放时清屏并从 OutputPane 重放 ACode 对话；用户确认 CMD 拖拽无残影、`abcdef` 只提交一次。
+- 状态区动态增高导致多行输入在 CMD 中被吞；改为半屏固定预留空间后，用户确认 abc/def 同时可见且框线、页脚正常。
+- 原生 CMD 鼠标滚轮接管会关闭 QuickEdit；用户选择保留鼠标拖选复制，原生 Windows 终端停用鼠标捕获。
+- 用户确认 PowerShell、Windows Terminal 的缩放、单次提交和多行均正常。CMD /quit 暴露 Status.close 在 Terminal.close 之后运行；修正关闭顺序后用户确认 CMD 正常退出。
+- 最终代码全量测试 1133 tests、0 failures、0 errors、1 skipped；Ctrl+C/Ctrl+D 及退出后的对话历史仍待真机复核。

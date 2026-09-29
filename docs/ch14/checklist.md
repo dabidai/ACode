@@ -52,7 +52,7 @@
 - 团队目录：`.acode/teams/{name}/`（`name` 为重名避让后的实际团队名）：
   - `config.json` — 团队配置：`name`、`leadAgentID`、`members`（花名册数组：队员名 / agentID / agentType / model / worktreePath / backendType / isActive / planModeRequired）、`createdAt`。整文件原子替换（临时文件 + ATOMIC_MOVE），坏文件按空团队处理并告警不抛。
   - `tasks.json` — 共享任务列表：JSON 数组，每项含 ID/标题/描述/状态/依赖/认领人。写 = 抢文件锁 → 读改写 → 原子替换；读容忍坏文件按空列表。
-  - `mailbox/` — 每个收件人一个 `{recipient}.json`；消息信封：`from` / `to` / `summary` / `message` / `messageType` / `ts`（时间戳）/ `read`（已读标记）。读先取得未读列表，请求成功进入模型调用后才确认并标记已读（**消息不删除，可追溯**）；写 = 抢锁 → 整文件读 → 追加 → 整文件写回（临时文件 + ATOMIC_MOVE，不做流式追加）；收件箱不存在时读返回空；写失败抛业务异常。
+  - `mailbox/` — 每个规范收件人名称一个 `{recipient}.json`；消息信封：`id`（UUID）/ `from` / `to` / `summary` / `message` / `messageType` / `ts`（时间戳）/ `read`（已读标记）。读先取得未读列表，请求成功进入模型调用后才按本批 id 确认并标记已读（**消息不删除，可追溯**）；写 = 抢锁 → 整文件读 → 追加 → 整文件写回（临时文件 + ATOMIC_MOVE，不做流式追加）；收件箱不存在时读返回空；写失败抛业务异常。
   - `transcripts/` — 每队员一个 `.jsonl`，逐条追加（复用 session 包 `SessionCodec` 编解码）；压缩重建整段原子重写；坏行跳过；写盘失败只告警不打断。
 - **团队状态会话内落盘、重启不恢复**：进程内队列表不读盘恢复，目录仅是会话内工作状态，由 TeamDelete 整目录清理。
 
@@ -66,6 +66,8 @@
 ```
 
 释放 = 核对持有者标识后删除自己的锁文件；锁对象 `try-with-resources` 风格 AutoCloseable。同一套锁同时服务邮箱与任务存储两个消费者。
+
+实现补充：年龄按锁内 createdAt（epoch 毫秒）计算，记录 pid、startedAt、token。持锁全程持有独立 `.guard` 文件的 OS 锁，该文件不删除。同 JVM 使用 256 个公平信号量分片，单次排队最多 5 秒；分片碰撞只增加等待，不影响互斥。取得本地许可后再执行上面的最多十次跨进程尝试。
 
 ### 5. 重名避让与 Worktree 命名
 
@@ -170,25 +172,26 @@ COORDINATOR_MODE_ALLOWED_TOOLS = [
 
 ## T2 文件锁、文件邮箱与名称注册表
 
-- [ ] 两线程抢同一锁恰一胜；败者重试后拿到；锁释放后可再抢（反复跑）
-- [ ] 锁文件 mtime 超过 10 秒且持有者仍活跃时不得被抢占；确认持有进程已退出后可回收；无法确认状态时返回锁忙
-- [ ] 原持有者迟到的释放动作不会删除新持有者的锁
-- [ ] N=8 线程各写 M=5 条到同一收件箱 → 收件箱恰有 40 条、JSON 完整可解析（CountDownLatch 对齐，反复跑 3 轮）
-- [ ] 读取返回未读列表；`markAllRead` 后再次读取为空；消息总数不变（不删除）
-- [ ] 坏 JSON 行按空处理不抛；收件箱不存在时读取返回空列表
-- [ ] 信封字段逐项断言：`from`/`to`/`summary`/`message`/`messageType`/`ts`/`read` 与写入值一致
-- [ ] 名字解析命中返回 ID；未命中报错；按 ID 解析等价；重名注册报错（文案见顶部）
-- [ ] `grep` 断言 `FileMailbox` 内无流式追加（append）路径，全部走整文件写回
+- [x] 两线程抢同一锁恰一胜；败者重试后拿到；锁释放后可再抢
+- [x] 锁内 createdAt 超过 10 秒且持有者仍活跃时不得被抢占；确认持有进程已退出后可回收；无法确认状态时返回锁忙
+- [x] 原持有者迟到的释放动作不会删除新持有者的锁；跨 JVM 持锁时另一进程获取失败，释放后成功
+- [x] N=8 线程各写 M=5 条到同一收件箱 → 收件箱恰有 40 条、JSON 完整可解析（CountDownLatch 对齐，内部 3 轮）
+- [x] 按读取批次 ID 确认后该批不再未读；期间新到消息保持未读；重复确认不删除消息
+- [x] 坏 JSON 按空处理并告警；缺失邮箱读取为空；对坏文件投递/确认均拒绝覆盖
+- [x] 信封往返 record 相等，覆盖 id/from/to/summary/message/messageType/ts/read；已读状态仅经确认改变
+- [x] 名字/ID 解析等价，未命中返回空；重复名称、重复 ID 和名称/ID 交叉冲突拒绝；对用户的未命中错误留给 T5
+- [x] 写入经 TeamJsonFile 全量序列化 + ATOMIC_MOVE，无文件追加路径
 
 ## T3 共享任务存储
 
-- [ ] **认领竞态**：两线程同认领同一任务恰一成功（CountDownLatch 对齐，反复跑 3 轮）
-- [ ] 依赖未满足认领被拒（文案「任务 {id} 存在未完成的依赖，不能认领」逐字）；依赖完成后可认领
-- [ ] 两种写法等价：A `addBlocks=["B"]` 后，B 的列表带 blocked 标记；反向 `addBlockedBy` 同样成立
-- [ ] 自身依赖被拒；循环依赖 A→B→C→A 在加边时被拒（文案逐字）
-- [ ] 队员移除回调后，其 `in_progress` 任务回滚为 `pending`、认领人清空、可被再认领
-- [ ] 落盘 `tasks.json` 后读回往返一致（含依赖与认领人）；坏文件读回按空列表不抛
-- [ ] 写路径抢锁：`grep` 断言 `TeamTaskStore` 的写方法引用 `TeamFileLock`
+- [x] **认领竞态**：两线程跨存储实例认领同一任务恰一成功（CyclicBarrier 对齐，内部 5 轮）
+- [x] 依赖未满足认领被拒（文案「任务 {id} 存在未完成的依赖，不能认领」逐字）；依赖完成后可认领
+- [x] addBlocks 与 addBlockedBy 两种写法的正反依赖一致，阻塞随依赖完成解除
+- [x] 自身依赖、二节点及三节点循环被拒；失败更新与失败创建不改变原任务文件
+- [x] 队员移除后其 in_progress 任务回到 pending、清空认领人、可再认领；已完成任务与其他成员任务不变
+- [x] tasks.json 读回往返一致；坏文件读空并告警，写入与回滚拒绝覆盖
+- [x] 所有写方法调用 TeamJsonFile.lock，统一返回 TeamFileLock
+- [x] 非持有者不能完成任务；认领后不能增加该任务的依赖
 
 ## T4 任务工具四件套
 
@@ -203,7 +206,7 @@ COORDINATOR_MODE_ALLOWED_TOOLS = [
 
 ## T5 SendMessage 工具
 
-- [ ] 按名字与按 ID 投递到同一收件箱（信封 to 字段不同、内容相同）；广播 `to="*"` 到达花名册全部队员收件箱
+- [ ] 按名字与按 ID 投递到同一规范名称收件箱（信封 to 统一为该名称、内容相同）；广播 `to="*"` 到达花名册全部队员收件箱
 - [ ] 摘要 4 词与 11 词都被拒（文案逐字）；5 词与 10 词都通过
 - [ ] 收件人不存在报错（文案逐字）；结构化消息类型非法被拒（文案逐字）
 - [ ] 非 Lead 发 `plan_approval_response` 被拒；`shutdown_response` 发给非 Lead 被拒（文案逐字）
@@ -286,4 +289,4 @@ COORDINATOR_MODE_ALLOWED_TOOLS = [
 - [x] TeamManagerTest 最终 13 个测试连续 3 轮完成，0 failures、0 errors、1 skipped；并发注册测试内部每轮另含三次十线程起跑。
 - [x] Windows junction 指向项目内其他目录时创建被拒，目标目录保持空；符号链接创建权限不足的用例保持 skipped，不当作通过。
 - [x] 配置写入失败不发布内存快照；检查坏配置只告警并返回空，不清空当前会话或覆盖原文件。
-- [ ] T2–T12 尚未实现，不把本次基础模块等同于可用的 Agent Teams。
+- [ ] T4–T12 尚未实现，不把 T1–T3 基础模块等同于可用的 Agent Teams。

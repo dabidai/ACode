@@ -110,6 +110,9 @@ public final class TeamManager {
         Team team = requireTeam(teamName);
         TeammateInfo found = member(teamName, nameOrID).orElse(null);
         if (found == null) return team;
+        // The runtime must already be stopped. Return work before removing the
+        // roster entry; a storage failure preserves the member for retry.
+        new TeamTaskStore(team.configPath().getParent()).rollbackOwner(found.agentID());
         return publish(team.withMembers(team.members().stream().filter(member -> member != found).toList()));
     }
 

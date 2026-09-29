@@ -23,7 +23,7 @@ ACode 按阶段迭代构建，每阶段有独立设计文档（`docs/chXX/`）�
 | 阶段十一 | Hook 系统 | `docs/ch11/` | ✅ 已实现（真实 provider 手测待验收） |
 | 阶段十二 | SubAgent | `docs/ch12/` | ✅ 已实现（终端手测待验收） |
 | 阶段十三 | Worktree | `docs/ch13/` | ✅ 已实现（终端手测待验收） |
-| 阶段十四 | Agent Teams | `docs/ch14/`（待建） | 🚧 规划中 |
+| 阶段十四 | Agent Teams | `docs/ch14/` | 🚧 实现中（T1 团队模型底座已完成，T2–T12 待做） |
 
 > 各章 spec / tasks / checklist 的共创流程见 `CLAUDE.md` 与 `AGENTS.md`。
 
@@ -161,7 +161,7 @@ mcp_servers:
 ## 🧪 测试
 
 ```bash
-mvn test   # 1281 个用例（1 个平台受限跳过）；本机内存偏紧时建议 MAVEN_OPTS="-Xmx768m" mvn test -DargLine="-Xmx512m"
+mvn test   # 1300 个用例（2 个按环境跳过：平台受限与符号链接权限）；本机内存偏紧时建议 MAVEN_OPTS="-Xmx768m" mvn test -DargLine="-Xmx512m"
 ```
 
 ## 📁 项目结构
